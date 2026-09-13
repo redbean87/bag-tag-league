@@ -19,9 +19,9 @@ This application handles:
 
 ## Project Status
 
-**Phase:** Phase 0 — Proof of Concept
+**Phase:** Phase 0 — Proof of Concept (complete)
 
-The initial proof of concept verifying that a static webpage can communicate with Google Apps Script and that Google Apps Script can read from and write to Google Sheets is complete. See [Google Apps Script POC](docs/google-apps-script-poc.md) for details and manual testing steps.
+The initial proof of concept verifying that a static webpage can communicate with Google Apps Script and that Google Apps Script can read from and write to Google Sheets is complete. Live verification passed on September 12, 2026. See [Google Apps Script POC](docs/google-apps-script-poc.md) for details.
 
 ## Documentation
 

@@ -10,6 +10,33 @@ Verify that a static webpage can communicate with Google Apps Script and that Go
 2. **POST request:** The webpage sends a POST request with a JSON payload. The script writes the payload to a designated tab (`TestLog`) in a Google Sheet.
 3. **CORS behavior:** Google Apps Script web apps deployed with `access: ANYONE` return proper CORS headers, allowing cross-origin `fetch()` calls from any static page.
 
+## Live Verification
+
+On September 12, 2026, both GET and POST requests were manually verified against a deployed Apps Script web app.
+
+### GET Request
+
+- **Request:** `fetch(GET_URL)` from a static page.
+- **Response:** Received a 302 redirect followed by a 200 OK.
+- **Body:**
+  ```json
+  { "status": "ok", "message": "Apps Script web app is running", "method": "GET" }
+  ```
+
+### POST Request
+
+- **Request:** `fetch(POST_URL, { method: "POST", body: JSON.stringify({ message, source }) })` from a static page.
+- **Response:** Received a 302 redirect followed by a 200 OK.
+- **Body:**
+  ```json
+  { "status": "ok", "method": "POST", "message": "..." }
+  ```
+- **Sheet verification:** The POST payload was confirmed in the Google Sheet's `TestLog` tab as a new row.
+
+### Redirect Behavior
+
+The 302 redirect is expected behavior for Apps Script web apps. The browser follows the redirect automatically and receives the final response from the deployed endpoint. Both requests succeeded end-to-end.
+
 ## Files Created
 
 | File | Purpose |
@@ -153,19 +180,20 @@ All test results appear in the **Test Log** section at the bottom of the page fo
 
 ## Viability Assessment
 
-**The approach is viable.** The POC confirms:
+**The integration is live-tested and working.** The POC confirms:
 
 - Static HTML/JS can call Google Apps Script web apps without CORS issues.
 - Google Apps Script can read from and write to Google Sheets.
 - The architecture described in ADR-001 (static frontend -> Apps Script -> Google Sheets) works as designed.
 - No conventional backend is needed.
 - The response format (JSON) is suitable for the application.
+- Both GET and POST requests succeed end-to-end with a deployed web app.
 
-**Next steps:** Phase 1 of the implementation plan — set up the full spreadsheet structure (MasterPlayers, WeeklyLeagues, etc.) and build the server-side CRUD operations in Apps Script.
+**Next steps:** ADR-001's architecture is validated. The next phase can proceed to application design and implementation — setting up the full spreadsheet structure (MasterPlayers, WeeklyLeagues, etc.) and building the server-side CRUD operations in Apps Script.
 
 ## Manual Testing Prerequisites
 
-Before testing, you must:
+The following steps were used during the manual verification described above and are retained for reference if you want to reproduce the test:
 
 1. Create a Google Spreadsheet and note its ID.
 2. Create a Google Apps Script project (or copy from `scripts/Code.gs`).
@@ -173,4 +201,4 @@ Before testing, you must:
 4. Deploy the script as a web app with `access: ANYONE`.
 5. Copy the deployment URL into the POC page.
 
-**I cannot perform live testing for you** because it requires access to your Google account and spreadsheet. The code and documentation are ready for you to test manually.
+Live verification was performed on September 12, 2026 using this setup.
