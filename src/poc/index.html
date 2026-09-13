@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bag Tag League - Apps Script POC</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem 1rem;
+      background: #f5f5f5;
+    }
+    h1 { margin-bottom: 0.5rem; color: #1a1a1a; }
+    .subtitle { color: #666; margin-bottom: 2rem; }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h2 { font-size: 1.25rem; margin-bottom: 1rem; color: #1a1a1a; }
+    label { display: block; font-weight: 500; margin-bottom: 0.25rem; }
+    input, textarea {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 1rem;
+      margin-bottom: 1rem;
+    }
+    input:focus, textarea:focus { outline: none; border-color: #0066cc; }
+    button {
+      background: #0066cc;
+      color: white;
+      border: none;
+      padding: 0.75rem 1.5rem;
+      border-radius: 4px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-right: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    button:hover { background: #0052a3; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .status {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .status.ok { background: #e6f4ea; border: 1px solid #34a853; }
+    .status.error { background: #fce8e6; border: 1px solid #ea4335; }
+    .status.pending { background: #fff3cd; border: 1px solid #ffc107; }
+    code { background: #f0f0f0; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>Bag Tag League</h1>
+  <p class="subtitle">Google Apps Script Proof of Concept</p>
+
+  <div class="card">
+    <h2>Configuration</h2>
+    <label for="appsScriptUrl">Apps Script Web App URL</label>
+    <input type="url" id="appsScriptUrl" placeholder="https://script.google.com/macros/s/XXXX/exec">
+    <p style="font-size: 0.875rem; color: #666;">
+      Deploy your Apps Script as a web app and paste the URL here.
+      The URL will look like: <code>https://script.google.com/macros/s/AKfycbx.../exec</code>
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Test 1: GET Request</h2>
+    <p>Send a GET request to the Apps Script web app.</p>
+    <button id="btnGet" onclick="testGet()">Send GET Request</button>
+    <div id="getResult" class="status pending">Waiting for request...</div>
+  </div>
+
+  <div class="card">
+    <h2>Test 2: POST Request (Write to Sheet)</h2>
+    <p>Send a POST request that writes data to the Google Sheet.</p>
+    <label for="testMessage">Message</label>
+    <input type="text" id="testMessage" value="Hello from POC!" placeholder="Enter a test message">
+    <label for="testSource">Source</label>
+    <input type="text" id="testSource" value="poc-test-page" placeholder="Enter source identifier">
+    <button id="btnPost" onclick="testPost()">Send POST Request</button>
+    <div id="postResult" class="status pending">Waiting for request...</div>
+  </div>
+
+  <div class="card">
+    <h2>Test Log</h2>
+    <p>All test results will appear below.</p>
+    <div id="log" style="font-family: monospace; font-size: 0.875rem; max-height: 300px; overflow-y: auto; background: #f8f8f8; padding: 1rem; border-radius: 4px;"></div>
+  </div>
+
+  <script>
+    function log(message) {
+      const logEl = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logEl.prepend(entry);
+    }
+
+    function setStatus(elementId, status, text) {
+      const el = document.getElementById(elementId);
+      el.className = 'status ' + status;
+      el.textContent = text;
+    }
+
+    function getConfig() {
+      const url = document.getElementById('appsScriptUrl').value.trim();
+      if (!url) {
+        log('ERROR: No Apps Script URL configured');
+        return null;
+      }
+      return url;
+    }
+
+    async function testGet() {
+      const url = getConfig();
+      if (!url) return;
+
+      const btn = document.getElementById('btnGet');
+      btn.disabled = true;
+      setStatus('getResult', 'pending', 'Sending GET request...');
+
+      log('Sending GET to: ' + url);
+
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.status === 'ok') {
+          setStatus('getResult', 'ok', JSON.stringify(data, null, 2));
+          log('GET response: ' + data.message);
+        } else {
+          setStatus('getResult', 'error', JSON.stringify(data, null, 2));
+          log('GET error: ' + data.message);
+        }
+      } catch (error) {
+        setStatus('getResult', 'error', 'Request failed: ' + error.message);
+        log('GET failed: ' + error.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function testPost() {
+      const url = getConfig();
+      if (!url) return;
+
+      const message = document.getElementById('testMessage').value || 'No message';
+      const source = document.getElementById('testSource').value || 'unknown';
+
+      const btn = document.getElementById('btnPost');
+      btn.disabled = true;
+      setStatus('postResult', 'pending', 'Sending POST request...');
+
+      log('Sending POST to: ' + url);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ message, source })
+        });
+        const data = await response.json();
+
+        if (data.status === 'ok') {
+          setStatus('postResult', 'ok', JSON.stringify(data, null, 2));
+          log('POST success: Data written to sheet');
+        } else {
+          setStatus('postResult', 'error', JSON.stringify(data, null, 2));
+          log('POST error: ' + data.message);
+        }
+      } catch (error) {
+        setStatus('postResult', 'error', 'Request failed: ' + error.message);
+        log('POST failed: ' + error.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // Load saved URL from localStorage
+    const savedUrl = localStorage.getItem('appsScriptUrl');
+    if (savedUrl) {
+      document.getElementById('appsScriptUrl').value = savedUrl;
+    }
+
+    // Save URL to localStorage on change
+    document.getElementById('appsScriptUrl').addEventListener('input', function() {
+      localStorage.setItem('appsScriptUrl', this.value);
+    });
+
+    log('POC page loaded. Configure the Apps Script URL above to begin testing.');
+  </script>
+</body>
+</html>

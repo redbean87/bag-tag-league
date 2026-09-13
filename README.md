@@ -19,9 +19,9 @@ This application handles:
 
 ## Project Status
 
-**Phase:** Planning / Documentation
+**Phase:** Phase 0 — Proof of Concept
 
-This project is currently in the documentation and design phase. No application code has been implemented yet.
+The initial proof of concept verifying that a static webpage can communicate with Google Apps Script and that Google Apps Script can read from and write to Google Sheets is complete. See [Google Apps Script POC](docs/google-apps-script-poc.md) for details and manual testing steps.
 
 ## Documentation
 
@@ -35,6 +35,7 @@ All product and technical documentation lives in `docs/`:
 | [Architecture](docs/architecture.md) | Technical stack and system design |
 | [Architecture Decisions](docs/architecture-decisions.md) | Accepted architectural decisions (ADRs) |
 | [Implementation Plan](docs/implementation-plan.md) | Phased build order |
+| [Google Apps Script POC](docs/google-apps-script-poc.md) | POC test results and setup instructions |
 | [Open Decisions](docs/open-decisions.md) | Unresolved questions needing input |
 
 ## Technology
@@ -48,7 +49,15 @@ See [Architecture](docs/architecture.md) and [Architecture Decisions](docs/archi
 
 ## Getting Started
 
-*Not yet available.* See [Implementation Plan](docs/implementation-plan.md) for the planned build sequence.
+To test the proof of concept:
+
+1. Create a Google Spreadsheet and note its ID.
+2. Create a Google Apps Script project using the code in `scripts/Code.gs`.
+3. Replace `YOUR_SPREADSHEET_ID_HERE` with your spreadsheet ID.
+4. Deploy as a web app with `access: ANYONE`.
+5. Open `src/poc/index.html` in a browser and paste the deployment URL.
+
+See [Google Apps Script POC](docs/google-apps-script-poc.md) for detailed instructions.
 
 ## License
 
