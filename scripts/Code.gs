@@ -9,7 +9,7 @@
  */
 
 // Replace with your actual spreadsheet ID
-const SPREADSHEET_ID = 'YOUR_SPREADSHEET_ID_HERE';
+const SPREADSHEET_ID = '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik';
 const TEST_TAB_NAME = 'TestLog';
 
 // WeeklyPlayerRecords column headers (19 columns from the data model spec)
