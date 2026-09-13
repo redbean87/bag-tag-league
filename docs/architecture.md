@@ -44,18 +44,13 @@ The browser never interacts with the Google Sheets API directly.
                     +--------+--------+
                              |
                     +--------v--------+
-                    |   Next.js App   |
-                    |   (Admin UI)    |
+                    |  Static HTML    |
+                    |  (Admin UI)     |
                     +--------+--------+
                              |
                     +--------v--------+
-                    |   API Routes    |
-                    |   (Next.js)     |
-                    +--------+--------+
-                             |
-                    +--------v--------+
-                    |  Google Sheets  |
-                    |  Service Layer  |
+                    | Google Apps     |
+                    | Script Web App  |
                     +--------+--------+
                              |
                     +--------v--------+
@@ -70,7 +65,7 @@ The browser never interacts with the Google Sheets API directly.
                              |
                     +--------v--------+
                     |  Sign-In Page   |
-                    |  (Next.js)      |
+                    |  (Static HTML)  |
                     +--------+--------+
 ```
 
@@ -108,7 +103,7 @@ The sign-in URL format:
 
 **No player authentication required.** Players identify themselves by selecting from the master list.
 
-**Admin authentication** is needed for three league members. The specific mechanism (password, magic link, OAuth, basic auth) is not yet decided, but must support multiple admins.
+**Admin authentication** uses a shared PIN or similarly simple mechanism suitable for three trusted league administrators.
 
 ### Tag Calculation
 
@@ -130,54 +125,35 @@ This is implemented as a server-side function.
 bag-tag-league/
   docs/                    # Documentation (this folder)
   src/
-    app/                   # Next.js App Router
-      layout.tsx           # Root layout
-      page.tsx             # Landing page
-      league/
-        [id]/
-          page.tsx         # League detail (admin)
-          sign-in/
-            page.tsx       # Player sign-in page
-          results/
-            page.tsx       # League results (admin)
-      admin/
-        page.tsx           # Admin dashboard
-        players/
-          page.tsx         # Master player list
-        leagues/
-          page.tsx         # Weekly leagues list
-    components/            # React components
-    lib/
-      sheets/
-        client.ts          # Google Sheets API client (server-side only)
-        master-players.ts  # MasterPlayers tab operations
-        weekly-leagues.ts  # WeeklyLeagues tab operations
-        weekly-records.ts  # WeeklyPlayerRecords tab operations
-        import-history.ts  # ImportHistory tab operations
-        settings.ts        # Settings tab operations
-      tag-calculation.ts   # Tag assignment logic
-      csv-import.ts        # UDisc CSV parsing
-    api/                   # API routes
-      leagues/             # League CRUD
-      players/             # Player CRUD
-      sign-in/             # Sign-in endpoint
-      import/              # UDisc import endpoint
+    admin/                 # Admin interface (static HTML/CSS/JS)
+      index.html           # Admin dashboard
+      players/
+        index.html         # Master player list
+      leagues/
+        index.html         # Weekly leagues list
+    player/                # Player-facing pages (static HTML/CSS/JS)
+      sign-in/
+        index.html         # Player sign-in page
+    css/                   # Shared stylesheets
+    js/                    # Shared JavaScript modules
+  scripts/                 # Google Apps Script code
+    Code.gs                # Main Apps Script file
   public/                  # Static assets
-  package.json
+  index.html               # Landing page
 ```
 
 ## Deployment
 
 ### Development
 
-- Local Next.js dev server (`npm run dev`)
-- Google Sheets accessed via Service Account credentials in `.env.local`
+- Local static file server or open HTML files directly in browser
+- Google Apps Script deployed as web app for API access
 - No local database or file-based storage
 
 ### Production
 
-- Deploy to Vercel, Railway, or similar
-- Google Sheets credentials stored as environment variables
+- Static files hosted on Cloudflare Pages (current preference)
+- Google Apps Script web app serves as the API layer
 - Single Google Spreadsheet serves as the database
 
 ### Scaling

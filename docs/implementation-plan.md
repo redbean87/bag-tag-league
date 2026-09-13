@@ -4,14 +4,13 @@
 
 **Goal:** Establish the project scaffold and development environment.
 
-- Initialize Next.js project with TypeScript
-- Configure Google Sheets API client (server-side only)
-- Set up Google Service Account credentials
-- Configure ESLint and Prettier
-- Create basic folder structure
+- Initialize project structure with static HTML, CSS, and JavaScript/TypeScript
+- Set up Google Apps Script project for server-side integration
+- Configure Google Service Account credentials for Apps Script
 - Set up version control
+- Create basic folder structure
 
-**Deliverable:** Empty but runnable Next.js app connected to a Google Spreadsheet.
+**Deliverable:** Empty but runnable static site connected to Google Apps Script web app.
 
 ## Phase 1: Google Sheets Setup
 
@@ -158,6 +157,6 @@ Before beginning Phase 0:
 
 1. Confirm Google Sheets as the sole persistence layer (confirmed)
 2. Confirm the tag calculation formula (confirmed: pool-based redistribution)
-3. Confirm the authentication mechanism for three admins
+3. Set up Google Apps Script project and deploy web app
 4. Provide a sample UDisc CSV if available
 5. Review and approve this implementation plan

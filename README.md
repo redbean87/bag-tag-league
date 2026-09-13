@@ -33,16 +33,18 @@ All product and technical documentation lives in `docs/`:
 | [Workflows](docs/workflows.md) | End-to-end user workflows |
 | [Data Model](docs/data-model.md) | Data structure in Google Sheets |
 | [Architecture](docs/architecture.md) | Technical stack and system design |
+| [Architecture Decisions](docs/architecture-decisions.md) | Accepted architectural decisions (ADRs) |
 | [Implementation Plan](docs/implementation-plan.md) | Phased build order |
 | [Open Decisions](docs/open-decisions.md) | Unresolved questions needing input |
 
 ## Technology
 
-- **Frontend:** Next.js (App Router) with TypeScript
+- **Frontend:** Standard HTML, CSS, and JavaScript/TypeScript (no framework)
+- **Server-Side Layer:** Google Apps Script web app
 - **Persistence:** Google Sheets (sole datastore)
-- **Auth:** Google Service Account for Sheets API access
+- **Hosting:** Cloudflare Pages (static hosting)
 
-See [Architecture](docs/architecture.md) for details.
+See [Architecture](docs/architecture.md) and [Architecture Decisions](docs/architecture-decisions.md) for details.
 
 ## Getting Started
 

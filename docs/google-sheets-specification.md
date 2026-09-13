@@ -240,7 +240,7 @@ Google Sheets does not enforce foreign keys. The application layer must validate
 
 ## Admin Access
 
-Three league members require administrative access. The initial admin model must support these three users. Authentication approach is open (password, magic link, OAuth, etc.) but must support multiple admins. Player-facing sign-in flows do not require authentication.
+Three league members require administrative access. Admin authentication uses a shared PIN or similarly simple mechanism suitable for three trusted league administrators. Player-facing sign-in flows do not require authentication.
 
 ---
 
@@ -316,12 +316,10 @@ There is no separate admin override system, audit log, correction record, or imm
 
 ## Remaining Decisions
 
-1. **Authentication approach.** The initial admin model supports three admins. The specific mechanism (password, magic link, OAuth, basic auth) is not yet decided.
+1. **Season concept.** Whether weekly leagues should be grouped into seasons is unresolved. The current design treats each weekly league as standalone. If seasons are introduced later, a `Seasons` tab would be added and `WeeklyLeagues` would gain a `season_id` foreign key.
 
-2. **Season concept.** Whether weekly leagues should be grouped into seasons is unresolved. The current design treats each weekly league as standalone. If seasons are introduced later, a `Seasons` tab would be added and `WeeklyLeagues` would gain a `season_id` foreign key.
+2. **UDisc CSV format.** The exact column names and structure of UDisc CSV exports are not yet confirmed with sample data. The import logic assumes standard UDisc columns but must be validated against a real export.
 
-3. **UDisc CSV format.** The exact column names and structure of UDisc CSV exports are not yet confirmed with sample data. The import logic assumes standard UDisc columns but must be validated against a real export.
+3. **Master player list initial population.** Whether the admin manually enters all players, imports from a CSV, or relies on player self-registration during sign-in. The data model supports all three approaches.
 
-4. **Master player list initial population.** Whether the admin manually enters all players, imports from a CSV, or relies on player self-registration during sign-in. The data model supports all three approaches.
-
-5. **Player sign-in field confirmation.** The sign-in flow shows the player their name, UDisc username, PDGA number, and current tag for confirmation. Whether any additional fields should be displayed is unresolved.
+4. **Player sign-in field confirmation.** The sign-in flow shows the player their name, UDisc username, PDGA number, and current tag for confirmation. Whether any additional fields should be displayed is unresolved.

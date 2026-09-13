@@ -2,23 +2,7 @@
 
 ## Unresolved Questions
 
-### 1. Authentication Mechanism
-
-**Status:** Needs decision
-
-Three league members require administrative access. The initial admin model must support those three users. The specific authentication mechanism is open.
-
-**Options:**
-- Simple password for admin(s)
-- Magic link (email-based)
-- OAuth (Google, GitHub)
-- Basic auth (username/password)
-
-**Questions:**
-- What authentication approach works best for three admins?
-- Should all three admins share the same credential, or should each have their own?
-
-### 2. Season Concept
+### 1. Season Concept
 
 **Status:** Needs input
 
