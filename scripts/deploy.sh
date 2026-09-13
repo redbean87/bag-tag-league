@@ -54,7 +54,7 @@ if [ ! -f ".clasp.json" ]; then
 fi
 
 # Verify clasp is authenticated
-if ! clasp whoami >/dev/null 2>&1; then
+if ! clasp show-authorized-user >/dev/null 2>&1; then
   echo "Error: Not authenticated with clasp. Run 'clasp login' first." >&2
   exit 1
 fi
