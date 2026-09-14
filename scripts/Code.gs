@@ -149,6 +149,12 @@ function doPost(e) {
     if (data.action === 'savePreRoundReview') {
       return handleSavePreRoundReview(data);
     }
+    if (data.action === 'previewUdiscImport') {
+      return handlePreviewUdiscImport(data);
+    }
+    if (data.action === 'commitUdiscImport') {
+      return handleCommitUdiscImport(data);
+    }
 
     return respond('error', 'Unknown action: ' + data.action);
 
@@ -1000,6 +1006,722 @@ function handleSavePreRoundReview(data) {
     ctp_calculated_total: ctpCalculatedTotal,
     ctp_total: ctpTotalNum
   });
+}
+
+/**
+ * Previews a UDisc import against the selected weekly sheet.
+ * Reads the weekly sheet and ClubMembers, matches each UDisc row,
+ * and returns categorized results without writing anything.
+ *
+ * Inputs: league_date (required, YYYY-MM-DD), rows (required, array of parsed UDisc row objects)
+ */
+function handlePreviewUdiscImport(data) {
+  const leagueDate = data.league_date;
+  const rows = data.rows;
+
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date. Expected YYYY-MM-DD.');
+  }
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    return respond('error', 'No UDisc rows provided.');
+  }
+
+  const tabName = 'Week ' + leagueDate;
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  const weeklySheet = spreadsheet.getSheetByName(tabName);
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+
+  const clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  if (!clubSheet) {
+    return respond('error', 'ClubMembers tab not found.');
+  }
+
+  // Read weekly sheet data
+  const weeklyData = weeklySheet.getDataRange().getValues();
+  const weeklyHeaders = weeklyData[0];
+
+  const wMemberCol = weeklyHeaders.indexOf('member_number');
+  const wNameCol = weeklyHeaders.indexOf('player_name_snapshot');
+  const wUdiscCol = weeklyHeaders.indexOf('udisc_username_snapshot');
+  const wPdgaCol = weeklyHeaders.indexOf('pdga_number_snapshot');
+  const wInTagCol = weeklyHeaders.indexOf('in_tag');
+  const wCheckedInCol = weeklyHeaders.indexOf('checked_in');
+  const wPaidCol = weeklyHeaders.indexOf('paid');
+  const wCtpCol = weeklyHeaders.indexOf('ctp');
+  const wAcePotCol = weeklyHeaders.indexOf('ace_pot');
+
+  // Build weekly indexes
+  var weeklyByUsername = {};
+  var weeklyByPdga = {};
+  var weeklyByName = {};
+
+  for (var i = 1; i < weeklyData.length; i++) {
+    var row = weeklyData[i];
+    var udisc = (row[wUdiscCol] || '').toString().trim().toLowerCase();
+    var pdga = (row[wPdgaCol] || '').toString().trim();
+    var name = (row[wNameCol] || '').toString().trim().toLowerCase();
+    var memberNum = row[wMemberCol];
+
+    if (udisc) weeklyByUsername[udisc] = { row: row, index: i };
+    if (pdga) weeklyByPdga[pdga] = { row: row, index: i };
+    if (name) {
+      if (!weeklyByName[name]) weeklyByName[name] = [];
+      weeklyByName[name].push({ row: row, index: i });
+    }
+  }
+
+  // Read ClubMembers data
+  var clubData = clubSheet.getDataRange().getValues();
+  var clubHeaders = clubData[0];
+
+  var cMemberCol = clubHeaders.indexOf('member_number');
+  var cNameCol = clubHeaders.indexOf('name');
+  var cUdiscCol = clubHeaders.indexOf('udisc_username');
+  var cPdgaCol = clubHeaders.indexOf('pdga_number');
+  var cActiveCol = clubHeaders.indexOf('is_active');
+
+  // Build ClubMembers indexes (active members only)
+  var clubByUsername = {};
+  var clubByPdga = {};
+
+  for (var j = 1; j < clubData.length; j++) {
+    var crow = clubData[j];
+    var cActive = crow[cActiveCol];
+    if (cActive !== true && cActive !== 'TRUE') continue;
+
+    var cUdisc = (crow[cUdiscCol] || '').toString().trim().toLowerCase();
+    var cPdga = (crow[cPdgaCol] || '').toString().trim();
+    var cMemberNum = crow[cMemberCol];
+
+    if (cUdisc) clubByUsername[cUdisc] = cMemberNum;
+    if (cPdga) clubByPdga[cPdga] = cMemberNum;
+  }
+
+  // Categorize each UDisc row
+  var matched = [];
+  var existingMemberNewWeekly = [];
+  var completelyNew = [];
+  var ambiguous = [];
+  var errors = [];
+
+  for (var r = 0; r < rows.length; r++) {
+    var udiscRow = rows[r];
+    var uName = (udiscRow.name || '').toString().trim();
+    var uUsername = (udiscRow.username || '').toString().trim();
+    var uPdga = (udiscRow.pdga_number || '').toString().trim();
+
+    // Require at least a name
+    if (!uName) {
+      errors.push({
+        udisc_name: '', udisc_username: uUsername, udisc_pdga: uPdga,
+        row_index: r, error: 'No identifying information (name is empty).'
+      });
+      continue;
+    }
+
+    var found = false;
+
+    // Step 1: Match by UDisc username against weekly records
+    if (uUsername) {
+      var match = weeklyByUsername[uUsername.toLowerCase()];
+      if (match) {
+        matched.push(buildMatchEntry(udiscRow, match.row, 'username'));
+        found = true;
+      }
+    }
+
+    // Step 2: Match by PDGA number against weekly records
+    if (!found && uPdga) {
+      var match = weeklyByPdga[uPdga];
+      if (match) {
+        matched.push(buildMatchEntry(udiscRow, match.row, 'pdga'));
+        found = true;
+      }
+    }
+
+    // Step 3: Match by player name against weekly records
+    if (!found) {
+      var nameMatches = weeklyByName[uName.toLowerCase()];
+      if (nameMatches && nameMatches.length === 1) {
+        matched.push(buildMatchEntry(udiscRow, nameMatches[0].row, 'name'));
+        found = true;
+      } else if (nameMatches && nameMatches.length > 1) {
+        ambiguous.push({
+          udisc_name: uName, udisc_username: uUsername, udisc_pdga: uPdga,
+          possible_matches: nameMatches.map(function(m) {
+            return {
+              member_number: m.row[wMemberCol],
+              name: m.row[wNameCol],
+              udisc_username: m.row[wUdiscCol]
+            };
+          }),
+          error: 'Multiple weekly records match by name. Requires PDGA number or username to disambiguate.'
+        });
+        found = true;
+      }
+    }
+
+    if (found) continue;
+
+    // Step 4: No weekly match — check ClubMembers
+    var memberNum = null;
+    var matchMethod = null;
+
+    if (uUsername) {
+      memberNum = clubByUsername[uUsername.toLowerCase()];
+      if (memberNum) matchMethod = 'udisc_username_to_club_members';
+    }
+    if (!memberNum && uPdga) {
+      memberNum = clubByPdga[uPdga];
+      if (memberNum) matchMethod = 'udisc_pdga_to_club_members';
+    }
+
+    if (memberNum) {
+      // Existing ClubMembers player, no weekly record yet
+      var existingName = '';
+      for (var c = 1; c < clubData.length; c++) {
+        if (clubData[c][cMemberCol] === memberNum) {
+          existingName = clubData[c][cNameCol] || '';
+          break;
+        }
+      }
+      existingMemberNewWeekly.push({
+        is_new: true, new_type: 'existing_member',
+        udisc_name: uName, udisc_username: uUsername, udisc_pdga: uPdga,
+        member_number: memberNum,
+        existing_club_member_name: existingName,
+        match_method: matchMethod,
+        fields_to_import: buildFieldsToImport(udiscRow)
+      });
+    } else {
+      // Completely new player — not in ClubMembers
+      if (!uUsername && !uPdga) {
+        errors.push({
+          udisc_name: uName, udisc_username: uUsername, udisc_pdga: uPdga,
+          row_index: r, error: 'No PDGA number or UDisc username for new player creation.'
+        });
+      } else {
+        completelyNew.push({
+          is_new: true, new_type: 'new_member',
+          udisc_name: uName, udisc_username: uUsername, udisc_pdga: uPdga,
+          fields_to_import: buildFieldsToImport(udiscRow)
+        });
+      }
+    }
+  }
+
+  // Identify weekly players missing from UDisc
+  var matchedMemberNumbers = {};
+  for (var m = 0; m < matched.length; m++) {
+    matchedMemberNumbers[matched[m].member_number] = true;
+  }
+
+  var missingFromUdisc = [];
+  for (var w = 1; w < weeklyData.length; w++) {
+    var wm = weeklyData[w][wMemberCol];
+    if (!matchedMemberNumbers[wm]) {
+      missingFromUdisc.push({
+        member_number: wm,
+        player_name: weeklyData[w][wNameCol],
+        udisc_username: weeklyData[w][wUdiscCol],
+        pdga_number: weeklyData[w][wPdgaCol]
+      });
+    }
+  }
+
+  return respond('ok', 'Import preview generated.', {
+    league_date: leagueDate,
+    weekly_tab: tabName,
+    summary: {
+      total_udisc_rows: rows.length,
+      matched_update: matched.length,
+      existing_member_new_weekly: existingMemberNewWeekly.length,
+      completely_new: completelyNew.length,
+      missing_from_udisc: missingFromUdisc.length,
+      ambiguous: ambiguous.length,
+      errors: errors.length
+    },
+    matched: matched,
+    existing_member_new_weekly: existingMemberNewWeekly,
+    completely_new: completelyNew,
+    missing_from_udisc: missingFromUdisc,
+    ambiguous: ambiguous,
+    errors: errors
+  });
+}
+
+/**
+ * Commits an approved UDisc import to the selected weekly sheet.
+ * Revalidates matching server-side. Updates matched rows in place,
+ * creates new weekly rows for existing ClubMembers players,
+ * and creates both ClubMembers + weekly rows for entirely new players.
+ *
+ * Inputs: league_date (required), rows (required), approved (must be true)
+ */
+function handleCommitUdiscImport(data) {
+  var leagueDate = data.league_date;
+  var rows = data.rows;
+  var approved = data.approved;
+
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date.');
+  }
+  if (!approved) {
+    return respond('error', 'Import not approved.');
+  }
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    return respond('error', 'No UDisc rows provided.');
+  }
+
+  var tabName = 'Week ' + leagueDate;
+  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  var weeklySheet = spreadsheet.getSheetByName(tabName);
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+
+  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  if (!clubSheet) {
+    return respond('error', 'ClubMembers tab not found.');
+  }
+
+  // Re-read and revalidate all data server-side (do not trust preview payload)
+  var weeklyData = weeklySheet.getDataRange().getValues();
+  var weeklyHeaders = weeklyData[0];
+
+  var wMemberCol = weeklyHeaders.indexOf('member_number');
+  var wNameCol = weeklyHeaders.indexOf('player_name_snapshot');
+  var wUdiscCol = weeklyHeaders.indexOf('udisc_username_snapshot');
+  var wPdgaCol = weeklyHeaders.indexOf('pdga_number_snapshot');
+
+  // Build weekly indexes
+  var weeklyByUsername = {};
+  var weeklyByPdga = {};
+  var weeklyByName = {};
+
+  for (var i = 1; i < weeklyData.length; i++) {
+    var row = weeklyData[i];
+    var udisc = (row[wUdiscCol] || '').toString().trim().toLowerCase();
+    var pdga = (row[wPdgaCol] || '').toString().trim();
+    var name = (row[wNameCol] || '').toString().trim().toLowerCase();
+
+    if (udisc) weeklyByUsername[udisc] = { row: row, index: i };
+    if (pdga) weeklyByPdga[pdga] = { row: row, index: i };
+    if (name) {
+      if (!weeklyByName[name]) weeklyByName[name] = [];
+      weeklyByName[name].push({ row: row, index: i });
+    }
+  }
+
+  // Read and index ClubMembers
+  var clubData = clubSheet.getDataRange().getValues();
+  var clubHeaders = clubData[0];
+
+  var cMemberCol = clubHeaders.indexOf('member_number');
+  var cNameCol = clubHeaders.indexOf('name');
+  var cUdiscCol = clubHeaders.indexOf('udisc_username');
+  var cPdgaCol = clubHeaders.indexOf('pdga_number');
+  var cActiveCol = clubHeaders.indexOf('is_active');
+
+  var clubByUsername = {};
+  var clubByPdga = {};
+
+  for (var j = 1; j < clubData.length; j++) {
+    var crow = clubData[j];
+    var cActive = crow[cActiveCol];
+    if (cActive !== true && cActive !== 'TRUE') continue;
+
+    var cUdisc = (crow[cUdiscCol] || '').toString().trim().toLowerCase();
+    var cPdga = (crow[cPdgaCol] || '').toString().trim();
+
+    if (cUdisc) clubByUsername[cUdisc] = crow[cMemberCol];
+    if (cPdga) clubByPdga[cPdga] = crow[cMemberCol];
+  }
+
+  // Track created member_numbers in this batch to prevent duplicates
+  var batchMemberNumbers = {};
+  var matchedUpdated = 0;
+  var existingMemberWeeklyCreated = 0;
+  var newMembersCreated = 0;
+  var createdMemberNumbers = [];
+
+  var now = new Date().toISOString();
+
+  for (var r = 0; r < rows.length; r++) {
+    var udiscRow = rows[r];
+    var uName = (udiscRow.name || '').toString().trim();
+    var uUsername = (udiscRow.username || '').toString().trim();
+    var uPdga = (udiscRow.pdga_number || '').toString().trim();
+
+    if (!uName) continue;
+
+    // --- Revalidate matching server-side ---
+    var weeklyMatch = null;
+    var matchMethod = null;
+
+    // Step 1: username match against weekly records
+    if (uUsername) {
+      var m = weeklyByUsername[uUsername.toLowerCase()];
+      if (m) { weeklyMatch = m; matchMethod = 'username'; }
+    }
+    // Step 2: PDGA match against weekly records
+    if (!weeklyMatch && uPdga) {
+      var m = weeklyByPdga[uPdga];
+      if (m) { weeklyMatch = m; matchMethod = 'pdga'; }
+    }
+    // Step 3: name match against weekly records
+    if (!weeklyMatch) {
+      var nameMatches = weeklyByName[uName.toLowerCase()];
+      if (nameMatches && nameMatches.length === 1) {
+        weeklyMatch = nameMatches[0];
+        matchMethod = 'name';
+      }
+    }
+
+    if (weeklyMatch) {
+      // --- Path 1: Update existing weekly record in place ---
+      var targetRowIndex = weeklyMatch.index + 1;
+      var existingRow = weeklyMatch.row;
+      var values = existingRow.slice();
+
+      // Read current row state (may have changed since preview)
+      var currentRow = weeklySheet.getRange(targetRowIndex, 1, 1, weeklyHeaders.length).getValues()[0];
+      values = currentRow.slice();
+
+      // Write UDisc import fields only — protected fields untouched
+      values[weeklyHeaders.indexOf('udisc_name_import')] = uName;
+      values[weeklyHeaders.indexOf('udisc_username_import')] = uUsername;
+      values[weeklyHeaders.indexOf('udisc_pdga_number_import')] = uPdga;
+      values[weeklyHeaders.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
+      values[weeklyHeaders.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
+      values[weeklyHeaders.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
+      values[weeklyHeaders.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
+      values[weeklyHeaders.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
+      values[weeklyHeaders.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
+      values[weeklyHeaders.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
+      values[weeklyHeaders.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
+      values[weeklyHeaders.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
+      values[weeklyHeaders.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
+      values[weeklyHeaders.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
+      values[weeklyHeaders.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
+      values[weeklyHeaders.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
+      for (var h = 1; h <= 18; h++) {
+        var holeKey = 'hole_' + h;
+        values[weeklyHeaders.indexOf(holeKey)] = udiscRow[holeKey] !== undefined ? udiscRow[holeKey] : '';
+      }
+      values[weeklyHeaders.indexOf('updated_at')] = now;
+
+      weeklySheet.getRange(targetRowIndex, 1, 1, weeklyHeaders.length).setValues([values]);
+      matchedUpdated++;
+
+    } else {
+      // --- Not a weekly record match — check ClubMembers ---
+      var existingMemberNum = null;
+      var existingMemberName = '';
+
+      if (uUsername) {
+        existingMemberNum = clubByUsername[uUsername.toLowerCase()];
+      }
+      if (!existingMemberNum && uPdga) {
+        existingMemberNum = clubByPdga[uPdga];
+      }
+
+      if (existingMemberNum) {
+        // Verify ClubMembers row still exists and is active
+        var memberStillValid = false;
+        for (var c = 1; c < clubData.length; c++) {
+          if (clubData[c][cMemberCol] === existingMemberNum &&
+              (clubData[c][cActiveCol] === true || clubData[c][cActiveCol] === 'TRUE')) {
+            existingMemberName = clubData[c][cNameCol] || '';
+            memberStillValid = true;
+            break;
+          }
+        }
+        if (!memberStillValid) continue;
+
+        // Check batch dedup
+        if (batchMemberNumbers[existingMemberNum]) continue;
+        batchMemberNumbers[existingMemberNum] = true;
+
+        // Double-check: does a weekly record already exist?
+        var existingWeekly = weeklySheet.getDataRange().getValues();
+        var alreadyExists = false;
+        for (var w = 1; w < existingWeekly.length; w++) {
+          if (existingWeekly[w][wMemberCol] === existingMemberNum) {
+            alreadyExists = true;
+            break;
+          }
+        }
+        if (alreadyExists) continue;
+
+        // --- Path 2: Existing ClubMembers player, create new weekly row ---
+        var newRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = existingMemberNum;
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = existingMemberName;
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = uUsername;
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = uPdga;
+        // in_tag: blank — not invented
+        // out_tag: blank — not calculated
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
+        // signed_in_at: blank — player did not check in through the app
+        // paid: FALSE — not invented
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('paid')] = false;
+        // ctp: FALSE — not invented
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = false;
+        // ace_pot: FALSE — not invented
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = false;
+        // UDisc import fields
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_name_import')] = uName;
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_import')] = uUsername;
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_pdga_number_import')] = uPdga;
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
+        for (var h = 1; h <= 18; h++) {
+          newRecord[WEEKLY_RECORD_HEADERS.indexOf('hole_' + h)] = udiscRow['hole_' + h] !== undefined ? udiscRow['hole_' + h] : '';
+        }
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
+        newRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
+
+        weeklySheet.appendRow(newRecord);
+        existingMemberWeeklyCreated++;
+
+      } else {
+        // --- Path 3: Completely new player — create ClubMembers + weekly row ---
+        if (!uUsername && !uPdga) continue;
+
+        // Check if this username/PDGA was already assigned a member_number in this batch
+        var batchKey = (uUsername || '') + '|' + (uPdga || '');
+        var alreadyBatchAssigned = false;
+        for (var bk in batchMemberNumbers) {
+          // batchMemberNumbers stores member_numbers; we need identity-based dedup
+        }
+
+        // Check existing ClubMembers one more time
+        var doubleCheck = null;
+        if (uUsername && clubByUsername[uUsername.toLowerCase()]) {
+          doubleCheck = clubByUsername[uUsername.toLowerCase()];
+        }
+        if (!doubleCheck && uPdga && clubByPdga[uPdga]) {
+          doubleCheck = clubByPdga[uPdga];
+        }
+        if (doubleCheck) {
+          // Became an existing member between preview and commit — treat as Path 2
+          if (batchMemberNumbers[doubleCheck]) continue;
+          batchMemberNumbers[doubleCheck] = true;
+          // Find ClubMembers name
+          var cmName = '';
+          for (var cc = 1; cc < clubData.length; cc++) {
+            if (clubData[cc][cMemberCol] === doubleCheck) {
+              cmName = clubData[cc][cNameCol] || '';
+              break;
+            }
+          }
+          var newRecord2 = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = doubleCheck;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = cmName;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = uUsername;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = uPdga;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('paid')] = false;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = false;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = false;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_name_import')] = uName;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_import')] = uUsername;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_pdga_number_import')] = uPdga;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
+          for (var h2 = 1; h2 <= 18; h2++) {
+            newRecord2[WEEKLY_RECORD_HEADERS.indexOf('hole_' + h2)] = udiscRow['hole_' + h2] !== undefined ? udiscRow['hole_' + h2] : '';
+          }
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
+          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
+          weeklySheet.appendRow(newRecord2);
+          existingMemberWeeklyCreated++;
+          continue;
+        }
+
+        // Create new ClubMembers row with LockService
+        var lock = LockService.getScriptLock();
+        try {
+          lock.waitLock(10000);
+
+          // Re-read ClubMembers inside lock to catch rows created earlier in this batch
+          var freshClubData = clubSheet.getDataRange().getValues();
+          var maxMemberNumber = 0;
+          var duplicateDetected = false;
+          for (var cr = 1; cr < freshClubData.length; cr++) {
+            var val = freshClubData[cr][cMemberCol];
+            var num = parseInt(val, 10);
+            if (!isNaN(num) && num > maxMemberNumber) {
+              maxMemberNumber = num;
+            }
+            // Check for duplicate identity (username or PDGA already exists)
+            var existingUdisc = (freshClubData[cr][cUdiscCol] || '').toString().trim().toLowerCase();
+            var existingPdga = (freshClubData[cr][cPdgaCol] || '').toString().trim();
+            if (uUsername && existingUdisc === uUsername.toLowerCase()) {
+              duplicateDetected = true;
+              break;
+            }
+            if (uPdga && existingPdga === uPdga) {
+              duplicateDetected = true;
+              break;
+            }
+          }
+          if (duplicateDetected) {
+            lock.releaseLock();
+            continue;
+          }
+
+          var newMemberNumber = maxMemberNumber + 1;
+
+          // Create ClubMembers row
+          var newClubRow = new Array(CLUB_MEMBER_HEADERS.length).fill('');
+          newClubRow[CLUB_MEMBER_HEADERS.indexOf('member_number')] = newMemberNumber;
+          newClubRow[CLUB_MEMBER_HEADERS.indexOf('name')] = uName;
+          newClubRow[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = uUsername;
+          newClubRow[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = uPdga;
+          // current_tag: empty — not invented, admin must assign before next league day
+          newClubRow[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
+          newClubRow[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
+          newClubRow[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
+
+          clubSheet.appendRow(newClubRow);
+
+          batchMemberNumbers[newMemberNumber] = true;
+          createdMemberNumbers.push(newMemberNumber);
+
+          // Create weekly record
+          var newWeeklyRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = newMemberNumber;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = uName;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = uUsername;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = uPdga;
+          // in_tag: blank — not invented
+          // out_tag: blank — not calculated
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
+          // signed_in_at: blank — player did not check in through the app
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('paid')] = false;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = false;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = false;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_name_import')] = uName;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_import')] = uUsername;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_pdga_number_import')] = uPdga;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
+          for (var h3 = 1; h3 <= 18; h3++) {
+            newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('hole_' + h3)] = udiscRow['hole_' + h3] !== undefined ? udiscRow['hole_' + h3] : '';
+          }
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
+          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
+
+          weeklySheet.appendRow(newWeeklyRecord);
+          newMembersCreated++;
+
+        } finally {
+          lock.releaseLock();
+        }
+      }
+    }
+  }
+
+  return respond('ok', 'Import committed.', {
+    summary: {
+      matched_updated: matchedUpdated,
+      existing_member_weekly_created: existingMemberWeeklyCreated,
+      new_members_created: newMembersCreated,
+      total_affected: matchedUpdated + existingMemberWeeklyCreated + newMembersCreated
+    },
+    created_member_numbers: createdMemberNumbers
+  });
+}
+
+/**
+ * Builds the fields_to_import object from a UDisc row.
+ */
+function buildFieldsToImport(udiscRow) {
+  var fields = {
+    udisc_name_import: udiscRow.name || '',
+    udisc_username_import: udiscRow.username || '',
+    udisc_pdga_number_import: (udiscRow.pdga_number || '').toString(),
+    score: udiscRow.round_total_score,
+    round_relative_score: udiscRow.round_relative_score,
+    round_rating: udiscRow.round_rating,
+    event_relative_score: udiscRow.event_relative_score,
+    event_total_score: udiscRow.event_total_score,
+    udisc_checked_in: udiscRow.checked_in,
+    udisc_paid: udiscRow.paid,
+    starting_hole: udiscRow.starting_hole,
+    start_time: udiscRow.start_time,
+    division: udiscRow.division,
+    udisc_position: udiscRow.position,
+    udisc_position_raw: udiscRow.position_raw,
+    udisc_ending_tag: udiscRow.bag_tag_at_end
+  };
+  for (var h = 1; h <= 18; h++) {
+    fields['hole_' + h] = udiscRow['hole_' + h];
+  }
+  return fields;
+}
+
+/**
+ * Builds a matched entry object for the preview response.
+ */
+function buildMatchEntry(udiscRow, weeklyRow, matchMethod) {
+  var headers = WEEKLY_RECORD_HEADERS;
+  return {
+    is_new: false,
+    udisc_name: udiscRow.name || '',
+    udisc_username: udiscRow.username || '',
+    udisc_pdga: (udiscRow.pdga_number || '').toString(),
+    member_number: weeklyRow[headers.indexOf('member_number')],
+    weekly_player_name: weeklyRow[headers.indexOf('player_name_snapshot')],
+    match_method: matchMethod,
+    fields_to_import: buildFieldsToImport(udiscRow),
+    existing_values: {
+      in_tag: weeklyRow[headers.indexOf('in_tag')],
+      checked_in: weeklyRow[headers.indexOf('checked_in')],
+      paid: weeklyRow[headers.indexOf('paid')],
+      ctp: weeklyRow[headers.indexOf('ctp')],
+      ace_pot: weeklyRow[headers.indexOf('ace_pot')]
+    }
+  };
 }
 
 /**

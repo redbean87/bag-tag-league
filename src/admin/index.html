@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bag Tag League - League Admin</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -262,6 +263,41 @@
         <button type="button" id="btnSavePreRound" onclick="savePreRoundReview()">Save Review</button>
       </div>
       <div id="preRoundResult" class="status hidden"></div>
+    </div>
+  </div>
+
+  <div class="card" id="udiscImportCard">
+    <h2>UDisc Import</h2>
+    <div id="udiscImportMissing">
+      <p class="help-text">
+        The <code>League</code> sheet or <code>ClubMembers</code> tab does not exist yet.
+        Complete setup above before importing UDisc data.
+      </p>
+    </div>
+    <div id="udiscImportForm" style="display:none;">
+      <p class="help-text">
+        Upload a UDisc <code>Event results</code> xlsx export to import scores
+        and player data into a weekly sheet. Preview is write-free. Approval
+        commits the import.
+      </p>
+      <div class="field-group">
+        <label for="udiscImportDate">League Date</label>
+        <select id="udiscImportDate">
+          <option value="">-- Select a league date --</option>
+        </select>
+      </div>
+      <div id="udiscImportNoWeeks" style="display:none;">
+        <p class="help-text">
+          No weekly tabs found. Create a league day first using the form above.
+        </p>
+      </div>
+      <div class="field-group">
+        <label for="udiscFile">UDisc Export (.xlsx)</label>
+        <input type="file" id="udiscFile" accept=".xlsx,.xls">
+      </div>
+      <button type="button" id="btnPreviewImport" onclick="previewUdiscImport()">Parse &amp; Preview</button>
+      <div id="udiscImportPreview" style="display:none;"></div>
+      <div id="udiscImportResult" class="status hidden"></div>
     </div>
   </div>
 
@@ -740,6 +776,417 @@
       }
     }
 
+    // UDisc Import functions
+    var parsedUdiscRows = null;
+
+    function setUdiscImportStatus(type, html) {
+      var el = document.getElementById('udiscImportResult');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearUdiscImportStatus() {
+      var el = document.getElementById('udiscImportResult');
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
+    async function loadUdiscImportTabs() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getWeeklyTabs' })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          log('ERROR loading weekly tabs for import: ' + data.message);
+          return;
+        }
+
+        var select = document.getElementById('udiscImportDate');
+        var noWeeksMsg = document.getElementById('udiscImportNoWeeks');
+
+        while (select.options.length > 1) {
+          select.remove(1);
+        }
+
+        if (!data.weeks || data.weeks.length === 0) {
+          noWeeksMsg.style.display = '';
+          return;
+        }
+
+        noWeeksMsg.style.display = 'none';
+
+        for (var i = 0; i < data.weeks.length; i++) {
+          var week = data.weeks[i];
+          var option = document.createElement('option');
+          option.value = week.date;
+          option.textContent = week.date + ' (' + week.sheet_name + ')';
+          select.appendChild(option);
+        }
+
+        log('Loaded ' + data.weeks.length + ' weekly tab(s) for UDisc import');
+      } catch (err) {
+        log('FAILED to load weekly tabs for import: ' + err.message);
+      }
+    }
+
+    async function loadUdiscImportStatus() {
+      try {
+        var clubResp = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getClubMembersStatus' })
+        });
+        var clubData = await clubResp.json();
+
+        var leagueResp = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getLeagueSettings' })
+        });
+        var leagueData = await leagueResp.json();
+
+        if (clubData.status !== 'ok' || clubData.state === 'missing' ||
+            leagueData.status !== 'ok' || leagueData.state === 'missing') {
+          document.getElementById('udiscImportMissing').style.display = '';
+          document.getElementById('udiscImportForm').style.display = 'none';
+          return;
+        }
+
+        document.getElementById('udiscImportMissing').style.display = 'none';
+        document.getElementById('udiscImportForm').style.display = '';
+        await loadUdiscImportTabs();
+      } catch (err) {
+        log('FAILED to load UDisc import status: ' + err.message);
+      }
+    }
+
+    async function previewUdiscImport() {
+      clearUdiscImportStatus();
+      var previewEl = document.getElementById('udiscImportPreview');
+      previewEl.style.display = 'none';
+      previewEl.innerHTML = '';
+
+      var leagueDate = document.getElementById('udiscImportDate').value;
+      if (!leagueDate) {
+        setUdiscImportStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var fileInput = document.getElementById('udiscFile');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        setUdiscImportStatus('error', '<strong>Please select a UDisc xlsx file.</strong>');
+        return;
+      }
+
+      var file = fileInput.files[0];
+      if (!file.name.match(/\.xlsx?$/i)) {
+        setUdiscImportStatus('error', '<strong>Please select an .xlsx file.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnPreviewImport');
+      btn.disabled = true;
+      btn.textContent = 'Parsing...';
+      setUdiscImportStatus('pending', 'Parsing UDisc export...');
+
+      log('Parsing UDisc file: ' + file.name);
+
+      try {
+        // Parse xlsx client-side with SheetJS
+        var arrayBuffer = await file.arrayBuffer();
+        var workbook = XLSX.read(arrayBuffer, { type: 'array' });
+
+        // Find the Event results sheet
+        var sheetName = null;
+        for (var s = 0; s < workbook.SheetNames.length; s++) {
+          if (workbook.SheetNames[s].toLowerCase().indexOf('event result') !== -1) {
+            sheetName = workbook.SheetNames[s];
+            break;
+          }
+        }
+        if (!sheetName) {
+          // Fallback: try exact match
+          for (var s2 = 0; s2 < workbook.SheetNames.length; s2++) {
+            if (workbook.SheetNames[s2] === 'Event results') {
+              sheetName = workbook.SheetNames[s2];
+              break;
+            }
+          }
+        }
+        if (!sheetName) {
+          setUdiscImportStatus('error',
+            '<strong>Sheet "Event results" not found.</strong> Available sheets: ' +
+            workbook.SheetNames.join(', '));
+          btn.disabled = false;
+          btn.textContent = 'Parse & Preview';
+          return;
+        }
+
+        var sheet = workbook.Sheets[sheetName];
+        var rows = XLSX.utils.sheet_to_json(sheet);
+
+        if (rows.length === 0) {
+          setUdiscImportStatus('error', '<strong>No data rows found in Event results.</strong>');
+          btn.disabled = false;
+          btn.textContent = 'Parse & Preview';
+          return;
+        }
+
+        log('Parsed ' + rows.length + ' rows from "' + sheetName + '"');
+        setUdiscImportStatus('pending', 'Matching against weekly sheet...');
+
+        // Send to Apps Script for preview
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'previewUdiscImport',
+            league_date: leagueDate,
+            rows: rows
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setUdiscImportStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          btn.disabled = false;
+          btn.textContent = 'Parse & Preview';
+          return;
+        }
+
+        parsedUdiscRows = rows;
+        renderImportPreview(data);
+        log('Import preview generated for ' + leagueDate);
+
+      } catch (err) {
+        setUdiscImportStatus('error', '<strong>Parse failed:</strong> ' + err.message);
+        log('FAILED to parse UDisc file: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Parse & Preview';
+      }
+    }
+
+    function renderImportPreview(data) {
+      var previewEl = document.getElementById('udiscImportPreview');
+      var html = '';
+
+      // Summary
+      html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Import Summary</h3>';
+      html += '<div class="field-group">';
+      html += '<p>Total UDisc rows: <strong>' + data.summary.total_udisc_rows + '</strong></p>';
+      html += '<p>Matched (update existing): <strong>' + data.summary.matched_update + '</strong></p>';
+      html += '<p>New weekly row (existing member): <strong>' + data.summary.existing_member_new_weekly + '</strong></p>';
+      html += '<p>Completely new player: <strong>' + data.summary.completely_new + '</strong></p>';
+      html += '<p>Missing from UDisc: <strong>' + data.summary.missing_from_udisc + '</strong></p>';
+      html += '<p>Ambiguous: <strong>' + data.summary.ambiguous + '</strong></p>';
+      html += '<p>Errors: <strong>' + data.summary.errors + '</strong></p>';
+      html += '</div>';
+
+      // Matched (Update) section
+      if (data.matched && data.matched.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Matched — Update Existing</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#f0f0f0;"><th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Score</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Match</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">in_tag</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Status</th></tr>';
+        for (var i = 0; i < data.matched.length; i++) {
+          var m = data.matched[i];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(m.weekly_player_name) + ' <span style="color:#888;">(' + escHtml(m.udisc_name) + ')</span></td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(String(m.fields_to_import.score)) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(m.match_method) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(String(m.existing_values.in_tag)) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd; color:#0066cc;">UPDATE</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Existing Member, New Weekly Row section
+      if (data.existing_member_new_weekly && data.existing_member_new_weekly.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">New Weekly Row — Existing Club Member</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#f0f0f0;"><th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">UDisc Name</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Club Member</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Score</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Status</th></tr>';
+        for (var j = 0; j < data.existing_member_new_weekly.length; j++) {
+          var e = data.existing_member_new_weekly[j];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(e.udisc_name) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(e.existing_club_member_name) + ' <span style="color:#888;">(#' + e.member_number + ')</span></td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(String(e.fields_to_import.score)) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd; color:#0066cc; font-weight:bold;">NEW</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Completely New Player section
+      if (data.completely_new && data.completely_new.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Completely New Player</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#f0f0f0;"><th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">UDisc Name</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Username</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">PDGA</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Score</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Status</th></tr>';
+        for (var k = 0; k < data.completely_new.length; k++) {
+          var n = data.completely_new[k];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(n.udisc_name) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(n.udisc_username) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(n.udisc_pdga) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(String(n.fields_to_import.score)) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd; color:#0066cc; font-weight:bold;">NEW + MEMBER</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Missing from UDisc section
+      if (data.missing_from_udisc && data.missing_from_udisc.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Missing from UDisc (no action)</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#f0f0f0;"><th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Member #</th></tr>';
+        for (var mi = 0; mi < data.missing_from_udisc.length; mi++) {
+          var ms = data.missing_from_udisc[mi];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(ms.player_name) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + ms.member_number + '</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Ambiguous section
+      if (data.ambiguous && data.ambiguous.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#ea4335;">Ambiguous (manual resolution needed)</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#fce8e6;"><th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">UDisc Name</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Possible Matches</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Error</th></tr>';
+        for (var a = 0; a < data.ambiguous.length; a++) {
+          var am = data.ambiguous[a];
+          var matchList = am.possible_matches.map(function(pm) {
+            return escHtml(pm.name) + ' (#' + pm.member_number + ')';
+          }).join(', ');
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(am.udisc_name) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + matchList + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(am.error) + '</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Errors section
+      if (data.errors && data.errors.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#ea4335;">Errors</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#fce8e6;"><th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">UDisc Name</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Error</th></tr>';
+        for (var er = 0; er < data.errors.length; er++) {
+          var err = data.errors[er];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(err.udisc_name || '(empty)') + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(err.error) + '</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Approve / Cancel buttons
+      var hasWork = (data.summary.matched_update + data.summary.existing_member_new_weekly + data.summary.completely_new) > 0;
+      if (hasWork) {
+        html += '<button type="button" id="btnCommitImport" onclick="commitUdiscImport()" style="background:#34a853;">Approve Import</button> ';
+      }
+      html += '<button type="button" onclick="resetImportUI()">Cancel</button>';
+
+      previewEl.innerHTML = html;
+      previewEl.style.display = '';
+    }
+
+    function escHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async function commitUdiscImport() {
+      if (!parsedUdiscRows) {
+        setUdiscImportStatus('error', '<strong>No parsed data to commit.</strong>');
+        return;
+      }
+
+      var leagueDate = document.getElementById('udiscImportDate').value;
+      if (!leagueDate) {
+        setUdiscImportStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnCommitImport');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Committing...';
+      }
+      setUdiscImportStatus('pending', 'Committing import...');
+
+      log('Committing UDisc import for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'commitUdiscImport',
+            league_date: leagueDate,
+            rows: parsedUdiscRows,
+            approved: true
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          var s = data.summary;
+          setUdiscImportStatus('ok',
+            '<strong>Import committed.</strong> ' +
+            s.matched_updated + ' updated, ' +
+            s.existing_member_weekly_created + ' new weekly rows, ' +
+            s.new_members_created + ' new members created.');
+          log('SUCCESS: Import committed. ' + s.total_affected + ' records affected.');
+          resetImportUI();
+        } else {
+          setUdiscImportStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setUdiscImportStatus('error', '<strong>Commit failed:</strong> ' + err.message);
+        log('FAILED to commit import: ' + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Approve Import';
+        }
+      }
+    }
+
+    function resetImportUI() {
+      parsedUdiscRows = null;
+      var previewEl = document.getElementById('udiscImportPreview');
+      previewEl.style.display = 'none';
+      previewEl.innerHTML = '';
+      clearUdiscImportStatus();
+    }
+
     // Init: set default date
     (function init() {
       document.getElementById('leagueDate').valueAsDate = new Date();
@@ -747,6 +1194,7 @@
       loadLeagueSettings();
       loadClubMembersStatus();
       loadPreRoundStatus();
+      loadUdiscImportStatus();
     })();
   </script>
 </body>
