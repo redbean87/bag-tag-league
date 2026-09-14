@@ -31,7 +31,7 @@ Each field has a single authoritative source. The app must not derive or overwri
 
 ## Persistence
 
-All data lives in Google Sheets. Each entity maps to a tab (worksheet) within a single Google Spreadsheet. Rows are records; columns are fields. Primary keys are UUIDs generated server-side, except for `member_number` which is a sequential integer.
+All data lives in Google Sheets. Each entity maps to a tab (worksheet) within a single Google Spreadsheet. Rows are records; columns are fields. Primary keys are UUIDs generated server-side (for `WeeklyLeagues` and `ImportHistory`), except for `member_number` which is a sequential integer. `WeeklyPlayerRecords` uses a logical composite identity of `weekly_league_id` + `member_number` — no per-row UUID.
 
 ## Entity Relationship Overview
 
@@ -79,7 +79,6 @@ One row per player per weekly league. Created during sign-in only.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| id | string (UUID) | Primary key |
 | weekly_league_id | string (UUID) | FK to WeeklyLeagues |
 | member_number | integer | FK to ClubMembers.member_number |
 | player_name_snapshot | string | Snapshot of name at sign-in |
@@ -201,7 +200,7 @@ Potential settings:
 - All UUIDs are generated server-side
 - Timestamps are stored in UTC as ISO 8601 strings
 - Booleans are stored as `TRUE` / `FALSE` (Google Sheets format)
-- Google Sheets row numbers are ephemeral and must not be used as identifiers; use UUIDs instead (except `member_number`, which is a sequential integer)
+- Google Sheets row numbers are ephemeral and must not be used as identifiers; use UUIDs instead (except `member_number`, which is a sequential integer, and `WeeklyPlayerRecords` which uses the composite of `weekly_league_id` + `member_number`)
 - There is no admin override system, audit log, or correction record mechanism
 - `score` is the player's round score imported from UDisc (`round_total_score`). It is a score, not a bag tag. This is the primary score used for tag calculation ranking.
 - `in_tag` is the player's actual starting bag tag for the weekly league, supplied by the player during check-in. It must not be auto-derived from `ClubMembers.current_tag`.

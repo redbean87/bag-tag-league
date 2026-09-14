@@ -22,9 +22,8 @@ const CLUB_MEMBER_HEADERS = [
   'updated_at'
 ];
 
-// WeeklyPlayerRecords column headers (50 columns from the data model spec)
+// WeeklyPlayerRecords column headers (49 columns from the data model spec)
 const WEEKLY_RECORD_HEADERS = [
-  'id',
   'weekly_league_id',
   'member_number',
   'player_name_snapshot',
@@ -145,7 +144,7 @@ function handleCreateClubMembersTab(data) {
 
 /**
  * Creates a new weekly tab in the spreadsheet for the given league date.
- * Uses the documented WeeklyPlayerRecords schema (50 columns) as the template.
+ * Uses the documented WeeklyPlayerRecords schema (49 columns) as the template.
  * Prevents duplicate tabs for the same date.
  */
 function handleCreateWeeklyTab(data) {
@@ -338,14 +337,12 @@ function handleSubmitCheckIn(data) {
   }
 
   // --- Step 4: Write the check-in record ---
-  const uuid = Utilities.getUuid();
   var recordTimestamp = new Date().toISOString();
 
   // weekly_league_id: use the tab name as a simple identifier
   const weeklyLeagueId = mostRecentTabName;
 
   const newRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('id')] = uuid;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('weekly_league_id')] = weeklyLeagueId;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = memberId;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = memberRow[playerNameCol] || trimmedName;
@@ -363,7 +360,6 @@ function handleSubmitCheckIn(data) {
   recordsSheet.appendRow(newRecord);
 
   return respond('ok', 'Check-in successful.', {
-    record_id: uuid,
     member_number: memberId,
     player_name: trimmedName,
     in_tag: inTagNum,

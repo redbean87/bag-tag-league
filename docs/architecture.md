@@ -30,7 +30,7 @@ All Google Sheets access goes through a server-side service layer. The Google Se
 
 - Reading rows from tabs
 - Writing new rows
-- Updating existing rows by primary key
+- Updating existing rows by key (`member_number` for `ClubMembers`, UUID for `WeeklyLeagues`/`ImportHistory`, composite `weekly_league_id` + `member_number` for `WeeklyPlayerRecords`)
 - Querying by column value
 - Error handling and retry logic
 
