@@ -26,7 +26,7 @@
 2. Browser opens the sign-in page
 3. Player sees a search/selection interface to find themselves
 4. Player selects their name from the master list
-   - If player is not found, they can self-register (add themselves to MasterPlayers tab)
+   - If player is not found, they can self-register (add themselves to MasterPlayers tab; the next sequential member_number is assigned automatically)
 5. Player confirms their identity (name, UDisc username, PDGA number displayed)
 6. Player supplies their `in_tag` (actual starting bag tag for this league day)
    - The app does NOT auto-fill this from `MasterPlayers.current_tag`
@@ -34,6 +34,7 @@
 7. Player confirms payment status (`paid`)
 8. Player submits the check-in
 9. System creates a new row in the WeeklyPlayerRecords tab with:
+   - `member_number` linking to the MasterPlayers record
    - `in_tag` supplied by the player
    - `checked_in = TRUE` and `signed_in_at` timestamp recorded
    - All other UDisc fields left blank (to be filled by import)
@@ -47,7 +48,7 @@
 2. Admin opens the active weekly league
 3. Admin uploads the UDisc xlsx file
 4. System processes the import:
-   a. Attempts to match each UDisc record to a signed-in player (by UDisc username, PDGA number, or name)
+   a. Attempts to match each UDisc record to a signed-in player (by UDisc username, PDGA number, or name; matched records are linked via `member_number`)
    b. Updates matched rows in the WeeklyPlayerRecords tab with UDisc data (score, starting hole, start time, udisc_ending_tag)
    - Note: `udisc_ending_tag` is optional and retained for reference/transition purposes only; it must not be used to calculate `out_tag`.
    c. Adds unmatched UDisc players as new WeeklyPlayerRecords rows

@@ -10,6 +10,7 @@
 
 The master player list is persistent and separate from each weekly league. It is stored in the MasterPlayers tab of the Google Spreadsheet. It stores one record per player with:
 
+- Member number (sequential integer starting at 1, app-generated, unique, immutable after assignment, never reused)
 - Player name
 - UDisc username
 - PDGA number (optional)
@@ -51,7 +52,7 @@ Players do not authenticate. Only administrative functions require authenticatio
 Each weekly player record is a row in the WeeklyPlayerRecords tab, created only when a player signs in. It preserves snapshots for historical accuracy and stores tag assignments:
 
 - Weekly league ID
-- Master player ID
+- Member number (links to MasterPlayers)
 - Player name snapshot
 - UDisc username snapshot
 - PDGA number snapshot

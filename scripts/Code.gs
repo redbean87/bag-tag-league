@@ -12,7 +12,7 @@ const SPREADSHEET_ID = '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik';
 
 // MasterPlayers tab column headers
 const MASTER_PLAYER_HEADERS = [
-  'id',
+  'member_number',
   'name',
   'udisc_username',
   'pdga_number',
@@ -26,7 +26,7 @@ const MASTER_PLAYER_HEADERS = [
 const WEEKLY_RECORD_HEADERS = [
   'id',
   'weekly_league_id',
-  'master_player_id',
+  'member_number',
   'player_name_snapshot',
   'udisc_username_snapshot',
   'pdga_number_snapshot',
@@ -230,7 +230,7 @@ function handleSubmitCheckIn(data) {
   const playersData = playersSheet.getDataRange().getValues();
   const playersHeaders = playersData[0];
 
-  const playerIdCol = playersHeaders.indexOf('id');
+  const playerIdCol = playersHeaders.indexOf('member_number');
   const playerNameCol = playersHeaders.indexOf('name');
   const playerUdiscCol = playersHeaders.indexOf('udisc_username');
   const playerPdgaCol = playersHeaders.indexOf('pdga_number');
@@ -264,23 +264,42 @@ function handleSubmitCheckIn(data) {
 
   // If no match, create new master player
   if (!masterPlayerId) {
-    const now = new Date().toISOString();
-    const newId = Utilities.getUuid();
+    // Lock to prevent concurrent registrations from receiving the same member_number
+    var lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(10000);
 
-    const newPlayer = new Array(MASTER_PLAYER_HEADERS.length).fill('');
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('id')] = newId;
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('name')] = trimmedName;
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('current_tag')] = '';
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('is_active')] = true;
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('created_at')] = now;
-    newPlayer[MASTER_PLAYER_HEADERS.indexOf('updated_at')] = now;
+      // Re-read inside the lock to get the latest state
+      var freshData = playersSheet.getDataRange().getValues();
+      var maxMemberNumber = 0;
+      for (var r = 1; r < freshData.length; r++) {
+        var val = freshData[r][playerIdCol];
+        var num = parseInt(val, 10);
+        if (!isNaN(num) && num > maxMemberNumber) {
+          maxMemberNumber = num;
+        }
+      }
 
-    playersSheet.appendRow(newPlayer);
+      var newMemberNumber = maxMemberNumber + 1;
+      var now = new Date().toISOString();
 
-    masterPlayerId = newId;
-    masterPlayerRow = newPlayer;
+      var newPlayer = new Array(MASTER_PLAYER_HEADERS.length).fill('');
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('member_number')] = newMemberNumber;
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('name')] = trimmedName;
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('current_tag')] = '';
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('is_active')] = true;
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('created_at')] = now;
+      newPlayer[MASTER_PLAYER_HEADERS.indexOf('updated_at')] = now;
+
+      playersSheet.appendRow(newPlayer);
+
+      masterPlayerId = newMemberNumber;
+      masterPlayerRow = newPlayer;
+    } finally {
+      lock.releaseLock();
+    }
   }
 
   // --- Step 2: Find the most recent weekly tab ---
@@ -302,7 +321,7 @@ function handleSubmitCheckIn(data) {
   const recordsData = recordsSheet.getDataRange().getValues();
   const recordsHeaders = recordsData[0];
 
-  const recordPlayerIdCol = recordsHeaders.indexOf('master_player_id');
+  const recordPlayerIdCol = recordsHeaders.indexOf('member_number');
 
   for (let i = 1; i < recordsData.length; i++) {
     if (recordsData[i][recordPlayerIdCol] === masterPlayerId) {
@@ -320,7 +339,7 @@ function handleSubmitCheckIn(data) {
   const newRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('id')] = uuid;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('weekly_league_id')] = weeklyLeagueId;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('master_player_id')] = masterPlayerId;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = masterPlayerId;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = masterPlayerRow[playerNameCol] || trimmedName;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = masterPlayerRow[playerUdiscCol] || trimmedUdisc;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = masterPlayerRow[playerPdgaCol] || trimmedPdga;
@@ -337,7 +356,7 @@ function handleSubmitCheckIn(data) {
 
   return respond('ok', 'Check-in successful.', {
     record_id: uuid,
-    master_player_id: masterPlayerId,
+    member_number: masterPlayerId,
     player_name: trimmedName,
     in_tag: inTagNum,
     weekly_tab: mostRecentTabName

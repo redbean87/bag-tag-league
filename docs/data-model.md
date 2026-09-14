@@ -31,12 +31,12 @@ Each field has a single authoritative source. The app must not derive or overwri
 
 ## Persistence
 
-All data lives in Google Sheets. Each entity maps to a tab (worksheet) within a single Google Spreadsheet. Rows are records; columns are fields. Primary keys are UUIDs generated server-side.
+All data lives in Google Sheets. Each entity maps to a tab (worksheet) within a single Google Spreadsheet. Rows are records; columns are fields. Primary keys are UUIDs generated server-side, except for `member_number` which is a sequential integer.
 
 ## Entity Relationship Overview
 
 ```
-MasterPlayers 1---* WeeklyPlayerRecords
+MasterPlayers 1---* WeeklyPlayerRecords (via member_number)
 WeeklyLeagues 1---* WeeklyPlayerRecords
 WeeklyLeagues 1---* ImportHistory
 ```
@@ -49,7 +49,7 @@ One row per player. Updated only during league finalization or admin correction.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| id | string (UUID) | Primary key |
+| member_number | integer | Primary key. Sequential league member number starting at 1. App-generated, unique, immutable after assignment. Assigned when a player first registers. Never reused from deleted or inactive players. |
 | name | string | Player's display name |
 | udisc_username | string | UDisc username (nullable) |
 | pdga_number | string | PDGA number (nullable) |
@@ -81,7 +81,7 @@ One row per player per weekly league. Created during sign-in only.
 |--------|------|-------|
 | id | string (UUID) | Primary key |
 | weekly_league_id | string (UUID) | FK to WeeklyLeagues |
-| master_player_id | string (UUID) | FK to MasterPlayers |
+| member_number | integer | FK to MasterPlayers.member_number |
 | player_name_snapshot | string | Snapshot of name at sign-in |
 | udisc_username_snapshot | string | Snapshot of UDisc username at sign-in |
 | pdga_number_snapshot | string | Snapshot of PDGA number at sign-in |
@@ -133,6 +133,7 @@ One row per player per weekly league. Created during sign-in only.
 **Field groups:**
 
 - **Snapshot fields:** player_name_snapshot, udisc_username_snapshot, pdga_number_snapshot (copied from MasterPlayers at sign-in, never changed)
+- **Identity fields:** member_number — sequential integer (1, 2, 3, …) linking weekly records to MasterPlayers, immutable after assignment
 - **Tag fields:** in_tag (player's actual starting bag tag, supplied by the player during check-in), out_tag (player's ending bag tag, calculated by the app)
 - **App check-in fields:** checked_in, signed_in_at, paid, ctp, ace_pot
 - **UDisc identity import fields:** udisc_name_import, udisc_username_import, udisc_pdga_number_import (for matching and reference)
@@ -200,7 +201,7 @@ Potential settings:
 - All UUIDs are generated server-side
 - Timestamps are stored in UTC as ISO 8601 strings
 - Booleans are stored as `TRUE` / `FALSE` (Google Sheets format)
-- Google Sheets row numbers are ephemeral and must not be used as identifiers; use UUIDs instead
+- Google Sheets row numbers are ephemeral and must not be used as identifiers; use UUIDs instead (except `member_number`, which is a sequential integer)
 - There is no admin override system, audit log, or correction record mechanism
 - `score` is the player's round score imported from UDisc (`round_total_score`). It is a score, not a bag tag. This is the primary score used for tag calculation ranking.
 - `in_tag` is the player's actual starting bag tag for the weekly league, supplied by the player during check-in. It must not be auto-derived from `MasterPlayers.current_tag`.

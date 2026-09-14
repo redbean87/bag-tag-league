@@ -11,8 +11,9 @@ The application reads from and writes to Google Sheets through a server-side ser
 ### Identifiers
 
 - **Primary keys:** UUID v4 strings, generated server-side (e.g., `"a1b2c3d4-e5f6-7890-abcd-ef1234567890"`)
-- **Foreign keys:** UUID strings matching the referenced primary key
-- **Google Sheets row numbers are ephemeral.** Never use row numbers as identifiers. All lookups and joins use UUIDs.
+- **Foreign keys:** UUID strings matching the referenced primary key (except `member_number`, which is a sequential integer)
+- **`member_number`:** Sequential integer starting at 1. App-generated via `LockService` to prevent collisions. Immutable after assignment. Never reused.
+- **Google Sheets row numbers are ephemeral.** Never use row numbers as identifiers. All lookups and joins use UUIDs (or `member_number` for player identity).
 
 ### Dates and Timestamps
 
@@ -41,7 +42,7 @@ The application reads from and writes to Google Sheets through a server-side ser
 
 | # | Column Name | Data Type | Required | Description |
 |---|-------------|-----------|----------|-------------|
-| 1 | `id` | string (UUID) | Yes | Primary key. Unique identifier for this player. |
+| 1 | `member_number` | integer | Yes | Primary key. Sequential league member number starting at 1. App-generated, unique, immutable after assignment. Assigned when a player first registers. Never manually entered. Never reused from deleted or inactive players. |
 | 2 | `name` | string | Yes | Player's display name. |
 | 3 | `udisc_username` | string | No | UDisc username for matching during import. |
 | 4 | `pdga_number` | string | No | PDGA membership number for matching during import. Stored as string to preserve leading zeros. |
@@ -52,7 +53,7 @@ The application reads from and writes to Google Sheets through a server-side ser
 
 ### Notes
 
-- A player who self-registers during sign-in gets a new row here with `is_active = TRUE`.
+- A player who self-registers during sign-in gets a new row here with `is_active = TRUE` and the next sequential `member_number`.
 - `current_tag` is the last-known calculated bag tag value. It is updated only when the organizer finalizes a weekly league (written from `out_tag`). It is **not** guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`.
 - If a player is missing from a weekly league's UDisc import, their `current_tag` is unchanged (they did not participate).
 
@@ -113,7 +114,7 @@ Fields in this tab fall into four categories based on their source and role:
 |---|-------------|-----------|----------|----------|-------------|
 | 1 | `id` | string (UUID) | Yes | System | Primary key. Unique identifier for this record. |
 | 2 | `weekly_league_id` | string (UUID) | Yes | System | Foreign key to `WeeklyLeagues.id`. |
-| 3 | `master_player_id` | string (UUID) | Yes | System | Foreign key to `MasterPlayers.id`. |
+| 3 | `member_number` | integer | Yes | System | Foreign key to `MasterPlayers.member_number`. Immutable after assignment. |
 
 #### Snapshot Fields (copied from MasterPlayers at sign-in, never changed after)
 
@@ -294,7 +295,7 @@ WeeklyLeagues (1) ---< (many) ImportHistory
 
 ### Foreign Key Constraints (Application-Enforced)
 
-- `WeeklyPlayerRecords.master_player_id` must reference a valid `MasterPlayers.id`
+- `WeeklyPlayerRecords.member_number` must reference a valid `MasterPlayers.member_number`
 - `WeeklyPlayerRecords.weekly_league_id` must reference a valid `WeeklyLeagues.id`
 - `ImportHistory.weekly_league_id` must reference a valid `WeeklyLeagues.id`
 
@@ -346,7 +347,7 @@ At finalization:
 4. **Sort the pool ascending.** The lowest tag is first.
 5. **Assign tags in finishing order.** The first-place finisher receives the lowest tag from the pool, second place receives the next lowest, and so on.
 6. **Store the result in `out_tag`** on each participant's `WeeklyPlayerRecords` row.
-7. **After the organizer finalizes the weekly league,** update each participating player's `current_tag` in `MasterPlayers` with their `out_tag` value. This is a last-known calculated value; it is not guaranteed to represent the player's physical tag because players may trade tags between league days.
+7. **After the organizer finalizes the weekly league,** update each participating player's `current_tag` in `MasterPlayers` with their `out_tag` value (linked via `member_number`). This is a last-known calculated value; it is not guaranteed to represent the player's physical tag because players may trade tags between league days.
 
 ### Example
 

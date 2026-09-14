@@ -80,7 +80,7 @@ At finalization:
 4. Assign the sorted available tags to the ranked players.
 5. The highest-ranked player receives the lowest available participating tag.
 6. Persist the assigned result as each player's `out_tag`.
-7. Update `MasterPlayers.current_tag` with the finalized `out_tag` as the player's last known calculated tag.
+7. Update `MasterPlayers.current_tag` with the finalized `out_tag` as the player's last known calculated tag (linked via `member_number`).
 
 ### Constraints
 
