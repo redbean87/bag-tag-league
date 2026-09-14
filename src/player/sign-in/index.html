@@ -49,6 +49,13 @@
     }
     button:hover { background: #0052a3; }
     button:disabled { background: #ccc; cursor: not-allowed; }
+    button.secondary {
+      background: white;
+      color: #0066cc;
+      border: 1px solid #0066cc;
+      margin-top: 0.5rem;
+    }
+    button.secondary:hover { background: #f0f7ff; }
     .checkbox-group {
       display: flex;
       flex-wrap: wrap;
@@ -83,54 +90,160 @@
     .required-note { font-size: 0.8125rem; color: #666; margin-bottom: 1rem; }
     .success-details { margin-top: 0.75rem; }
     .success-details p { margin-bottom: 0.25rem; }
+    .search-results { margin-top: 0.75rem; }
+    .search-result-item {
+      padding: 0.75rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .search-result-item:hover { border-color: #0066cc; background: #f8f9ff; }
+    .search-result-name { font-weight: 600; color: #1a1a1a; }
+    .search-result-detail { font-size: 0.8125rem; color: #666; margin-top: 0.25rem; }
+    .no-results { text-align: center; padding: 1rem; color: #666; }
+    .selected-member-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .selected-member-name { font-weight: 600; color: #1a1a1a; }
+    .back-link {
+      font-size: 0.8125rem;
+      color: #0066cc;
+      cursor: pointer;
+      text-decoration: underline;
+      background: none;
+      border: none;
+      padding: 0;
+      width: auto;
+      margin-top: 0;
+    }
+    .back-link:hover { color: #0052a3; background: none; }
+    .hidden { display: none; }
   </style>
 </head>
 <body>
   <h1>Bag Tag League</h1>
   <p class="subtitle">Player Check-In</p>
 
-  <div class="card">
-    <h2>Register / Check In</h2>
+  <!-- SEARCH VIEW -->
+  <div id="searchView" class="card">
+    <h2>Find Your Profile</h2>
+    <p class="required-note">Search by name, UDisc username, or PDGA number.</p>
+
+    <div class="form-group">
+      <input type="text" id="searchInput" placeholder="Search by name, UDisc username, or PDGA number" autocomplete="off">
+    </div>
+
+    <div id="searchStatus" class="status hidden"></div>
+
+    <div id="searchResults" class="search-results hidden"></div>
+
+    <div id="searchActions" class="hidden">
+      <div id="noResultsMessage" class="no-results hidden">
+        <p>No matching profile found.</p>
+      </div>
+      <button onclick="showRegistration()">Register as New Member</button>
+    </div>
+  </div>
+
+  <!-- CHECK-IN VIEW (existing member) -->
+  <div id="checkInView" class="card hidden">
+    <div class="selected-member-header">
+      <span class="selected-member-name" id="selectedMemberName"></span>
+      <button class="back-link" onclick="backToSearch()">Back to search</button>
+    </div>
+
     <p class="required-note">Fields marked with * are required.</p>
 
     <form id="checkInForm" onsubmit="submitCheckIn(event)">
       <div class="form-group">
-        <label for="playerName">Player Name *</label>
-        <input type="text" id="playerName" required placeholder="Your full name">
+        <label for="checkInName">Player Name *</label>
+        <input type="text" id="checkInName" required placeholder="Your full name">
       </div>
       <div class="form-group">
-        <label for="udiscUsername">UDisc Username</label>
-        <input type="text" id="udiscUsername" placeholder="Optional">
+        <label for="checkInUdisc">UDisc Username</label>
+        <input type="text" id="checkInUdisc" placeholder="Optional">
       </div>
       <div class="form-group">
-        <label for="pdgaNumber">PDGA Number</label>
-        <input type="text" id="pdgaNumber" placeholder="Optional">
+        <label for="checkInPdga">PDGA Number</label>
+        <input type="text" id="checkInPdga" placeholder="Optional">
       </div>
       <div class="form-group">
-        <label for="inTag">Current Tag Number *</label>
-        <input type="number" id="inTag" min="1" required placeholder="Enter your current tag number">
+        <label for="checkInTag">Current Tag Number *</label>
+        <input type="number" id="checkInTag" min="1" required placeholder="Enter your current tag number">
       </div>
       <div class="form-group">
         <label>Status</label>
         <div class="checkbox-group">
           <label class="checkbox-label">
-            <input type="checkbox" id="paid"> Paid
+            <input type="checkbox" id="checkInPaid"> Paid
           </label>
           <label class="checkbox-label">
-            <input type="checkbox" id="ctp"> CTP
+            <input type="checkbox" id="checkInCtp"> CTP
           </label>
           <label class="checkbox-label">
-            <input type="checkbox" id="acePot"> Ace Pot
+            <input type="checkbox" id="checkInAcePot"> Ace Pot
           </label>
         </div>
       </div>
-      <button type="submit" id="btnSubmit">Check In</button>
+      <button type="submit" id="btnCheckIn">Check In</button>
     </form>
 
-    <div id="formStatus" class="status hidden"></div>
+    <div id="checkInStatus" class="status hidden"></div>
   </div>
 
-  <div id="successCard" class="card" style="display: none;">
+  <!-- REGISTRATION VIEW (new member) -->
+  <div id="registerView" class="card hidden">
+    <div class="selected-member-header">
+      <span class="selected-member-name">New Member Registration</span>
+      <button class="back-link" onclick="backToSearch()">Back to search</button>
+    </div>
+
+    <p class="required-note">Fields marked with * are required.</p>
+
+    <form id="registerForm" onsubmit="submitCheckIn(event)">
+      <div class="form-group">
+        <label for="registerName">Player Name *</label>
+        <input type="text" id="registerName" required placeholder="Your full name">
+      </div>
+      <div class="form-group">
+        <label for="registerUdisc">UDisc Username</label>
+        <input type="text" id="registerUdisc" placeholder="Optional">
+      </div>
+      <div class="form-group">
+        <label for="registerPdga">PDGA Number</label>
+        <input type="text" id="registerPdga" placeholder="Optional">
+      </div>
+      <div class="form-group">
+        <label for="registerTag">Current Tag Number *</label>
+        <input type="number" id="registerTag" min="1" required placeholder="Enter your current tag number">
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <div class="checkbox-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="registerPaid"> Paid
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="registerCtp"> CTP
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="registerAcePot"> Ace Pot
+          </label>
+        </div>
+      </div>
+      <button type="submit" id="btnRegister">Check In</button>
+    </form>
+
+    <div id="registerStatus" class="status hidden"></div>
+  </div>
+
+  <!-- SUCCESS VIEW -->
+  <div id="successCard" class="card hidden">
     <div class="status ok">
       <strong>You're checked in!</strong>
       <div class="success-details">
@@ -142,54 +255,204 @@
   </div>
 
   <script>
-    const API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
+    var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
+    var searchTimeout = null;
+    var activeSearchQuery = null;
+    var currentMode = 'search'; // 'search', 'checkIn', 'register', 'success'
+    var selectedMemberNumber = null;
 
-    function setStatus(type, message) {
-      var el = document.getElementById('formStatus');
+    // --- View helpers ---
+
+    function showView(mode) {
+      currentMode = mode;
+      document.getElementById('searchView').classList.toggle('hidden', mode !== 'search');
+      document.getElementById('checkInView').classList.toggle('hidden', mode !== 'checkIn');
+      document.getElementById('registerView').classList.toggle('hidden', mode !== 'register');
+      document.getElementById('successCard').classList.toggle('hidden', mode !== 'success');
+    }
+
+    function setStatus(elementId, type, message) {
+      var el = document.getElementById(elementId);
       el.className = 'status ' + type;
       el.textContent = message;
     }
 
-    async function submitCheckIn(e) {
-      e.preventDefault();
+    function clearStatus(elementId) {
+      var el = document.getElementById(elementId);
+      el.className = 'status hidden';
+      el.textContent = '';
+    }
 
-      var name = document.getElementById('playerName').value.trim();
-      var udiscUsername = document.getElementById('udiscUsername').value.trim();
-      var pdgaNumber = document.getElementById('pdgaNumber').value.trim();
-      var inTag = document.getElementById('inTag').value;
-      var paid = document.getElementById('paid').checked;
-      var ctp = document.getElementById('ctp').checked;
-      var acePot = document.getElementById('acePot').checked;
+    // --- Search ---
 
-      if (!name) {
-        setStatus('error', 'Player name is required.');
+    function onSearchInput() {
+      var query = document.getElementById('searchInput').value.trim();
+
+      if (searchTimeout) clearTimeout(searchTimeout);
+
+      if (query.length < 2) {
+        document.getElementById('searchResults').classList.add('hidden');
+        document.getElementById('searchActions').classList.add('hidden');
+        clearStatus('searchStatus');
         return;
       }
 
-      if (!inTag || parseInt(inTag, 10) < 1) {
-        setStatus('error', 'Please enter a valid tag number (1 or higher).');
-        return;
-      }
+      searchTimeout = setTimeout(function() {
+        performSearch(query);
+      }, 250);
+    }
 
-      var btn = document.getElementById('btnSubmit');
-      btn.disabled = true;
-      btn.textContent = 'Submitting...';
-      setStatus('pending', 'Processing your check-in...');
+    async function performSearch(query) {
+      document.getElementById('searchResults').classList.add('hidden');
+      document.getElementById('searchActions').classList.add('hidden');
+      setStatus('searchStatus', 'pending', 'Searching...');
+
+      activeSearchQuery = query;
 
       try {
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'submitCheckIn',
-            name: name,
-            udisc_username: udiscUsername || '',
-            pdga_number: pdgaNumber || '',
-            in_tag: parseInt(inTag, 10),
-            paid: paid,
-            ctp: ctp,
-            ace_pot: acePot
+            action: 'searchClubMembers',
+            query: query
           })
+        });
+
+        if (activeSearchQuery !== query) return;
+
+        var data = await response.json();
+        clearStatus('searchStatus');
+
+        if (data.status === 'ok' && data.results && data.results.length > 0) {
+          renderSearchResults(data.results);
+          document.getElementById('noResultsMessage').classList.add('hidden');
+        } else {
+          document.getElementById('noResultsMessage').classList.remove('hidden');
+        }
+        document.getElementById('searchActions').classList.remove('hidden');
+      } catch (err) {
+        setStatus('searchStatus', 'error', 'Search failed. Please try again.');
+      }
+    }
+
+    function renderSearchResults(results) {
+      var container = document.getElementById('searchResults');
+      container.innerHTML = '';
+
+      results.forEach(function(member) {
+        var item = document.createElement('div');
+        item.className = 'search-result-item';
+        item.setAttribute('role', 'button');
+        item.setAttribute('tabindex', '0');
+
+        var detailParts = [];
+        if (member.udisc_username) detailParts.push('UDisc: ' + member.udisc_username);
+        if (member.pdga_number) detailParts.push('PDGA: ' + member.pdga_number);
+        if (member.current_tag) detailParts.push('Tag: ' + member.current_tag);
+
+        item.innerHTML =
+          '<div class="search-result-name">' + escapeHtml(member.name) + '</div>' +
+          (detailParts.length ? '<div class="search-result-detail">' + escapeHtml(detailParts.join(' · ')) + '</div>' : '');
+
+        item.onclick = function() { selectMember(member); };
+        item.onkeydown = function(e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            selectMember(member);
+          }
+        };
+
+        container.appendChild(item);
+      });
+
+      container.classList.remove('hidden');
+    }
+
+    function selectMember(member) {
+      selectedMemberNumber = member.member_number;
+      document.getElementById('selectedMemberName').textContent = member.name;
+      document.getElementById('checkInName').value = member.name;
+      document.getElementById('checkInUdisc').value = member.udisc_username || '';
+      document.getElementById('checkInPdga').value = member.pdga_number || '';
+      document.getElementById('checkInTag').value = member.current_tag || '';
+      clearStatus('checkInStatus');
+      showView('checkIn');
+    }
+
+    function backToSearch() {
+      clearStatus('checkInStatus');
+      clearStatus('registerStatus');
+      showView('search');
+      document.getElementById('searchInput').focus();
+    }
+
+    // --- Registration ---
+
+    function showRegistration() {
+      selectedMemberNumber = null;
+      document.getElementById('registerName').value = '';
+      document.getElementById('registerUdisc').value = '';
+      document.getElementById('registerPdga').value = '';
+      document.getElementById('registerTag').value = '';
+      document.getElementById('registerPaid').checked = false;
+      document.getElementById('registerCtp').checked = false;
+      document.getElementById('registerAcePot').checked = false;
+      clearStatus('registerStatus');
+      showView('register');
+    }
+
+    // --- Check-in submission ---
+
+    async function submitCheckIn(e) {
+      e.preventDefault();
+
+      var activeMode = currentMode;
+      var prefix = activeMode === 'checkIn' ? 'checkIn' : 'register';
+
+      var name = document.getElementById(prefix + 'Name').value.trim();
+      var udiscUsername = document.getElementById(prefix + 'Udisc').value.trim();
+      var pdgaNumber = document.getElementById(prefix + 'Pdga').value.trim();
+      var inTag = document.getElementById(prefix + 'Tag').value;
+      var paid = document.getElementById(prefix + 'Paid').checked;
+      var ctp = document.getElementById(prefix + 'Ctp').checked;
+      var acePot = document.getElementById(prefix + 'AcePot').checked;
+
+      if (!name) {
+        setStatus(prefix + 'Status', 'error', 'Player name is required.');
+        return;
+      }
+
+      if (!inTag || parseInt(inTag, 10) < 1) {
+        setStatus(prefix + 'Status', 'error', 'Please enter a valid tag number (1 or higher).');
+        return;
+      }
+
+      var btn = document.getElementById(prefix === 'checkIn' ? 'btnCheckIn' : 'btnRegister');
+      btn.disabled = true;
+      btn.textContent = 'Submitting...';
+      setStatus(prefix + 'Status', 'pending', 'Processing your check-in...');
+
+      try {
+        var payload = {
+          action: 'submitCheckIn',
+          name: name,
+          udisc_username: udiscUsername || '',
+          pdga_number: pdgaNumber || '',
+          in_tag: parseInt(inTag, 10),
+          paid: paid,
+          ctp: ctp,
+          ace_pot: acePot
+        };
+
+        if (selectedMemberNumber) {
+          payload.member_number = selectedMemberNumber;
+        }
+
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload)
         });
         var data = await response.json();
 
@@ -197,21 +460,30 @@
           document.getElementById('successPlayerName').textContent = 'Player: ' + data.player_name;
           document.getElementById('successTabName').textContent = 'Week: ' + data.weekly_tab;
           document.getElementById('successTagInfo').textContent = 'Current Tag: ' + data.in_tag;
-
-          document.getElementById('checkInForm').style.display = 'none';
-          document.getElementById('formStatus').style.display = 'none';
-          document.getElementById('successCard').style.display = 'block';
+          showView('success');
         } else {
-          setStatus('error', data.message);
+          setStatus(prefix + 'Status', 'error', data.message);
           btn.disabled = false;
           btn.textContent = 'Check In';
         }
       } catch (err) {
-        setStatus('error', 'Something went wrong. Please try again.');
+        setStatus(prefix + 'Status', 'error', 'Something went wrong. Please try again.');
         btn.disabled = false;
         btn.textContent = 'Check In';
       }
     }
+
+    // --- Utilities ---
+
+    function escapeHtml(str) {
+      var div = document.createElement('div');
+      div.appendChild(document.createTextNode(str));
+      return div.innerHTML;
+    }
+
+    // --- Init ---
+
+    document.getElementById('searchInput').addEventListener('input', onSearchInput);
   </script>
 </body>
 </html>

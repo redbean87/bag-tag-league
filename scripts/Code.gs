@@ -100,6 +100,9 @@ function doPost(e) {
     if (data.action === 'createClubMembersTab') {
       return handleCreateClubMembersTab(data);
     }
+    if (data.action === 'searchClubMembers') {
+      return handleSearchClubMembers(data);
+    }
     if (data.action === 'submitCheckIn') {
       return handleSubmitCheckIn(data);
     }
@@ -187,6 +190,68 @@ function handleCreateWeeklyTab(data) {
 }
 
 /**
+ * Searches active club members by name, udisc_username, or pdga_number.
+ * Returns up to 10 matching records with only player-facing fields.
+ *
+ * Inputs: query (string, min 2 chars)
+ */
+function handleSearchClubMembers(data) {
+  const query = (data.query || '').trim();
+
+  if (query.length < 2) {
+    return respond('ok', 'Query too short.', { results: [] });
+  }
+
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const playersSheet = spreadsheet.getSheetByName('ClubMembers');
+
+  if (!playersSheet) {
+    return respond('ok', 'No members found.', { results: [] });
+  }
+
+  const playersData = playersSheet.getDataRange().getValues();
+  const playersHeaders = playersData[0];
+
+  const memberNumberCol = playersHeaders.indexOf('member_number');
+  const nameCol = playersHeaders.indexOf('name');
+  const udiscCol = playersHeaders.indexOf('udisc_username');
+  const pdgaCol = playersHeaders.indexOf('pdga_number');
+  const currentTagCol = playersHeaders.indexOf('current_tag');
+  const isActiveCol = playersHeaders.indexOf('is_active');
+
+  const lowerQuery = query.toLowerCase();
+  const results = [];
+
+  for (let i = 1; i < playersData.length && results.length < 10; i++) {
+    const row = playersData[i];
+
+    // Filter out inactive members
+    const isActive = row[isActiveCol];
+    if (isActive !== true && isActive !== 'TRUE') continue;
+
+    const name = (row[nameCol] || '').toString();
+    const udisc = (row[udiscCol] || '').toString();
+    const pdga = (row[pdgaCol] || '').toString();
+
+    const nameMatch = name.toLowerCase().indexOf(lowerQuery) !== -1;
+    const udiscMatch = udisc.toLowerCase().indexOf(lowerQuery) !== -1;
+    const pdgaMatch = pdga.toLowerCase().indexOf(lowerQuery) !== -1;
+
+    if (nameMatch || udiscMatch || pdgaMatch) {
+      results.push({
+        member_number: row[memberNumberCol],
+        name: name,
+        udisc_username: udisc,
+        pdga_number: pdga,
+        current_tag: row[currentTagCol]
+      });
+    }
+  }
+
+  return respond('ok', 'Search complete.', { results: results });
+}
+
+/**
  * Submits a player check-in. Handles registration/check-in in a single flow:
  * 1. Finds or creates the club member record
  * 2. Finds the most recent weekly tab
@@ -195,9 +260,10 @@ function handleCreateWeeklyTab(data) {
  *
  * Inputs: name (required), udisc_username (optional), pdga_number (optional),
  *         in_tag (required, positive integer), paid (boolean), ctp (boolean), ace_pot (boolean)
+ *         member_number (optional) - existing member's internal ID for returning players
  */
 function handleSubmitCheckIn(data) {
-  const { name, udisc_username, pdga_number, in_tag, paid, ctp, ace_pot } = data;
+  const { name, udisc_username, pdga_number, in_tag, paid, ctp, ace_pot, member_number } = data;
 
   // Validate required fields
   if (!name || name.trim() === '') {
@@ -234,78 +300,113 @@ function handleSubmitCheckIn(data) {
   const playerPdgaCol = playersHeaders.indexOf('pdga_number');
   const playerCurrentTagCol = playersHeaders.indexOf('current_tag');
   const playerIsActiveCol = playersHeaders.indexOf('is_active');
-  const playerCreatedAtCol = playersHeaders.indexOf('created_at');
 
   let memberId = null;
   let memberRow = null;
+  let memberRowIndex = null;
   let isNewMember = false;
 
-  // Search for existing player: match name + (udisc_username OR pdga_number)
-  for (let i = 1; i < playersData.length; i++) {
-    const row = playersData[i];
-    const existingName = (row[playerNameCol] || '').toString().trim().toLowerCase();
-    const existingUdisc = (row[playerUdiscCol] || '').toString().trim().toLowerCase();
-    const existingPdga = (row[playerPdgaCol] || '').toString().trim();
+  if (member_number !== undefined && member_number !== null && member_number !== '') {
+    // Validate the supplied member_number against an active ClubMembers record
+    const suppliedMemberId = member_number;
+    for (let i = 1; i < playersData.length; i++) {
+      const row = playersData[i];
+      const rowId = row[memberNumberCol];
+      const isActive = row[playerIsActiveCol];
 
-    if (existingName !== trimmedName.toLowerCase()) continue;
-
-    // Name matches. Check if udisc or pdga also match (if provided).
-    const udiscMatch = trimmedUdisc && existingUdisc && existingUdisc === trimmedUdisc.toLowerCase();
-    const pdgaMatch = trimmedPdga && existingPdga && existingPdga === trimmedPdga;
-    const neitherProvided = !trimmedUdisc && !trimmedPdga;
-
-    if (udiscMatch || pdgaMatch || neitherProvided) {
-      memberId = row[memberNumberCol];
-      memberRow = row;
-      break;
-    }
-  }
-
-  // If no match, create new club member
-  if (!memberId) {
-    // Lock to prevent concurrent registrations from receiving the same member_number
-    var lock = LockService.getScriptLock();
-    try {
-      lock.waitLock(10000);
-
-      // Re-read inside the lock to get the latest state
-      var freshData = playersSheet.getDataRange().getValues();
-      var maxMemberNumber = 0;
-      for (var r = 1; r < freshData.length; r++) {
-        var val = freshData[r][memberNumberCol];
-        var num = parseInt(val, 10);
-        if (!isNaN(num) && num > maxMemberNumber) {
-          maxMemberNumber = num;
-        }
+      if (rowId === suppliedMemberId && (isActive === true || isActive === 'TRUE')) {
+        memberId = rowId;
+        memberRow = row;
+        memberRowIndex = i;
+        break;
       }
-
-      var newMemberNumber = maxMemberNumber + 1;
-      var now = new Date().toISOString();
-
-      var newPlayer = new Array(CLUB_MEMBER_HEADERS.length).fill('');
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('member_number')] = newMemberNumber;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('name')] = trimmedName;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = inTagNum;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
-
-      playersSheet.appendRow(newPlayer);
-
-      memberId = newMemberNumber;
-      memberRow = newPlayer;
-      isNewMember = true;
-    } finally {
-      lock.releaseLock();
     }
-  }
 
-  // Update ClubMembers.current_tag with the tag they are checking in with
-  if (!isNewMember) {
-    const memberRowIndex = playersData.indexOf(memberRow) + 1;
-    playersSheet.getRange(memberRowIndex, playerCurrentTagCol + 1).setValue(inTagNum);
+    if (!memberId) {
+      return respond('error', 'Selected member not found or is inactive. Please try again.');
+    }
+
+    // Update editable profile fields on the existing member record
+    const now = new Date().toISOString();
+    if (playerNameCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerNameCol + 1).setValue(trimmedName);
+    if (playerUdiscCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerUdiscCol + 1).setValue(trimmedUdisc);
+    if (playerPdgaCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerPdgaCol + 1).setValue(trimmedPdga);
+    if (playerCurrentTagCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerCurrentTagCol + 1).setValue(inTagNum);
+    // Always update updated_at
+    const updatedAtCol = playersHeaders.indexOf('updated_at');
+    if (updatedAtCol !== -1) playersSheet.getRange(memberRowIndex + 1, updatedAtCol + 1).setValue(now);
+
+    // Refresh memberRow to reflect updates
+    memberRow = playersSheet.getRange(memberRowIndex + 1, 1, 1, playersHeaders.length).getValues()[0];
+  } else {
+    // Search for existing player: match name + (udisc_username OR pdga_number)
+    for (let i = 1; i < playersData.length; i++) {
+      const row = playersData[i];
+      const existingName = (row[playerNameCol] || '').toString().trim().toLowerCase();
+      const existingUdisc = (row[playerUdiscCol] || '').toString().trim().toLowerCase();
+      const existingPdga = (row[playerPdgaCol] || '').toString().trim();
+
+      if (existingName !== trimmedName.toLowerCase()) continue;
+
+      // Name matches. Check if udisc or pdga also match (if provided).
+      const udiscMatch = trimmedUdisc && existingUdisc && existingUdisc === trimmedUdisc.toLowerCase();
+      const pdgaMatch = trimmedPdga && existingPdga && existingPdga === trimmedPdga;
+      const neitherProvided = !trimmedUdisc && !trimmedPdga;
+
+      if (udiscMatch || pdgaMatch || neitherProvided) {
+        memberId = row[memberNumberCol];
+        memberRow = row;
+        memberRowIndex = i;
+        break;
+      }
+    }
+
+    // If no match, create new club member
+    if (!memberId) {
+      // Lock to prevent concurrent registrations from receiving the same member_number
+      var lock = LockService.getScriptLock();
+      try {
+        lock.waitLock(10000);
+
+        // Re-read inside the lock to get the latest state
+        var freshData = playersSheet.getDataRange().getValues();
+        var maxMemberNumber = 0;
+        for (var r = 1; r < freshData.length; r++) {
+          var val = freshData[r][memberNumberCol];
+          var num = parseInt(val, 10);
+          if (!isNaN(num) && num > maxMemberNumber) {
+            maxMemberNumber = num;
+          }
+        }
+
+        var newMemberNumber = maxMemberNumber + 1;
+        var now = new Date().toISOString();
+
+        var newPlayer = new Array(CLUB_MEMBER_HEADERS.length).fill('');
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('member_number')] = newMemberNumber;
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('name')] = trimmedName;
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = inTagNum;
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
+        newPlayer[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
+
+        playersSheet.appendRow(newPlayer);
+
+        memberId = newMemberNumber;
+        memberRow = newPlayer;
+        isNewMember = true;
+      } finally {
+        lock.releaseLock();
+      }
+    }
+
+    // Update ClubMembers.current_tag with the tag they are checking in with
+    if (!isNewMember) {
+      const memberRowIndexForTag = playersData.indexOf(memberRow) + 1;
+      playersSheet.getRange(memberRowIndexForTag, playerCurrentTagCol + 1).setValue(inTagNum);
+    }
   }
 
   // --- Step 2: Find the most recent weekly tab ---
