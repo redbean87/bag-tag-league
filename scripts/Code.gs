@@ -240,6 +240,7 @@ function handleSubmitCheckIn(data) {
 
   let memberId = null;
   let memberRow = null;
+  let isNewMember = false;
 
   // Search for existing player: match name + (udisc_username OR pdga_number)
   for (let i = 1; i < playersData.length; i++) {
@@ -256,7 +257,7 @@ function handleSubmitCheckIn(data) {
     const neitherProvided = !trimmedUdisc && !trimmedPdga;
 
     if (udiscMatch || pdgaMatch || neitherProvided) {
-      memberId = row[playerIdCol];
+      memberId = row[memberNumberCol];
       memberRow = row;
       break;
     }
@@ -288,7 +289,7 @@ function handleSubmitCheckIn(data) {
       newPlayer[CLUB_MEMBER_HEADERS.indexOf('name')] = trimmedName;
       newPlayer[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
       newPlayer[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
-      newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = '';
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = inTagNum;
       newPlayer[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
       newPlayer[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
       newPlayer[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
@@ -297,9 +298,16 @@ function handleSubmitCheckIn(data) {
 
       memberId = newMemberNumber;
       memberRow = newPlayer;
+      isNewMember = true;
     } finally {
       lock.releaseLock();
     }
+  }
+
+  // Update ClubMembers.current_tag with the tag they are checking in with
+  if (!isNewMember) {
+    const memberRowIndex = playersData.indexOf(memberRow) + 1;
+    playersSheet.getRange(memberRowIndex, playerCurrentTagCol + 1).setValue(inTagNum);
   }
 
   // --- Step 2: Find the most recent weekly tab ---
@@ -331,7 +339,7 @@ function handleSubmitCheckIn(data) {
 
   // --- Step 4: Write the check-in record ---
   const uuid = Utilities.getUuid();
-  const now = new Date().toISOString();
+  var recordTimestamp = new Date().toISOString();
 
   // weekly_league_id: use the tab name as a simple identifier
   const weeklyLeagueId = mostRecentTabName;
@@ -345,12 +353,12 @@ function handleSubmitCheckIn(data) {
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = memberRow[playerPdgaCol] || trimmedPdga;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('in_tag')] = inTagNum;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('signed_in_at')] = now;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('signed_in_at')] = recordTimestamp;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('paid')] = paid === true || paid === 'TRUE';
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = ctp === true || ctp === 'TRUE';
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = acePot === true || acePot === 'TRUE';
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = ace_pot === true || ace_pot === 'TRUE';
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = recordTimestamp;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = recordTimestamp;
 
   recordsSheet.appendRow(newRecord);
 

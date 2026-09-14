@@ -107,9 +107,8 @@
         <input type="text" id="pdgaNumber" placeholder="Optional">
       </div>
       <div class="form-group">
-        <label for="inTag">Starting Tag Number *</label>
-        <input type="number" id="inTag" min="1" required placeholder="Enter your tag number">
-        <p class="helper-text">The tag you are bringing today.</p>
+        <label for="inTag">Current Tag Number *</label>
+        <input type="number" id="inTag" min="1" required placeholder="Enter your current tag number">
       </div>
       <div class="form-group">
         <label>Status</label>
@@ -197,7 +196,7 @@
         if (data.status === 'ok') {
           document.getElementById('successPlayerName').textContent = 'Player: ' + data.player_name;
           document.getElementById('successTabName').textContent = 'Week: ' + data.weekly_tab;
-          document.getElementById('successTagInfo').textContent = 'Starting Tag: ' + data.in_tag;
+          document.getElementById('successTagInfo').textContent = 'Current Tag: ' + data.in_tag;
 
           document.getElementById('checkInForm').style.display = 'none';
           document.getElementById('formStatus').style.display = 'none';
