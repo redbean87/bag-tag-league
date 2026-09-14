@@ -140,6 +140,15 @@ function doPost(e) {
     if (data.action === 'saveLeagueSettings') {
       return handleSaveLeagueSettings(data);
     }
+    if (data.action === 'getWeeklyTabs') {
+      return handleGetWeeklyTabs(data);
+    }
+    if (data.action === 'getPreRoundReview') {
+      return handleGetPreRoundReview(data);
+    }
+    if (data.action === 'savePreRoundReview') {
+      return handleSavePreRoundReview(data);
+    }
 
     return respond('error', 'Unknown action: ' + data.action);
 
@@ -725,6 +734,271 @@ function handleSaveLeagueSettings(data) {
 
   return respond('ok', 'League settings saved.', {
     settings: saved
+  });
+}
+
+/**
+ * Returns a list of existing weekly league tabs.
+ * Scans sheet names for the pattern "Week YYYY-MM-DD" and returns them sorted
+ * by date descending (most recent first).
+ */
+function handleGetWeeklyTabs(data) {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheets = spreadsheet.getSheets();
+  const weekTabs = [];
+
+  for (let i = 0; i < sheets.length; i++) {
+    const name = sheets[i].getName();
+    const match = name.match(/^Week (\d{4}-\d{2}-\d{2})$/);
+    if (match) {
+      weekTabs.push({
+        date: match[1],
+        sheet_name: name
+      });
+    }
+  }
+
+  // Sort by date descending (most recent first)
+  weekTabs.sort(function(a, b) {
+    return b.date.localeCompare(a.date);
+  });
+
+  return respond('ok', 'Weekly tabs loaded.', {
+    weeks: weekTabs
+  });
+}
+
+/**
+ * Loads pre-round review data for a specific league date.
+ * Reads the weekly sheet, counts participating players, and calculates
+ * ace pot and CTP totals based on League settings.
+ *
+ * Inputs: league_date (required, YYYY-MM-DD format)
+ */
+function handleGetPreRoundReview(data) {
+  const leagueDate = data.league_date;
+
+  // Validate date format
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date. Expected YYYY-MM-DD format.');
+  }
+
+  const tabName = 'Week ' + leagueDate;
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  // Check if weekly sheet exists
+  const weeklySheet = spreadsheet.getSheetByName(tabName);
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '. Create the league day first.');
+  }
+
+  // Load League settings
+  const leagueSheet = spreadsheet.getSheetByName('League');
+  if (!leagueSheet) {
+    return respond('error', 'League sheet not found. Create it first to configure ace pot and CTP settings.');
+  }
+
+  const leagueData = leagueSheet.getDataRange().getValues();
+  if (leagueData.length < 2) {
+    return respond('error', 'League sheet has no settings row. Configure league settings first.');
+  }
+
+  const leagueHeaders = leagueData[0];
+  const leagueRow = leagueData[1];
+
+  // Extract League settings
+  const acePotContribution = Number(leagueRow[leagueHeaders.indexOf('ace_pot_contribution')]) || 0;
+  const acePotCurrentTotal = Number(leagueRow[leagueHeaders.indexOf('ace_pot_current_total')]) || 0;
+  const ctpContribution = Number(leagueRow[leagueHeaders.indexOf('ctp_contribution')]) || 0;
+  const acePotTotal = leagueRow[leagueHeaders.indexOf('ace_pot_total')];
+  const ctpTotal = leagueRow[leagueHeaders.indexOf('ctp_total')];
+
+  // Read weekly records
+  const weeklyData = weeklySheet.getDataRange().getValues();
+  if (weeklyData.length < 2) {
+    // Headers only, no records
+    return respond('ok', 'No players have checked in yet.', {
+      league_date: leagueDate,
+      weekly_tab: tabName,
+      participating_count: 0,
+      ace_pot_participant_count: 0,
+      ctp_participant_count: 0,
+      ace_pot_current_total: acePotCurrentTotal,
+      ace_pot_contribution: acePotContribution,
+      ace_pot_calculated_total: acePotCurrentTotal,
+      ace_pot_total: acePotTotal !== undefined && acePotTotal !== '' ? acePotTotal : acePotCurrentTotal,
+      ctp_contribution: ctpContribution,
+      ctp_calculated_total: 0,
+      ctp_total: ctpTotal !== undefined && ctpTotal !== '' ? ctpTotal : 0
+    });
+  }
+
+  const weeklyHeaders = weeklyData[0];
+  const checkedInCol = weeklyHeaders.indexOf('checked_in');
+  const ctpCol = weeklyHeaders.indexOf('ctp');
+  const acePotCol = weeklyHeaders.indexOf('ace_pot');
+
+  // Count participants
+  let participatingCount = 0;
+  let acePotParticipantCount = 0;
+  let ctpParticipantCount = 0;
+
+  for (let i = 1; i < weeklyData.length; i++) {
+    const row = weeklyData[i];
+    const isCheckedIn = row[checkedInCol] === true || row[checkedInCol] === 'TRUE';
+
+    if (isCheckedIn) {
+      participatingCount++;
+
+      const isAcePot = row[acePotCol] === true || row[acePotCol] === 'TRUE';
+      if (isAcePot) {
+        acePotParticipantCount++;
+      }
+
+      const isCtp = row[ctpCol] === true || row[ctpCol] === 'TRUE';
+      if (isCtp) {
+        ctpParticipantCount++;
+      }
+    }
+  }
+
+  // Calculate totals
+  const acePotCalculatedTotal = acePotCurrentTotal + (acePotContribution * acePotParticipantCount);
+  const ctpCalculatedTotal = ctpContribution * ctpParticipantCount;
+
+  return respond('ok', 'Pre-round review loaded.', {
+    league_date: leagueDate,
+    weekly_tab: tabName,
+    participating_count: participatingCount,
+    ace_pot_participant_count: acePotParticipantCount,
+    ctp_participant_count: ctpParticipantCount,
+    ace_pot_current_total: acePotCurrentTotal,
+    ace_pot_contribution: acePotContribution,
+    ace_pot_calculated_total: acePotCalculatedTotal,
+    ace_pot_total: acePotTotal !== undefined && acePotTotal !== '' ? acePotTotal : acePotCalculatedTotal,
+    ctp_contribution: ctpContribution,
+    ctp_calculated_total: ctpCalculatedTotal,
+    ctp_total: ctpTotal !== undefined && ctpTotal !== '' ? ctpTotal : ctpCalculatedTotal
+  });
+}
+
+/**
+ * Saves pre-round review overrides to the League sheet.
+ * Recalculates values server-side from the weekly sheet and saves both
+ * calculated values and organizer overrides.
+ *
+ * Inputs: league_date (required), ace_pot_total (required), ctp_total (required)
+ */
+function handleSavePreRoundReview(data) {
+  const leagueDate = data.league_date;
+  const acePotTotalOverride = data.ace_pot_total;
+  const ctpTotalOverride = data.ctp_total;
+
+  // Validate date format
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date. Expected YYYY-MM-DD format.');
+  }
+
+  // Validate totals are non-negative numbers
+  if (acePotTotalOverride === undefined || acePotTotalOverride === null || acePotTotalOverride === '') {
+    return respond('error', 'ace_pot_total is required.');
+  }
+  if (ctpTotalOverride === undefined || ctpTotalOverride === null || ctpTotalOverride === '') {
+    return respond('error', 'ctp_total is required.');
+  }
+
+  const acePotTotalNum = Number(acePotTotalOverride);
+  const ctpTotalNum = Number(ctpTotalOverride);
+
+  if (isNaN(acePotTotalNum) || acePotTotalNum < 0) {
+    return respond('error', 'ace_pot_total must be a non-negative number.');
+  }
+  if (isNaN(ctpTotalNum) || ctpTotalNum < 0) {
+    return respond('error', 'ctp_total must be a non-negative number.');
+  }
+
+  const tabName = 'Week ' + leagueDate;
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  // Verify weekly sheet exists
+  const weeklySheet = spreadsheet.getSheetByName(tabName);
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '. Cannot save review.');
+  }
+
+  // Verify League sheet exists
+  const leagueSheet = spreadsheet.getSheetByName('League');
+  if (!leagueSheet) {
+    return respond('error', 'League sheet not found.');
+  }
+
+  const leagueData = leagueSheet.getDataRange().getValues();
+  if (leagueData.length < 2) {
+    return respond('error', 'League sheet has no settings row.');
+  }
+
+  const leagueHeaders = leagueData[0];
+
+  // Recalculate from weekly sheet (do not trust browser-calculated values)
+  const weeklyData = weeklySheet.getDataRange().getValues();
+  const weeklyHeaders = weeklyData[0];
+  const checkedInCol = weeklyHeaders.indexOf('checked_in');
+  const ctpCol = weeklyHeaders.indexOf('ctp');
+  const acePotCol = weeklyHeaders.indexOf('ace_pot');
+
+  let acePotParticipantCount = 0;
+  let ctpParticipantCount = 0;
+
+  for (let i = 1; i < weeklyData.length; i++) {
+    const row = weeklyData[i];
+    const isCheckedIn = row[checkedInCol] === true || row[checkedInCol] === 'TRUE';
+
+    if (isCheckedIn) {
+      const isAcePot = row[acePotCol] === true || row[acePotCol] === 'TRUE';
+      if (isAcePot) {
+        acePotParticipantCount++;
+      }
+
+      const isCtp = row[ctpCol] === true || row[ctpCol] === 'TRUE';
+      if (isCtp) {
+        ctpParticipantCount++;
+      }
+    }
+  }
+
+  // Get League settings for calculation
+  const leagueRow = leagueData[1];
+  const acePotContribution = Number(leagueRow[leagueHeaders.indexOf('ace_pot_contribution')]) || 0;
+  const acePotCurrentTotal = Number(leagueRow[leagueHeaders.indexOf('ace_pot_current_total')]) || 0;
+  const ctpContribution = Number(leagueRow[leagueHeaders.indexOf('ctp_contribution')]) || 0;
+
+  // Calculate values
+  const acePotCalculatedTotal = acePotCurrentTotal + (acePotContribution * acePotParticipantCount);
+  const ctpCalculatedTotal = ctpContribution * ctpParticipantCount;
+
+  // Update League sheet row
+  const now = new Date().toISOString();
+
+  // Update calculated and final totals
+  const acePotCalculatedCol = leagueHeaders.indexOf('ace_pot_calculated_total');
+  const acePotTotalCol = leagueHeaders.indexOf('ace_pot_total');
+  const ctpCalculatedCol = leagueHeaders.indexOf('ctp_calculated_total');
+  const ctpTotalCol = leagueHeaders.indexOf('ctp_total');
+  const updatedAtCol = leagueHeaders.indexOf('updated_at');
+
+  // Write updated values
+  leagueSheet.getRange(2, acePotCalculatedCol + 1).setValue(acePotCalculatedTotal);
+  leagueSheet.getRange(2, acePotTotalCol + 1).setValue(acePotTotalNum);
+  leagueSheet.getRange(2, ctpCalculatedCol + 1).setValue(ctpCalculatedTotal);
+  leagueSheet.getRange(2, ctpTotalCol + 1).setValue(ctpTotalNum);
+  leagueSheet.getRange(2, updatedAtCol + 1).setValue(now);
+
+  return respond('ok', 'Pre-round review saved.', {
+    league_date: leagueDate,
+    ace_pot_calculated_total: acePotCalculatedTotal,
+    ace_pot_total: acePotTotalNum,
+    ctp_calculated_total: ctpCalculatedTotal,
+    ctp_total: ctpTotalNum
   });
 }
 

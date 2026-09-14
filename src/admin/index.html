@@ -26,7 +26,8 @@
     }
     h2 { font-size: 1.25rem; margin-bottom: 1rem; color: #1a1a1a; }
     label { display: block; font-weight: 500; margin-bottom: 0.25rem; }
-    input {
+    input,
+    select {
       width: 100%;
       padding: 0.5rem;
       border: 1px solid #ddd;
@@ -176,6 +177,91 @@
         <button type="submit" id="btnSaveLeague">Save Settings</button>
       </form>
       <div id="leagueSaveResult" class="status hidden"></div>
+    </div>
+  </div>
+
+  <div class="card" id="preRoundCard">
+    <h2>Pre-Round Review</h2>
+    <div id="preRoundMissing">
+      <p class="help-text">
+        The <code>League</code> sheet does not exist yet. Create it to enable pre-round review.
+      </p>
+    </div>
+    <div id="preRoundForm" style="display:none;">
+      <p class="help-text">
+        Select a league date to review participating players and calculate ace pot and CTP totals.
+        The calculated totals are based on League settings and checked-in players.
+        You can override the final totals before saving.
+      </p>
+      <div class="field-group">
+        <label for="preRoundDate">League Date</label>
+        <select id="preRoundDate" onchange="loadPreRoundReview()">
+          <option value="">-- Select a league date --</option>
+        </select>
+      </div>
+      <div id="preRoundNoWeeks" style="display:none;">
+        <p class="help-text">
+          No weekly tabs found. Create a league day first using the form above.
+        </p>
+      </div>
+      <div id="preRoundReviewData" style="display:none;">
+        <h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Participation</h3>
+        <div class="field-group">
+          <label>League Date</label>
+          <p id="preRoundLeagueDate" style="margin:0;"></p>
+        </div>
+        <div class="field-group">
+          <label>Weekly Tab</label>
+          <p id="preRoundTabName" style="margin:0;"></p>
+        </div>
+        <div class="field-group">
+          <label>Checked-in Players</label>
+          <p id="preRoundParticipatingCount" style="margin:0;"></p>
+        </div>
+        <div class="field-group">
+          <label>Ace Pot Participants</label>
+          <p id="preRoundAcePotCount" style="margin:0;"></p>
+        </div>
+        <div class="field-group">
+          <label>CTP Participants</label>
+          <p id="preRoundCtpCount" style="margin:0;"></p>
+        </div>
+
+        <h3 style="font-size:1rem; margin-bottom:0.75rem; margin-top:1rem; color:#555;">Ace Pot</h3>
+        <div class="field-group">
+          <label>Current Carry-in Total</label>
+          <p id="preRoundAcePotCurrent" style="margin:0;"></p>
+        </div>
+        <div class="field-group">
+          <label>Contribution per Participant</label>
+          <p id="preRoundAcePotContribution" style="margin:0;"></p>
+        </div>
+        <div class="field-group">
+          <label>Calculated Total</label>
+          <p id="preRoundAcePotCalculated" style="margin:0; font-weight:bold;"></p>
+        </div>
+        <div class="field-group">
+          <label for="preRoundAcePotTotal">Final Total (override if needed)</label>
+          <input type="number" id="preRoundAcePotTotal" step="0.01" min="0">
+        </div>
+
+        <h3 style="font-size:1rem; margin-bottom:0.75rem; margin-top:1rem; color:#555;">CTP</h3>
+        <div class="field-group">
+          <label>Contribution per Participant</label>
+          <p id="preRoundCtpContribution" style="margin:0;"></p>
+        </div>
+        <div class="field-group">
+          <label>Calculated Total</label>
+          <p id="preRoundCtpCalculated" style="margin:0; font-weight:bold;"></p>
+        </div>
+        <div class="field-group">
+          <label for="preRoundCtpTotal">Final Total (override if needed)</label>
+          <input type="number" id="preRoundCtpTotal" step="0.01" min="0">
+        </div>
+
+        <button type="button" id="btnSavePreRound" onclick="savePreRoundReview()">Save Review</button>
+      </div>
+      <div id="preRoundResult" class="status hidden"></div>
     </div>
   </div>
 
@@ -464,12 +550,203 @@
       }
     }
 
+    // Pre-Round Review functions
+    function setPreRoundStatus(type, html) {
+      var el = document.getElementById('preRoundResult');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearPreRoundStatus() {
+      var el = document.getElementById('preRoundResult');
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
+    async function loadWeeklyTabs() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getWeeklyTabs' })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          log('ERROR loading weekly tabs: ' + data.message);
+          return;
+        }
+
+        var select = document.getElementById('preRoundDate');
+        var noWeeksMsg = document.getElementById('preRoundNoWeeks');
+
+        // Clear existing options except the placeholder
+        while (select.options.length > 1) {
+          select.remove(1);
+        }
+
+        if (!data.weeks || data.weeks.length === 0) {
+          noWeeksMsg.style.display = '';
+          return;
+        }
+
+        noWeeksMsg.style.display = 'none';
+
+        // Add options for each weekly tab
+        for (var i = 0; i < data.weeks.length; i++) {
+          var week = data.weeks[i];
+          var option = document.createElement('option');
+          option.value = week.date;
+          option.textContent = week.date + ' (' + week.sheet_name + ')';
+          select.appendChild(option);
+        }
+
+        log('Loaded ' + data.weeks.length + ' weekly tab(s)');
+      } catch (err) {
+        log('FAILED to load weekly tabs: ' + err.message);
+      }
+    }
+
+    async function loadPreRoundReview() {
+      clearPreRoundStatus();
+
+      var leagueDate = document.getElementById('preRoundDate').value;
+      var reviewData = document.getElementById('preRoundReviewData');
+
+      if (!leagueDate) {
+        reviewData.style.display = 'none';
+        return;
+      }
+
+      setPreRoundStatus('pending', 'Loading review data...');
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'getPreRoundReview',
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setPreRoundStatus('error', '<strong>Error:</strong> ' + data.message);
+          reviewData.style.display = 'none';
+          log('ERROR: ' + data.message);
+          return;
+        }
+
+        // Populate review data
+        document.getElementById('preRoundLeagueDate').textContent = data.league_date;
+        document.getElementById('preRoundTabName').textContent = data.weekly_tab;
+        document.getElementById('preRoundParticipatingCount').textContent = data.participating_count;
+        document.getElementById('preRoundAcePotCount').textContent = data.ace_pot_participant_count;
+        document.getElementById('preRoundCtpCount').textContent = data.ctp_participant_count;
+
+        document.getElementById('preRoundAcePotCurrent').textContent = '$' + (data.ace_pot_current_total || 0).toFixed(2);
+        document.getElementById('preRoundAcePotContribution').textContent = '$' + (data.ace_pot_contribution || 0).toFixed(2);
+        document.getElementById('preRoundAcePotCalculated').textContent = '$' + (data.ace_pot_calculated_total || 0).toFixed(2);
+        document.getElementById('preRoundAcePotTotal').value = data.ace_pot_total !== undefined ? data.ace_pot_total : data.ace_pot_calculated_total;
+
+        document.getElementById('preRoundCtpContribution').textContent = '$' + (data.ctp_contribution || 0).toFixed(2);
+        document.getElementById('preRoundCtpCalculated').textContent = '$' + (data.ctp_calculated_total || 0).toFixed(2);
+        document.getElementById('preRoundCtpTotal').value = data.ctp_total !== undefined ? data.ctp_total : data.ctp_calculated_total;
+
+        reviewData.style.display = '';
+        clearPreRoundStatus();
+        log('Pre-round review loaded for ' + data.league_date);
+      } catch (err) {
+        setPreRoundStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        reviewData.style.display = 'none';
+        log('FAILED: ' + err.message);
+      }
+    }
+
+    async function savePreRoundReview() {
+      var leagueDate = document.getElementById('preRoundDate').value;
+      if (!leagueDate) {
+        setPreRoundStatus('error', '<strong>Please select a league date first.</strong>');
+        return;
+      }
+
+      var acePotTotal = document.getElementById('preRoundAcePotTotal').value;
+      var ctpTotal = document.getElementById('preRoundCtpTotal').value;
+
+      if (acePotTotal === '' || ctpTotal === '') {
+        setPreRoundStatus('error', '<strong>Please enter both final totals.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnSavePreRound');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      setPreRoundStatus('pending', 'Saving pre-round review...');
+
+      log('Saving pre-round review for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'savePreRoundReview',
+            league_date: leagueDate,
+            ace_pot_total: Number(acePotTotal),
+            ctp_total: Number(ctpTotal)
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          setPreRoundStatus('ok', '<strong>Review saved successfully.</strong>');
+          log('SUCCESS: Pre-round review saved');
+          // Refresh the review data
+          await loadPreRoundReview();
+        } else {
+          setPreRoundStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setPreRoundStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save Review';
+      }
+    }
+
+    async function loadPreRoundStatus() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getLeagueSettings' })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok' || data.state === 'missing' || data.state === 'empty') {
+          document.getElementById('preRoundMissing').style.display = '';
+          document.getElementById('preRoundForm').style.display = 'none';
+          return;
+        }
+
+        document.getElementById('preRoundMissing').style.display = 'none';
+        document.getElementById('preRoundForm').style.display = '';
+        await loadWeeklyTabs();
+      } catch (err) {
+        log('FAILED to load pre-round status: ' + err.message);
+      }
+    }
+
     // Init: set default date
     (function init() {
       document.getElementById('leagueDate').valueAsDate = new Date();
       log('Admin page loaded');
       loadLeagueSettings();
       loadClubMembersStatus();
+      loadPreRoundStatus();
     })();
   </script>
 </body>

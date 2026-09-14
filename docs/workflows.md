@@ -20,6 +20,24 @@
 4. Admin shares the QR code with players (print, text, email, etc.)
 5. Weekly league is now open for player sign-in
 
+## Workflow 2.5: Pre-Round Review (Admin)
+
+1. Admin opens the Pre-Round Review section on the admin page
+2. System loads the list of existing weekly tabs and displays them in a dropdown
+3. Admin selects a league date from the dropdown
+4. System loads the weekly sheet and League settings
+5. System calculates:
+   - Participating count (players with `checked_in = TRUE`)
+   - Ace pot participant count (checked-in players with `ace_pot = TRUE`)
+   - CTP participant count (checked-in players with `ctp = TRUE`)
+   - Ace pot calculated total: `ace_pot_current_total + (ace_pot_contribution × ace_pot_participant_count)`
+   - CTP calculated total: `ctp_contribution × ctp_participant_count`
+6. Admin reviews the calculated totals
+7. Admin can override the final totals if needed
+8. Admin saves the review
+9. System recalculates values server-side and saves to League sheet
+10. System refreshes the display with saved values
+
 ## Workflow 3: Player Sign-In (Player)
 
 1. Player scans the QR code with their phone camera
