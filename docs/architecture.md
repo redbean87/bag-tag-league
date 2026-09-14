@@ -18,7 +18,7 @@ Each logical entity maps to a tab (worksheet) within a single Google Spreadsheet
 
 | Tab Name | Contents |
 |----------|----------|
-| `MasterPlayers` | One row per player in the master list |
+| `ClubMembers` | One row per player in the club member list |
 | `WeeklyLeagues` | One row per weekly league |
 | `WeeklyPlayerRecords` | One row per player per weekly league (sign-in records only) |
 | `ImportHistory` | One row per UDisc import |
@@ -102,7 +102,7 @@ The sign-in URL format:
 
 ### Authentication
 
-**No player authentication required.** Players identify themselves by selecting from the master list.
+**No player authentication required.** Players identify themselves by selecting from the club member list.
 
 **Admin authentication** uses a shared PIN or similarly simple mechanism suitable for three trusted league administrators.
 
@@ -116,7 +116,7 @@ The tag calculation:
 4. Sort the pool ascending
 5. Assign tags in finishing order: 1st gets the lowest tag from the pool, 2nd gets the next lowest, etc.
 6. Store results in out_tag on each participant's WeeklyPlayerRecords row
-7. After finalization, update current_tag in MasterPlayers for participating players (last-known calculated value, not guaranteed to represent physical tag)
+7. After finalization, update current_tag in ClubMembers for participating players (last-known calculated value, not guaranteed to represent physical tag)
 
 This is implemented as a server-side function.
 

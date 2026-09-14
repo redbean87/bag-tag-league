@@ -6,7 +6,7 @@ Each field has a single authoritative source. The app must not derive or overwri
 
 | Field | Owner | Source | Notes |
 |-------|-------|--------|-------|
-| `in_tag` | Player | Supplied by the player during check-in | Represents the player's actual starting bag tag for that league day. Do not automatically derive it from `MasterPlayers.current_tag`. |
+| `in_tag` | Player | Supplied by the player during check-in | Represents the player's actual starting bag tag for that league day. Do not automatically derive it from `ClubMembers.current_tag`. |
 | `checked_in` | App | Set when the player completes check-in through the app | Explicit participation boolean. Authoritative participation indicator for tag calculation. |
 | `signed_in_at` | App | Set when the player completes check-in through the app | Timestamp of when check-in occurred. Retained for historical continuity. |
 | `paid` | Player/Admin | Captured during check-in based on the player's selection/confirmation | Do not infer payment status from participation or UDisc data. |
@@ -36,14 +36,14 @@ All data lives in Google Sheets. Each entity maps to a tab (worksheet) within a 
 ## Entity Relationship Overview
 
 ```
-MasterPlayers 1---* WeeklyPlayerRecords (via member_number)
+ClubMembers 1---* WeeklyPlayerRecords (via member_number)
 WeeklyLeagues 1---* WeeklyPlayerRecords
 WeeklyLeagues 1---* ImportHistory
 ```
 
 ## Tabs
 
-### MasterPlayers Tab
+### ClubMembers Tab
 
 One row per player. Updated only during league finalization or admin correction.
 
@@ -81,11 +81,11 @@ One row per player per weekly league. Created during sign-in only.
 |--------|------|-------|
 | id | string (UUID) | Primary key |
 | weekly_league_id | string (UUID) | FK to WeeklyLeagues |
-| member_number | integer | FK to MasterPlayers.member_number |
+| member_number | integer | FK to ClubMembers.member_number |
 | player_name_snapshot | string | Snapshot of name at sign-in |
 | udisc_username_snapshot | string | Snapshot of UDisc username at sign-in |
 | pdga_number_snapshot | string | Snapshot of PDGA number at sign-in |
-| in_tag | integer | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Do not auto-derive from `MasterPlayers.current_tag`. |
+| in_tag | integer | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Do not auto-derive from `ClubMembers.current_tag`. |
 | out_tag | integer | Player's ending bag tag, calculated by the app (nullable until calculation) |
 | checked_in | boolean | Explicit participation flag. Set TRUE when player completes check-in through the app. Authoritative participation indicator. |
 | signed_in_at | string (ISO 8601) | Timestamp when the player signed in through the app |
@@ -132,8 +132,8 @@ One row per player per weekly league. Created during sign-in only.
 
 **Field groups:**
 
-- **Snapshot fields:** player_name_snapshot, udisc_username_snapshot, pdga_number_snapshot (copied from MasterPlayers at sign-in, never changed)
-- **Identity fields:** member_number — sequential integer (1, 2, 3, …) linking weekly records to MasterPlayers, immutable after assignment
+- **Snapshot fields:** player_name_snapshot, udisc_username_snapshot, pdga_number_snapshot (copied from ClubMembers at sign-in, never changed)
+- **Identity fields:** member_number — sequential integer (1, 2, 3, …) linking weekly records to ClubMembers, immutable after assignment
 - **Tag fields:** in_tag (player's actual starting bag tag, supplied by the player during check-in), out_tag (player's ending bag tag, calculated by the app)
 - **App check-in fields:** checked_in, signed_in_at, paid, ctp, ace_pot
 - **UDisc identity import fields:** udisc_name_import, udisc_username_import, udisc_pdga_number_import (for matching and reference)
@@ -204,10 +204,10 @@ Potential settings:
 - Google Sheets row numbers are ephemeral and must not be used as identifiers; use UUIDs instead (except `member_number`, which is a sequential integer)
 - There is no admin override system, audit log, or correction record mechanism
 - `score` is the player's round score imported from UDisc (`round_total_score`). It is a score, not a bag tag. This is the primary score used for tag calculation ranking.
-- `in_tag` is the player's actual starting bag tag for the weekly league, supplied by the player during check-in. It must not be auto-derived from `MasterPlayers.current_tag`.
+- `in_tag` is the player's actual starting bag tag for the weekly league, supplied by the player during check-in. It must not be auto-derived from `ClubMembers.current_tag`.
 - `out_tag` is the player's ending bag tag, calculated by the app using only: players who checked in (`checked_in = TRUE`), each participant's score, each participant's `in_tag` for tie-breaking, the participating players' starting-tag pool, and the agreed lowest-score / lower-`in_tag` tie-break / ascending-tag redistribution rules.
 - `udisc_ending_tag` is optional and may contain a value from the current/manual process or UDisc data (`bag_tag_at_end`). It is retained for reference/transition purposes only and must not be used to calculate `out_tag`.
-- `MasterPlayers.current_tag` is only a last-known calculated value. It is not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`.
+- `ClubMembers.current_tag` is only a last-known calculated value. It is not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`.
 - `checked_in` (boolean) is the explicit participation flag. It supersedes the historical participation check based on `signed_in_at` being non-null.
 - `udisc_checked_in` is UDisc's separate participation flag. It is imported as reference only and is not used for app participation logic.
 - `udisc_paid` is UDisc's separate payment flag. It is imported as reference only; the app's `paid` field is the authoritative payment status.

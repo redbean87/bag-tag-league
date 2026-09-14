@@ -183,7 +183,7 @@ When importing UDisc data, records are matched to existing `WeeklyPlayerRecords`
 
 | Risk | Description | Mitigation |
 |---|---|---|
-| **Name inconsistencies** | UDisc names may differ from master list (e.g., "John Smith" vs "Jon Smith", nickname vs full name, middle initial differences) | Use username or PDGA number as primary match; name is last resort |
+| **Name inconsistencies** | UDisc names may differ from club member list (e.g., "John Smith" vs "Jon Smith", nickname vs full name, middle initial differences) | Use username or PDGA number as primary match; name is last resort |
 | **Missing PDGA numbers** | `pdga_number` may be empty for some players | Do not rely on PDGA number alone; use username as primary |
 | **Missing usernames** | `username` may be empty for some players | Fall back to PDGA number, then name |
 | **Multiple players with same name** | Two players named "Mike Johnson" | Require PDGA number or username disambiguation; flag for admin review |

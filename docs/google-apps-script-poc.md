@@ -189,7 +189,7 @@ All test results appear in the **Test Log** section at the bottom of the page fo
 - The response format (JSON) is suitable for the application.
 - Both GET and POST requests succeed end-to-end with a deployed web app.
 
-**Next steps:** ADR-001's architecture is validated. The next phase can proceed to application design and implementation — setting up the full spreadsheet structure (MasterPlayers, WeeklyLeagues, etc.) and building the server-side CRUD operations in Apps Script.
+**Next steps:** ADR-001's architecture is validated. The next phase can proceed to application design and implementation — setting up the full spreadsheet structure (ClubMembers, WeeklyLeagues, etc.) and building the server-side CRUD operations in Apps Script.
 
 ## Manual Testing Prerequisites
 

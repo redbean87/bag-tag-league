@@ -6,9 +6,9 @@
 
 ## Confirmed Requirements
 
-### Master Player List
+### Club Member List
 
-The master player list is persistent and separate from each weekly league. It is stored in the MasterPlayers tab of the Google Spreadsheet. It stores one record per player with:
+The club member list is persistent and separate from each weekly league. It is stored in the ClubMembers tab of the Google Spreadsheet. It stores one record per player with:
 
 - Member number (sequential integer starting at 1, app-generated, unique, immutable after assignment, never reused)
 - Player name
@@ -17,7 +17,7 @@ The master player list is persistent and separate from each weekly league. It is
 - Current bag tag
 - Active/inactive status
 
-The master list is the source for identifying returning players and populating weekly records.
+The club member list is the source for identifying returning players and populating weekly records.
 
 ### Weekly League Creation
 
@@ -35,7 +35,7 @@ The weekly sheet exists before players sign in but initially contains no player 
 
 The organizer does not manually sign players in. Players scan the weekly league's QR code and:
 
-1. Find/select themselves from the master player list
+1. Find/select themselves from the club member list
 2. Confirm they are the correct player
 3. Submit their sign-in
 
@@ -43,7 +43,7 @@ The flow is: Scan QR code -> select yourself -> confirm -> signed in.
 
 The app should not require players to complete a long form.
 
-If a player is not found in the master list, they should be able to self-register (add themselves to the master list) before completing sign-in.
+If a player is not found in the club member list, they should be able to self-register (add themselves to the club member list) before completing sign-in.
 
 Players do not authenticate. Only administrative functions require authentication.
 
@@ -52,7 +52,7 @@ Players do not authenticate. Only administrative functions require authenticatio
 Each weekly player record is a row in the WeeklyPlayerRecords tab, created only when a player signs in. It preserves snapshots for historical accuracy and stores tag assignments:
 
 - Weekly league ID
-- Member number (links to MasterPlayers)
+- Member number (links to ClubMembers)
 - Player name snapshot
 - UDisc username snapshot
 - PDGA number snapshot
@@ -64,7 +64,7 @@ Each weekly player record is a row in the WeeklyPlayerRecords tab, created only 
 - UDisc data (score, starting hole, start time, round/event scores, division, position, hole-by-hole scores, udisc_ending_tag)
 - Admin notes
 
-`score` is the player's round score imported from UDisc (`round_total_score`). It is a score, not a bag tag. This is the primary score used for tag calculation ranking. `in_tag` and `out_tag` are bag tags. `in_tag` must be supplied by the player during check-in; it must not be auto-derived from `MasterPlayers.current_tag`. `udisc_ending_tag` is optional and retained for reference/transition purposes only; it must not be used to calculate `out_tag`.
+`score` is the player's round score imported from UDisc (`round_total_score`). It is a score, not a bag tag. This is the primary score used for tag calculation ranking. `in_tag` and `out_tag` are bag tags. `in_tag` must be supplied by the player during check-in; it must not be auto-derived from `ClubMembers.current_tag`. `udisc_ending_tag` is optional and retained for reference/transition purposes only; it must not be used to calculate `out_tag`.
 
 Not every field needs to be visible to players during sign-in.
 
@@ -95,7 +95,7 @@ Import history is recorded in the ImportHistory tab, including the raw CSV conte
 
 ### Bag-Tag Calculation
 
-Only players who checked in for that weekly league participate in tag redistribution. Players who did not check in are not included in the tag pool, and their master-list tags remain unchanged.
+Only players who checked in for that weekly league participate in tag redistribution. Players who did not check in are not included in the tag pool, and their club member tags remain unchanged.
 
 The app calculates `out_tag` using only the following inputs:
 
@@ -129,18 +129,18 @@ The calculation should be transparent and display:
 
 ### Finalization
 
-Importing UDisc data should not immediately update the master player list. The process is:
+Importing UDisc data should not immediately update the club member list. The process is:
 
 1. Import UDisc results
 2. Merge results into weekly records
 3. Calculate rankings and tag assignments
 4. Allow admin to review and correct records
 5. Finalize the weekly league
-6. Update the master player list with the out_tag for participating players only
+6. Update the club member list with the out_tag for participating players only
 
-`MasterPlayers.current_tag` is a last-known calculated value. It is not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`.
+`ClubMembers.current_tag` is a last-known calculated value. It is not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`.
 
-Historical weekly records must remain available and should not change when a player's master record changes later.
+Historical weekly records must remain available and should not change when a player's club member record changes later.
 
 ### Admin Capabilities
 
@@ -156,7 +156,7 @@ The application supports three league members with administrative access. Admin 
 - Resolve unmatched records
 - Review tag assignments
 - Finalize a league
-- Update or correct the master player list
+- Update or correct the club member list
 - View historical leagues
 
 Normal admin corrections to the sheet or through the app are acceptable. The application should favor warnings and review states over excessive hard enforcement. Admin is the final authority.

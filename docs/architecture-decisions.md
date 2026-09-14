@@ -55,7 +55,7 @@ Each field in the data model has a single authoritative source. The app must not
 
 ### Constraints
 
-- `in_tag` must not be auto-derived from `MasterPlayers.current_tag`. Players may have traded tags since the last league day.
+- `in_tag` must not be auto-derived from `ClubMembers.current_tag`. Players may have traded tags since the last league day.
 - `paid` must not be inferred from participation or UDisc data.
 - `starting_hole` is entered by the player in UDisc after the physical starting-hole draw. The app does not randomize starting holes.
 - `out_tag` must not be imported from UDisc or accepted as an authoritative external result.
@@ -80,11 +80,11 @@ At finalization:
 4. Assign the sorted available tags to the ranked players.
 5. The highest-ranked player receives the lowest available participating tag.
 6. Persist the assigned result as each player's `out_tag`.
-7. Update `MasterPlayers.current_tag` with the finalized `out_tag` as the player's last known calculated tag (linked via `member_number`).
+7. Update `ClubMembers.current_tag` with the finalized `out_tag` as the player's last known calculated tag (linked via `member_number`).
 
 ### Constraints
 
-- `MasterPlayers.current_tag` is only a last-known calculated value. It is not guaranteed to represent the player's current physical tag because players may trade tags between league days.
+- `ClubMembers.current_tag` is only a last-known calculated value. It is not guaranteed to represent the player's current physical tag because players may trade tags between league days.
 - The next check-in must require the player's actual `in_tag`.
 - `udisc_ending_tag` must not be used as input to tag calculation.
 

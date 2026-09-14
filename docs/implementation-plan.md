@@ -16,7 +16,7 @@
 
 **Goal:** Establish the spreadsheet structure and service layer.
 
-- Create the Google Spreadsheet with all tabs (MasterPlayers, WeeklyLeagues, WeeklyPlayerRecords, ImportHistory, Settings)
+- Create the Google Spreadsheet with all tabs (ClubMembers, WeeklyLeagues, WeeklyPlayerRecords, ImportHistory, Settings)
 - Implement the server-side Google Sheets service layer
 - Implement CRUD operations for each tab
 - Test read/write operations
@@ -24,9 +24,9 @@
 
 **Deliverable:** Working Sheets service layer with all CRUD operations.
 
-## Phase 2: Master Player List
+## Phase 2: Club Member List
 
-**Goal:** Admin can manage the master player list.
+**Goal:** Admin can manage the club member list.
 
 - Admin UI for CRUD operations
 - List players with search/filter
@@ -35,7 +35,7 @@
 - Toggle active/inactive status
 - Assign initial bag tags
 
-**Deliverable:** Admin can create, view, edit, and manage players.
+**Deliverable:** Admin can create, view, edit, and manage club members.
 
 ## Phase 3: Weekly League Creation
 
@@ -54,7 +54,7 @@
 **Goal:** Players can sign in via QR code.
 
 - Public sign-in page (mobile-optimized)
-- Player search/selection from master list
+- Player search/selection from club member list
 - Identity confirmation step
 - Sign-in submission
 - WeeklyPlayerRecord creation in the WeeklyPlayerRecords tab
@@ -96,7 +96,7 @@
 - Historical record locking (status set to finalized, UI prevents edits)
 - Read-only historical view
 
-**Deliverable:** Admin can finalize, master list updates, history preserved.
+**Deliverable:** Admin can finalize, club member list updates, history preserved.
 
 ## Phase 8: Polish and Testing
 

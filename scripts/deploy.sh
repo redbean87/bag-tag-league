@@ -88,6 +88,9 @@ echo "      Created version ${VERSION}"
 echo ""
 
 # ─── Step 3: Update existing deployment (preserves web-app URL) ─────────────
+# IMPORTANT: Do NOT use plain `clasp deploy` (no --deploymentId) or `clasp undeploy`.
+# Either would create/delete a deployment and change the stable web-app URL.
+# The --deploymentId flag ensures we update the existing deployment in place.
 echo "[3/3] Updating deployment ${DEPLOYMENT_ID} with version ${VERSION}..."
 clasp deploy --deploymentId "$DEPLOYMENT_ID" --versionNumber "$VERSION" --description "$DESCRIPTION"
 

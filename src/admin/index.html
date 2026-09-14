@@ -63,20 +63,6 @@
     code { background: #f0f0f0; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.9em; }
     .help-text { font-size: 0.875rem; color: #666; margin-bottom: 0.75rem; }
     .field-group { margin-bottom: 1rem; }
-    .config-note { font-size: 0.8125rem; color: #888; margin-top: 0.5rem; }
-    .config-toggle {
-      font-size: 0.875rem;
-      color: #0066cc;
-      cursor: pointer;
-      background: none;
-      border: none;
-      padding: 0;
-      margin: 0;
-      text-decoration: underline;
-    }
-    .config-toggle:hover { color: #0052a3; background: none; }
-    #configSection { display: none; }
-    #configSection.visible { display: block; }
     details { margin-bottom: 1.5rem; }
     summary {
       cursor: pointer;
@@ -122,24 +108,13 @@
   </div>
 
   <div class="card">
-    <h2>Setup Master Players</h2>
+    <h2>Setup Club Members</h2>
     <p class="help-text">
-      Create the <code>MasterPlayers</code> tab if it doesn't exist. This is a one-time setup step.
+      Create the <code>ClubMembers</code> tab if it doesn't exist. This is a one-time setup step.
       Players will register themselves during check-in.
     </p>
-    <button type="button" id="btnCreateMaster" onclick="createMasterPlayersTab()">Create MasterPlayers Tab</button>
+    <button type="button" id="btnCreateMaster" onclick="createClubMembersTab()">Create Club Members Tab</button>
     <div id="masterResult" class="status hidden"></div>
-  </div>
-
-  <button class="config-toggle" onclick="toggleConfig()" id="configToggle">Apps Script URL settings</button>
-  <div id="configSection" class="card">
-    <h2>Configuration</h2>
-    <label for="appsScriptUrl">Apps Script Web App URL</label>
-    <input type="url" id="appsScriptUrl" placeholder="https://script.google.com/macros/s/XXXX/exec">
-    <p class="config-note">
-      Paste the deployment URL. It looks like:<br>
-      <code>https://script.google.com/macros/s/AKfycbx.../exec</code>
-    </p>
   </div>
 
   <details>
@@ -148,6 +123,9 @@
   </details>
 
   <script>
+    // Apps Script deployment endpoint — updated in deploy.sh when re-deploying.
+    var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
+
     function log(message) {
       var logEl = document.getElementById('log');
       var entry = document.createElement('div');
@@ -167,27 +145,8 @@
       el.innerHTML = '';
     }
 
-    function getUrl() {
-      return document.getElementById('appsScriptUrl').value.trim();
-    }
-
-    function toggleConfig() {
-      var section = document.getElementById('configSection');
-      var btn = document.getElementById('configToggle');
-      var visible = section.classList.toggle('visible');
-      btn.textContent = visible ? 'Hide URL settings' : 'Apps Script URL settings';
-    }
-
     async function createWeeklyTab(e) {
       e.preventDefault();
-
-      var url = getUrl();
-      if (!url) {
-        setStatus('error', '<strong>Apps Script URL not configured.</strong> Open the URL settings below and paste your deployment URL.');
-        document.getElementById('configSection').classList.add('visible');
-        document.getElementById('configToggle').textContent = 'Hide URL settings';
-        return;
-      }
 
       var dateInput = document.getElementById('leagueDate');
       var leagueDate = dateInput.value;
@@ -204,7 +163,7 @@
       log('Creating weekly tab for: ' + leagueDate);
 
       try {
-        var response = await fetch(url, {
+        var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
@@ -236,39 +195,31 @@
       el.innerHTML = html;
     }
 
-    async function createMasterPlayersTab() {
-      var url = getUrl();
-      if (!url) {
-        setMasterStatus('error', '<strong>Apps Script URL not configured.</strong> Open the URL settings below and paste your deployment URL.');
-        document.getElementById('configSection').classList.add('visible');
-        document.getElementById('configToggle').textContent = 'Hide URL settings';
-        return;
-      }
-
+    async function createClubMembersTab() {
       var btn = document.getElementById('btnCreateMaster');
       btn.disabled = true;
       btn.textContent = 'Creating...';
-      setMasterStatus('pending', 'Creating MasterPlayers tab...');
+      setMasterStatus('pending', 'Creating ClubMembers tab...');
 
-      log('Creating MasterPlayers tab');
+      log('Creating ClubMembers tab');
 
       try {
-        var response = await fetch(url, {
+        var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'createMasterPlayersTab'
+            action: 'createClubMembersTab'
           })
         });
         var data = await response.json();
 
         if (data.status === 'ok') {
           if (data.alreadyExisted) {
-            setMasterStatus('ok', '<strong>MasterPlayers tab already exists.</strong> No action needed.');
-            log('MasterPlayers tab already existed');
+            setMasterStatus('ok', '<strong>ClubMembers tab already exists.</strong> No action needed.');
+            log('ClubMembers tab already existed');
           } else {
-            setMasterStatus('ok', '<strong>Done!</strong> MasterPlayers tab created with ' + data.columns + ' columns.');
-            log('SUCCESS: MasterPlayers tab created');
+            setMasterStatus('ok', '<strong>Done!</strong> ClubMembers tab created with ' + data.columns + ' columns.');
+            log('SUCCESS: ClubMembers tab created');
           }
         } else {
           setMasterStatus('error', '<strong>Error:</strong> ' + data.message);
@@ -279,23 +230,13 @@
         log('FAILED: ' + err.message);
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Create MasterPlayers Tab';
+        btn.textContent = 'Create Club Members Tab';
       }
     }
 
-    // Init: restore saved URL, set default date
+    // Init: set default date
     (function init() {
-      var savedUrl = localStorage.getItem('appsScriptUrl');
-      if (savedUrl) {
-        document.getElementById('appsScriptUrl').value = savedUrl;
-      }
-
-      document.getElementById('appsScriptUrl').addEventListener('input', function() {
-        localStorage.setItem('appsScriptUrl', this.value);
-      });
-
       document.getElementById('leagueDate').valueAsDate = new Date();
-
       log('Admin page loaded');
     })();
   </script>

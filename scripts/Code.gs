@@ -10,8 +10,8 @@
 // Replace with your actual spreadsheet ID
 const SPREADSHEET_ID = '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik';
 
-// MasterPlayers tab column headers
-const MASTER_PLAYER_HEADERS = [
+// ClubMembers tab column headers
+const CLUB_MEMBER_HEADERS = [
   'member_number',
   'name',
   'udisc_username',
@@ -99,8 +99,8 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
 
-    if (data.action === 'createMasterPlayersTab') {
-      return handleCreateMasterPlayersTab(data);
+    if (data.action === 'createClubMembersTab') {
+      return handleCreateClubMembersTab(data);
     }
     if (data.action === 'submitCheckIn') {
       return handleSubmitCheckIn(data);
@@ -117,29 +117,29 @@ function doPost(e) {
 }
 
 /**
- * Creates the MasterPlayers tab if it does not already exist.
+ * Creates the ClubMembers tab if it does not already exist.
  * One-time admin setup action.
  */
-function handleCreateMasterPlayersTab(data) {
+function handleCreateClubMembersTab(data) {
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const existing = spreadsheet.getSheetByName('MasterPlayers');
+  const existing = spreadsheet.getSheetByName('ClubMembers');
 
   if (existing) {
-    return respond('ok', 'MasterPlayers tab already exists.', {
+    return respond('ok', 'ClubMembers tab already exists.', {
       alreadyExisted: true
     });
   }
 
-  const sheet = spreadsheet.insertSheet('MasterPlayers');
-  sheet.appendRow(MASTER_PLAYER_HEADERS);
+  const sheet = spreadsheet.insertSheet('ClubMembers');
+  sheet.appendRow(CLUB_MEMBER_HEADERS);
 
-  const headerRange = sheet.getRange(1, 1, 1, MASTER_PLAYER_HEADERS.length);
+  const headerRange = sheet.getRange(1, 1, 1, CLUB_MEMBER_HEADERS.length);
   headerRange.setFontWeight('bold');
   sheet.setFrozenRows(1);
 
-  return respond('ok', 'MasterPlayers tab created successfully.', {
+  return respond('ok', 'ClubMembers tab created successfully.', {
     alreadyExisted: false,
-    columns: MASTER_PLAYER_HEADERS.length
+    columns: CLUB_MEMBER_HEADERS.length
   });
 }
 
@@ -190,7 +190,7 @@ function handleCreateWeeklyTab(data) {
 
 /**
  * Submits a player check-in. Handles registration/check-in in a single flow:
- * 1. Finds or creates the master player record
+ * 1. Finds or creates the club member record
  * 2. Finds the most recent weekly tab
  * 3. Checks for duplicate check-in
  * 4. Writes the weekly check-in record with identity snapshots
@@ -221,16 +221,16 @@ function handleSubmitCheckIn(data) {
 
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
 
-  // --- Step 1: Find or create master player ---
-  const playersSheet = spreadsheet.getSheetByName('MasterPlayers');
+  // --- Step 1: Find or create club member ---
+  const playersSheet = spreadsheet.getSheetByName('ClubMembers');
   if (!playersSheet) {
-    return respond('error', 'MasterPlayers tab not found. Admin must create it first.');
+    return respond('error', 'ClubMembers tab not found. Admin must create it first.');
   }
 
   const playersData = playersSheet.getDataRange().getValues();
   const playersHeaders = playersData[0];
 
-  const playerIdCol = playersHeaders.indexOf('member_number');
+  const memberNumberCol = playersHeaders.indexOf('member_number');
   const playerNameCol = playersHeaders.indexOf('name');
   const playerUdiscCol = playersHeaders.indexOf('udisc_username');
   const playerPdgaCol = playersHeaders.indexOf('pdga_number');
@@ -238,8 +238,8 @@ function handleSubmitCheckIn(data) {
   const playerIsActiveCol = playersHeaders.indexOf('is_active');
   const playerCreatedAtCol = playersHeaders.indexOf('created_at');
 
-  let masterPlayerId = null;
-  let masterPlayerRow = null;
+  let memberId = null;
+  let memberRow = null;
 
   // Search for existing player: match name + (udisc_username OR pdga_number)
   for (let i = 1; i < playersData.length; i++) {
@@ -256,14 +256,14 @@ function handleSubmitCheckIn(data) {
     const neitherProvided = !trimmedUdisc && !trimmedPdga;
 
     if (udiscMatch || pdgaMatch || neitherProvided) {
-      masterPlayerId = row[playerIdCol];
-      masterPlayerRow = row;
+      memberId = row[playerIdCol];
+      memberRow = row;
       break;
     }
   }
 
-  // If no match, create new master player
-  if (!masterPlayerId) {
+  // If no match, create new club member
+  if (!memberId) {
     // Lock to prevent concurrent registrations from receiving the same member_number
     var lock = LockService.getScriptLock();
     try {
@@ -273,7 +273,7 @@ function handleSubmitCheckIn(data) {
       var freshData = playersSheet.getDataRange().getValues();
       var maxMemberNumber = 0;
       for (var r = 1; r < freshData.length; r++) {
-        var val = freshData[r][playerIdCol];
+        var val = freshData[r][memberNumberCol];
         var num = parseInt(val, 10);
         if (!isNaN(num) && num > maxMemberNumber) {
           maxMemberNumber = num;
@@ -283,20 +283,20 @@ function handleSubmitCheckIn(data) {
       var newMemberNumber = maxMemberNumber + 1;
       var now = new Date().toISOString();
 
-      var newPlayer = new Array(MASTER_PLAYER_HEADERS.length).fill('');
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('member_number')] = newMemberNumber;
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('name')] = trimmedName;
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('current_tag')] = '';
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('is_active')] = true;
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('created_at')] = now;
-      newPlayer[MASTER_PLAYER_HEADERS.indexOf('updated_at')] = now;
+      var newPlayer = new Array(CLUB_MEMBER_HEADERS.length).fill('');
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('member_number')] = newMemberNumber;
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('name')] = trimmedName;
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = '';
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
+      newPlayer[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
 
       playersSheet.appendRow(newPlayer);
 
-      masterPlayerId = newMemberNumber;
-      masterPlayerRow = newPlayer;
+      memberId = newMemberNumber;
+      memberRow = newPlayer;
     } finally {
       lock.releaseLock();
     }
@@ -324,7 +324,7 @@ function handleSubmitCheckIn(data) {
   const recordPlayerIdCol = recordsHeaders.indexOf('member_number');
 
   for (let i = 1; i < recordsData.length; i++) {
-    if (recordsData[i][recordPlayerIdCol] === masterPlayerId) {
+    if (recordsData[i][recordPlayerIdCol] === memberId) {
       return respond('error', 'You are already checked in for this league.');
     }
   }
@@ -339,16 +339,16 @@ function handleSubmitCheckIn(data) {
   const newRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('id')] = uuid;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('weekly_league_id')] = weeklyLeagueId;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = masterPlayerId;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = masterPlayerRow[playerNameCol] || trimmedName;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = masterPlayerRow[playerUdiscCol] || trimmedUdisc;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = masterPlayerRow[playerPdgaCol] || trimmedPdga;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = memberId;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = memberRow[playerNameCol] || trimmedName;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = memberRow[playerUdiscCol] || trimmedUdisc;
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = memberRow[playerPdgaCol] || trimmedPdga;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('in_tag')] = inTagNum;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('signed_in_at')] = now;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('paid')] = paid === true || paid === 'TRUE';
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = ctp === true || ctp === 'TRUE';
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = ace_pot === true || ace_pot === 'TRUE';
+  newRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = acePot === true || acePot === 'TRUE';
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
   newRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
 
@@ -356,7 +356,7 @@ function handleSubmitCheckIn(data) {
 
   return respond('ok', 'Check-in successful.', {
     record_id: uuid,
-    member_number: masterPlayerId,
+    member_number: memberId,
     player_name: trimmedName,
     in_tag: inTagNum,
     weekly_tab: mostRecentTabName

@@ -34,9 +34,9 @@ The application reads from and writes to Google Sheets through a server-side ser
 
 ---
 
-## Tab: MasterPlayers
+## Tab: ClubMembers
 
-**Purpose:** One row per player in the master list. Source of truth for player identity and current tag.
+**Purpose:** One row per player in the club member list. Source of truth for player identity and current tag.
 
 ### Columns
 
@@ -114,9 +114,9 @@ Fields in this tab fall into four categories based on their source and role:
 |---|-------------|-----------|----------|----------|-------------|
 | 1 | `id` | string (UUID) | Yes | System | Primary key. Unique identifier for this record. |
 | 2 | `weekly_league_id` | string (UUID) | Yes | System | Foreign key to `WeeklyLeagues.id`. |
-| 3 | `member_number` | integer | Yes | System | Foreign key to `MasterPlayers.member_number`. Immutable after assignment. |
+| 3 | `member_number` | integer | Yes | System | Foreign key to `ClubMembers.member_number`. Immutable after assignment. |
 
-#### Snapshot Fields (copied from MasterPlayers at sign-in, never changed after)
+#### Snapshot Fields (copied from ClubMembers at sign-in, never changed after)
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
@@ -128,8 +128,8 @@ Fields in this tab fall into four categories based on their source and role:
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 7 | `in_tag` | integer | Yes | App check-in | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Do not auto-derive from `MasterPlayers.current_tag`. Used as input to tag calculation. |
-| 8 | `out_tag` | integer | No | Calculated | Calculated ending tag assigned after tag calculation. Written to `MasterPlayers.current_tag` during finalization. Null until calculation runs. |
+| 7 | `in_tag` | integer | Yes | App check-in | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Do not auto-derive from `ClubMembers.current_tag`. Used as input to tag calculation. |
+| 8 | `out_tag` | integer | No | Calculated | Calculated ending tag assigned after tag calculation. Written to `ClubMembers.current_tag` during finalization. Null until calculation runs. |
 
 #### App Check-In Fields
 
@@ -217,7 +217,7 @@ Fields in this tab fall into four categories based on their source and role:
 
 - Weekly records exist only for players who signed in. No rows are created for absent players.
 - `score` is the player's round score imported from UDisc (`round_total_score`). It is a score, not a bag tag. This is the primary score used for tag calculation ranking.
-- `in_tag` is the player's actual starting bag tag for the weekly league, supplied by the player during check-in. It must not be auto-derived from `MasterPlayers.current_tag`. It is the starting point for tag calculation.
+- `in_tag` is the player's actual starting bag tag for the weekly league, supplied by the player during check-in. It must not be auto-derived from `ClubMembers.current_tag`. It is the starting point for tag calculation.
 - `out_tag` is the player's ending bag tag calculated by the app. It is the result of tag calculation.
 - `udisc_ending_tag` is optional and may contain a value from the current/manual process or UDisc data (`bag_tag_at_end`). It is retained for reference/transition purposes only and must not be used to calculate `out_tag`.
 - `checked_in` is the explicit participation boolean. It supersedes the historical participation check based on `signed_in_at` being non-null.
@@ -289,13 +289,13 @@ Fields in this tab fall into four categories based on their source and role:
 ## Relationships
 
 ```
-MasterPlayers (1) ---< (many) WeeklyPlayerRecords >--- (1) WeeklyLeagues
+ClubMembers (1) ---< (many) WeeklyPlayerRecords >--- (1) WeeklyLeagues
 WeeklyLeagues (1) ---< (many) ImportHistory
 ```
 
 ### Foreign Key Constraints (Application-Enforced)
 
-- `WeeklyPlayerRecords.member_number` must reference a valid `MasterPlayers.member_number`
+- `WeeklyPlayerRecords.member_number` must reference a valid `ClubMembers.member_number`
 - `WeeklyPlayerRecords.weekly_league_id` must reference a valid `WeeklyLeagues.id`
 - `ImportHistory.weekly_league_id` must reference a valid `WeeklyLeagues.id`
 
@@ -311,7 +311,7 @@ Three league members require administrative access. Admin authentication uses a 
 
 ## Player Access
 
-Players do not authenticate. The public flow is registration and check-in through the weekly QR code or link. Players select an existing master player or self-register if they are not found. Only administrative functions require authentication.
+Players do not authenticate. The public flow is registration and check-in through the weekly QR code or link. Players select an existing club member or self-register if they are not found. Only administrative functions require authentication.
 
 ---
 
@@ -337,17 +337,17 @@ At finalization:
 4. Assign the sorted available tags to the ranked players.
 5. The highest-ranked player receives the lowest available participating tag.
 6. Persist the assigned result as each player's `out_tag`.
-7. Update `MasterPlayers.current_tag` with the finalized `out_tag` as the player's last known calculated tag.
+7. Update `ClubMembers.current_tag` with the finalized `out_tag` as the player's last known calculated tag.
 
 ### Algorithm
 
-1. **Only checked-in players participate.** A player is a participant if they have a `WeeklyPlayerRecords` row with `checked_in = TRUE` for that league. Players who did not check in are excluded and retain their existing `MasterPlayers.current_tag`.
+1. **Only checked-in players participate.** A player is a participant if they have a `WeeklyPlayerRecords` row with `checked_in = TRUE` for that league. Players who did not check in are excluded and retain their existing `ClubMembers.current_tag`.
 2. **Rank by lowest score first.** Ties are resolved by lower `in_tag` (the player with the lower starting tag finishes first).
 3. **Build the tag pool.** Collect the `in_tag` values from all participating players.
 4. **Sort the pool ascending.** The lowest tag is first.
 5. **Assign tags in finishing order.** The first-place finisher receives the lowest tag from the pool, second place receives the next lowest, and so on.
 6. **Store the result in `out_tag`** on each participant's `WeeklyPlayerRecords` row.
-7. **After the organizer finalizes the weekly league,** update each participating player's `current_tag` in `MasterPlayers` with their `out_tag` value (linked via `member_number`). This is a last-known calculated value; it is not guaranteed to represent the player's physical tag because players may trade tags between league days.
+7. **After the organizer finalizes the weekly league,** update each participating player's `current_tag` in `ClubMembers` with their `out_tag` value (linked via `member_number`). This is a last-known calculated value; it is not guaranteed to represent the player's physical tag because players may trade tags between league days.
 
 ### Example
 
@@ -383,8 +383,8 @@ Normal admin corrections to the sheet or through the app are acceptable. Before 
 2. **Remove an accidental sign-in:** Delete the row from `WeeklyPlayerRecords`.
 3. **Correct any field:** Edit any field on a `WeeklyPlayerRecords` row.
 4. **Re-import UDisc data:** Upload a new file. Existing rows are merged (updated), not duplicated.
-5. **Resolve unmatched records:** Manually match an unmatched UDisc record to an existing signed-in player, or add a new player to `MasterPlayers` and then match.
-6. **Correct player data:** Edit `MasterPlayers` fields (name, UDisc username, PDGA number) at any time.
+5. **Resolve unmatched records:** Manually match an unmatched UDisc record to an existing signed-in player, or add a new player to `ClubMembers` and then match.
+6. **Correct player data:** Edit `ClubMembers` fields (name, UDisc username, PDGA number) at any time.
 7. **Adjust payment/CTP/ace pot:** Toggle `paid`, `ctp`, `ace_pot` on any `WeeklyPlayerRecords` row.
 
 There is no separate admin override system, audit log, correction record, or immutable event history. The app is simply intended to help the organizer run the league.

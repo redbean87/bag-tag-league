@@ -3,7 +3,7 @@
 ## Workflow 1: Season Setup (Admin)
 
 1. Admin opens the application
-2. Admin populates the master player list:
+2. Admin populates the club member list:
    - Manually add players one at a time, OR
    - Players self-register through the sign-in flow
 3. Admin assigns initial bag tags to players
@@ -25,16 +25,16 @@
 1. Player scans the QR code with their phone camera
 2. Browser opens the sign-in page
 3. Player sees a search/selection interface to find themselves
-4. Player selects their name from the master list
-   - If player is not found, they can self-register (add themselves to MasterPlayers tab; the next sequential member_number is assigned automatically)
+4. Player selects their name from the club member list
+   - If player is not found, they can self-register (add themselves to ClubMembers tab; the next sequential member_number is assigned automatically)
 5. Player confirms their identity (name, UDisc username, PDGA number displayed)
 6. Player supplies their `in_tag` (actual starting bag tag for this league day)
-   - The app does NOT auto-fill this from `MasterPlayers.current_tag`
+   - The app does NOT auto-fill this from `ClubMembers.current_tag`
    - Players may have traded tags since the last league day
 7. Player confirms payment status (`paid`)
 8. Player submits the check-in
 9. System creates a new row in the WeeklyPlayerRecords tab with:
-   - `member_number` linking to the MasterPlayers record
+   - `member_number` linking to the ClubMembers record
    - `in_tag` supplied by the player
    - `checked_in = TRUE` and `signed_in_at` timestamp recorded
    - All other UDisc fields left blank (to be filled by import)
@@ -86,7 +86,7 @@
 
 1. Admin has completed all reviews and corrections
 2. Admin finalizes the weekly league (status updated to "finalized" in WeeklyLeagues tab)
-3. System updates the MasterPlayers tab:
+3. System updates the ClubMembers tab:
    - Only participating/checked-in players' tags are updated (out_tag written to current_tag)
    - Players who did not check in keep their current tags
    - `current_tag` is a last-known calculated value, not guaranteed to represent the player's physical tag (players may trade tags between league days)
@@ -100,7 +100,7 @@ Admin can perform corrections at any point before finalization:
 - **Remove an accidental sign-in:** Remove the row from the WeeklyPlayerRecords tab
 - **Correct a field:** Edit any field on a weekly player record row
 - **Re-import UDisc data:** Upload a new file to re-process (merge behavior)
-- **Resolve unmatched:** Match a UDisc record to an existing player or add a new player to MasterPlayers tab
+- **Resolve unmatched:** Match a UDisc record to an existing player or add a new player to ClubMembers tab
 
 Normal admin corrections to the sheet or through the app are acceptable.
 
