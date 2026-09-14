@@ -160,3 +160,5 @@ Before beginning Phase 0:
 3. Set up Google Apps Script project and deploy web app
 4. Provide a sample UDisc CSV if available
 5. Review and approve this implementation plan
+
+**Note:** The current Google Sheets tab structure is the initial storage layout. It may need alignment with actual UDisc export fields before Phase 5 (UDisc CSV Import) implementation begins.

@@ -55,32 +55,37 @@ Each weekly player record is a row in the WeeklyPlayerRecords tab, created only 
 - Player name snapshot
 - UDisc username snapshot
 - PDGA number snapshot
-- in_tag (player's starting bag tag at sign-in time, copied from master list)
+- in_tag (player's actual starting bag tag, supplied by the player during check-in)
 - out_tag (player's ending bag tag, calculated by the app after tag calculation)
-- Sign-in timestamp
+- checked_in (boolean participation flag, set TRUE when player completes check-in)
+- signed_in_at (timestamp of when check-in occurred)
 - Paid, CTP, Ace pot status
-- UDisc data (score, starting hole, start time, udisc_ending_tag)
+- UDisc data (score, starting hole, start time, round/event scores, division, position, hole-by-hole scores, udisc_ending_tag)
 - Admin notes
 
-`score` is the player's round score imported from UDisc. It is a score, not a bag tag. `in_tag` and `out_tag` are bag tags. `udisc_ending_tag` is optional and retained for reference/transition purposes only; it must not be used to calculate `out_tag`.
+`score` is the player's round score imported from UDisc (`round_total_score`). It is a score, not a bag tag. This is the primary score used for tag calculation ranking. `in_tag` and `out_tag` are bag tags. `in_tag` must be supplied by the player during check-in; it must not be auto-derived from `MasterPlayers.current_tag`. `udisc_ending_tag` is optional and retained for reference/transition purposes only; it must not be used to calculate `out_tag`.
 
 Not every field needs to be visible to players during sign-in.
 
+See `udisc-import-mapping.md` for the complete UDisc field mapping and export structure.
+
 ### UDisc Import
 
-After the round, the admin exports from UDisc and imports the CSV into the active weekly league. The import parses the CSV and writes the relevant imported values into the appropriate WeeklyPlayerRecords columns for matched players. It must not replace the weekly sheet wholesale.
+After the round, the admin exports from UDisc and imports the xlsx into the active weekly league. The confirmed export format is an Excel workbook with an `Event results` sheet containing 34 columns. The full mapping is documented in `udisc-import-mapping.md`.
+
+The import parses the workbook and writes the relevant imported values into the appropriate WeeklyPlayerRecords columns for matched players. It must not replace the weekly sheet wholesale.
 
 For an existing weekly player:
 
 - Match the UDisc record to the weekly record
-- Update UDisc-derived fields (score, starting hole, start time, udisc_ending_tag)
-- Preserve sign-in fields (in_tag, signed_at, paid, CTP, ace pot, notes)
+- Update UDisc-imported fields (score, starting hole, start time, hole-by-hole scores, round/event scores, division, position, udisc_checked_in, udisc_paid, udisc_ending_tag)
+- Preserve app check-in fields (in_tag, checked_in, signed_in_at, paid, CTP, ace pot, notes)
 
 Player matching priority:
 
-1. UDisc username
-2. PDGA number
-3. Player name
+1. UDisc username (`udisc_username_import`)
+2. PDGA number (`udisc_pdga_number_import`)
+3. Player name (`udisc_name_import`)
 4. Admin-assisted manual matching for uncertain cases
 
 Unmatched UDisc players are added as new WeeklyPlayerRecords rows, and the organizer can fix or associate them afterward. A signed-in player missing from the CSV is flagged in the import results.
@@ -89,13 +94,13 @@ Import history is recorded in the ImportHistory tab, including the raw CSV conte
 
 ### Bag-Tag Calculation
 
-Only players who signed in for that weekly league participate in tag redistribution. Players who did not sign in are not included in the tag pool, and their master-list tags remain unchanged.
+Only players who checked in for that weekly league participate in tag redistribution. Players who did not check in are not included in the tag pool, and their master-list tags remain unchanged.
 
 The app calculates `out_tag` using only the following inputs:
 
-- Players who signed in (have a `WeeklyPlayerRecords` row with `signed_in_at`)
+- Players who checked in (`checked_in = TRUE`)
 - Each participant's `score` (for ranking)
-- Each participant's `in_tag` (for tie-breaking)
+- Each participant's `in_tag` (for tie-breaking, supplied by the player during check-in)
 - The participating players' starting-tag pool (all `in_tag` values)
 - The agreed rules: lowest score wins, lower `in_tag` breaks ties, tags redistribute ascending
 
@@ -132,6 +137,8 @@ Importing UDisc data should not immediately update the master player list. The p
 5. Finalize the weekly league
 6. Update the master player list with the out_tag for participating players only
 
+`MasterPlayers.current_tag` is a last-known calculated value. It is not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`.
+
 Historical weekly records must remain available and should not change when a player's master record changes later.
 
 ### Admin Capabilities
@@ -158,5 +165,6 @@ Normal admin corrections to the sheet or through the app are acceptable. The app
 - There are three admins (league members) who manage weekly leagues
 - Players do not need accounts or authentication beyond identifying themselves
 - The application runs as a web app (no native mobile app required)
-- UDisc CSV export format is consistent and documented
+- UDisc export format is confirmed: Excel workbook with `Event results` sheet containing 34 columns
 - Google Sheets is the sole persistent datastore (no SQL database of any kind)
+- The Google Sheets tab structure accommodates all UDisc export fields

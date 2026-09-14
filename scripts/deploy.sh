@@ -28,7 +28,7 @@ set -euo pipefail
 # ─── Configuration ───────────────────────────────────────────────────────────
 
 SCRIPT_ID="1Ou-1vkPscyLViqWgDPkzesRaXR055lsLuV9FXxQcFwjGdiN3BIP6TlvU"
-DEPLOYMENT_ID="AKfycbzHToGHF63x84m-hU0KAUfMlSLUwcHV-CwcP-h31Ecbj2FOCljY9u_jH3Y0_bB0mq5g4g"
+DEPLOYMENT_ID="AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw"
 DESCRIPTION="${1:-Redeployed via deploy.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 # Resolve to the directory containing this script, then cd there.

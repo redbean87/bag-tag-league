@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bag Tag League - Player Check-In</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 1rem;
+      background: #f5f5f5;
+    }
+    h1 { margin-bottom: 0.25rem; color: #1a1a1a; font-size: 1.5rem; }
+    .subtitle { color: #666; margin-bottom: 1rem; font-size: 1rem; }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h2 { font-size: 1.125rem; margin-bottom: 0.75rem; color: #1a1a1a; }
+    label { display: block; font-weight: 500; margin-bottom: 0.25rem; }
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      padding: 0.625rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    input:focus { outline: none; border-color: #0066cc; }
+    button {
+      background: #0066cc;
+      color: white;
+      border: none;
+      padding: 0.75rem 1.5rem;
+      border-radius: 4px;
+      font-size: 1rem;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 0.25rem;
+    }
+    button:hover { background: #0052a3; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .checkbox-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      cursor: pointer;
+      font-weight: normal;
+    }
+    .checkbox-label input[type="checkbox"] {
+      width: 1.125rem;
+      height: 1.125rem;
+      cursor: pointer;
+    }
+    .status {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 4px;
+      font-size: 0.9375rem;
+    }
+    .status.hidden { display: none; }
+    .status.ok { background: #e6f4ea; border: 1px solid #34a853; color: #1a5c2a; }
+    .status.error { background: #fce8e6; border: 1px solid #ea4335; color: #c5221f; }
+    .status.pending { background: #fff3cd; border: 1px solid #ffc107; color: #856404; }
+    .status strong { font-weight: 600; }
+    .form-group { margin-bottom: 1rem; }
+    .helper-text { font-size: 0.8125rem; color: #666; margin-top: -0.5rem; margin-bottom: 0.75rem; }
+    .required-note { font-size: 0.8125rem; color: #666; margin-bottom: 1rem; }
+    .success-details { margin-top: 0.75rem; }
+    .success-details p { margin-bottom: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Bag Tag League</h1>
+  <p class="subtitle">Player Check-In</p>
+
+  <div class="card">
+    <h2>Register / Check In</h2>
+    <p class="required-note">Fields marked with * are required.</p>
+
+    <form id="checkInForm" onsubmit="submitCheckIn(event)">
+      <div class="form-group">
+        <label for="playerName">Player Name *</label>
+        <input type="text" id="playerName" required placeholder="Your full name">
+      </div>
+      <div class="form-group">
+        <label for="udiscUsername">UDisc Username</label>
+        <input type="text" id="udiscUsername" placeholder="Optional">
+      </div>
+      <div class="form-group">
+        <label for="pdgaNumber">PDGA Number</label>
+        <input type="text" id="pdgaNumber" placeholder="Optional">
+      </div>
+      <div class="form-group">
+        <label for="inTag">Starting Tag Number *</label>
+        <input type="number" id="inTag" min="1" required placeholder="Enter your tag number">
+        <p class="helper-text">The tag you are bringing today.</p>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <div class="checkbox-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="paid"> Paid
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="ctp"> CTP
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="acePot"> Ace Pot
+          </label>
+        </div>
+      </div>
+      <button type="submit" id="btnSubmit">Check In</button>
+    </form>
+
+    <div id="formStatus" class="status hidden"></div>
+  </div>
+
+  <div id="successCard" class="card" style="display: none;">
+    <div class="status ok">
+      <strong>You're checked in!</strong>
+      <div class="success-details">
+        <p id="successPlayerName"></p>
+        <p id="successTabName"></p>
+        <p id="successTagInfo"></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
+
+    function setStatus(type, message) {
+      var el = document.getElementById('formStatus');
+      el.className = 'status ' + type;
+      el.textContent = message;
+    }
+
+    async function submitCheckIn(e) {
+      e.preventDefault();
+
+      var name = document.getElementById('playerName').value.trim();
+      var udiscUsername = document.getElementById('udiscUsername').value.trim();
+      var pdgaNumber = document.getElementById('pdgaNumber').value.trim();
+      var inTag = document.getElementById('inTag').value;
+      var paid = document.getElementById('paid').checked;
+      var ctp = document.getElementById('ctp').checked;
+      var acePot = document.getElementById('acePot').checked;
+
+      if (!name) {
+        setStatus('error', 'Player name is required.');
+        return;
+      }
+
+      if (!inTag || parseInt(inTag, 10) < 1) {
+        setStatus('error', 'Please enter a valid tag number (1 or higher).');
+        return;
+      }
+
+      var btn = document.getElementById('btnSubmit');
+      btn.disabled = true;
+      btn.textContent = 'Submitting...';
+      setStatus('pending', 'Processing your check-in...');
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'submitCheckIn',
+            name: name,
+            udisc_username: udiscUsername || '',
+            pdga_number: pdgaNumber || '',
+            in_tag: parseInt(inTag, 10),
+            paid: paid,
+            ctp: ctp,
+            ace_pot: acePot
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          document.getElementById('successPlayerName').textContent = 'Player: ' + data.player_name;
+          document.getElementById('successTabName').textContent = 'Week: ' + data.weekly_tab;
+          document.getElementById('successTagInfo').textContent = 'Starting Tag: ' + data.in_tag;
+
+          document.getElementById('checkInForm').style.display = 'none';
+          document.getElementById('formStatus').style.display = 'none';
+          document.getElementById('successCard').style.display = 'block';
+        } else {
+          setStatus('error', data.message);
+          btn.disabled = false;
+          btn.textContent = 'Check In';
+        }
+      } catch (err) {
+        setStatus('error', 'Something went wrong. Please try again.');
+        btn.disabled = false;
+        btn.textContent = 'Check In';
+      }
+    }
+  </script>
+</body>
+</html>

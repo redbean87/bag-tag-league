@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bag Tag League - Admin</title>
+  <title>Bag Tag League - League Admin</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -15,8 +15,8 @@
       padding: 2rem 1rem;
       background: #f5f5f5;
     }
-    h1 { margin-bottom: 0.5rem; color: #1a1a1a; }
-    .subtitle { color: #666; margin-bottom: 2rem; }
+    h1 { margin-bottom: 0.25rem; color: #1a1a1a; }
+    .subtitle { color: #666; margin-bottom: 2rem; font-size: 1.1rem; }
     .card {
       background: white;
       border-radius: 8px;
@@ -32,7 +32,7 @@
       border: 1px solid #ddd;
       border-radius: 4px;
       font-size: 1rem;
-      margin-bottom: 1rem;
+      margin-bottom: 0.75rem;
     }
     input:focus { outline: none; border-color: #0066cc; }
     button {
@@ -43,8 +43,7 @@
       border-radius: 4px;
       font-size: 1rem;
       cursor: pointer;
-      margin-right: 0.5rem;
-      margin-bottom: 0.5rem;
+      margin-top: 0.25rem;
     }
     button:hover { background: #0052a3; }
     button:disabled { background: #ccc; cursor: not-allowed; }
@@ -56,96 +55,156 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .status.hidden { display: none; }
     .status.ok { background: #e6f4ea; border: 1px solid #34a853; }
     .status.error { background: #fce8e6; border: 1px solid #ea4335; }
     .status.pending { background: #fff3cd; border: 1px solid #ffc107; }
+    .status strong { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     code { background: #f0f0f0; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.9em; }
-    .help-text { font-size: 0.875rem; color: #666; margin-bottom: 1rem; }
+    .help-text { font-size: 0.875rem; color: #666; margin-bottom: 0.75rem; }
+    .field-group { margin-bottom: 1rem; }
+    .config-note { font-size: 0.8125rem; color: #888; margin-top: 0.5rem; }
+    .config-toggle {
+      font-size: 0.875rem;
+      color: #0066cc;
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      text-decoration: underline;
+    }
+    .config-toggle:hover { color: #0052a3; background: none; }
+    #configSection { display: none; }
+    #configSection.visible { display: block; }
+    details { margin-bottom: 1.5rem; }
+    summary {
+      cursor: pointer;
+      font-size: 0.875rem;
+      color: #666;
+      padding: 0.5rem 0;
+    }
+    summary:hover { color: #333; }
+    #log {
+      font-family: monospace;
+      font-size: 0.8125rem;
+      max-height: 200px;
+      overflow-y: auto;
+      background: #f8f8f8;
+      padding: 0.75rem;
+      border-radius: 4px;
+      margin-top: 0.5rem;
+    }
+    #log:empty::before {
+      content: 'No activity yet.';
+      color: #999;
+    }
   </style>
 </head>
 <body>
   <h1>Bag Tag League</h1>
-  <p class="subtitle">Admin - Create Weekly League Tab</p>
+  <p class="subtitle">League Admin</p>
 
   <div class="card">
+    <h2>Create League Day</h2>
+    <p class="help-text">
+      Pick a date and create a new tab in the spreadsheet. The tab will be named
+      <code>Week YYYY-MM-DD</code> with the standard 50-column roster template.
+    </p>
+    <form id="createForm" onsubmit="createWeeklyTab(event)">
+      <div class="field-group">
+        <label for="leagueDate">League Date</label>
+        <input type="date" id="leagueDate" required>
+      </div>
+      <button type="submit" id="btnCreate">Create League Day</button>
+    </form>
+    <div id="result" class="status hidden"></div>
+  </div>
+
+  <div class="card">
+    <h2>Setup Master Players</h2>
+    <p class="help-text">
+      Create the <code>MasterPlayers</code> tab if it doesn't exist. This is a one-time setup step.
+      Players will register themselves during check-in.
+    </p>
+    <button type="button" id="btnCreateMaster" onclick="createMasterPlayersTab()">Create MasterPlayers Tab</button>
+    <div id="masterResult" class="status hidden"></div>
+  </div>
+
+  <button class="config-toggle" onclick="toggleConfig()" id="configToggle">Apps Script URL settings</button>
+  <div id="configSection" class="card">
     <h2>Configuration</h2>
     <label for="appsScriptUrl">Apps Script Web App URL</label>
     <input type="url" id="appsScriptUrl" placeholder="https://script.google.com/macros/s/XXXX/exec">
-    <p class="help-text">
-      Deploy your Apps Script as a web app and paste the URL here.
-      The URL will look like: <code>https://script.google.com/macros/s/AKfycbx.../exec</code>
+    <p class="config-note">
+      Paste the deployment URL. It looks like:<br>
+      <code>https://script.google.com/macros/s/AKfycbx.../exec</code>
     </p>
   </div>
 
-  <div class="card">
-    <h2>Create New League Week</h2>
-    <p class="help-text">
-      Enter the league date to create a new weekly tab in the spreadsheet.
-      The tab will be named <code>Week YYYY-MM-DD</code> and will contain the standard
-      WeeklyPlayerRecords headers (19 columns) ready for player sign-ins.
-    </p>
-    <label for="leagueDate">League Date</label>
-    <input type="date" id="leagueDate" required>
-    <button id="btnCreate" onclick="createWeeklyTab()">Create Weekly Tab</button>
-    <div id="result" class="status pending">Waiting for input...</div>
-  </div>
-
-  <div class="card">
-    <h2>Activity Log</h2>
-    <p>All actions will appear below.</p>
-    <div id="log" style="font-family: monospace; font-size: 0.875rem; max-height: 300px; overflow-y: auto; background: #f8f8f8; padding: 1rem; border-radius: 4px;"></div>
-  </div>
+  <details>
+    <summary>Activity Log</summary>
+    <div id="log"></div>
+  </details>
 
   <script>
     function log(message) {
-      const logEl = document.getElementById('log');
-      const entry = document.createElement('div');
+      var logEl = document.getElementById('log');
+      var entry = document.createElement('div');
       entry.textContent = '[' + new Date().toLocaleTimeString() + '] ' + message;
       logEl.prepend(entry);
     }
 
-    function setStatus(elementId, status, text) {
-      const el = document.getElementById(elementId);
-      el.className = 'status ' + status;
-      el.textContent = text;
+    function setStatus(type, html) {
+      var el = document.getElementById('result');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
     }
 
-    function getConfig() {
-      const url = document.getElementById('appsScriptUrl').value.trim();
+    function clearStatus() {
+      var el = document.getElementById('result');
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
+    function getUrl() {
+      return document.getElementById('appsScriptUrl').value.trim();
+    }
+
+    function toggleConfig() {
+      var section = document.getElementById('configSection');
+      var btn = document.getElementById('configToggle');
+      var visible = section.classList.toggle('visible');
+      btn.textContent = visible ? 'Hide URL settings' : 'Apps Script URL settings';
+    }
+
+    async function createWeeklyTab(e) {
+      e.preventDefault();
+
+      var url = getUrl();
       if (!url) {
-        log('ERROR: No Apps Script URL configured');
-        return null;
-      }
-      return url;
-    }
-
-    function getLeagueDate() {
-      const dateValue = document.getElementById('leagueDate').value;
-      if (!dateValue) {
-        log('ERROR: No league date selected');
-        return null;
-      }
-      return dateValue;
-    }
-
-    async function createWeeklyTab() {
-      const url = getConfig();
-      if (!url) return;
-
-      const leagueDate = getLeagueDate();
-      if (!leagueDate) {
-        setStatus('result', 'error', 'Please select a league date.');
+        setStatus('error', '<strong>Apps Script URL not configured.</strong> Open the URL settings below and paste your deployment URL.');
+        document.getElementById('configSection').classList.add('visible');
+        document.getElementById('configToggle').textContent = 'Hide URL settings';
         return;
       }
 
-      const btn = document.getElementById('btnCreate');
+      var dateInput = document.getElementById('leagueDate');
+      var leagueDate = dateInput.value;
+      if (!leagueDate) {
+        setStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnCreate');
       btn.disabled = true;
-      setStatus('result', 'pending', 'Creating weekly tab for ' + leagueDate + '...');
+      btn.textContent = 'Creating...';
+      setStatus('pending', 'Creating tab for <strong>' + leagueDate + '</strong>...');
 
       log('Creating weekly tab for: ' + leagueDate);
 
       try {
-        const response = await fetch(url, {
+        var response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
@@ -153,35 +212,92 @@
             leagueDate: leagueDate
           })
         });
-        const data = await response.json();
+        var data = await response.json();
 
         if (data.status === 'ok') {
-          setStatus('result', 'ok', JSON.stringify(data, null, 2));
+          setStatus('ok', '<strong>Done!</strong> Tab <code>' + data.tabName + '</code> created with ' + data.columns + ' columns.');
           log('SUCCESS: Tab "' + data.tabName + '" created');
         } else {
-          setStatus('result', 'error', JSON.stringify(data, null, 2));
+          setStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
         }
-      } catch (error) {
-        setStatus('result', 'error', 'Request failed: ' + error.message);
-        log('FAILED: ' + error.message);
+      } catch (err) {
+        setStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED: ' + err.message);
       } finally {
         btn.disabled = false;
+        btn.textContent = 'Create League Day';
       }
     }
 
-    // Load saved URL from localStorage
-    const savedUrl = localStorage.getItem('appsScriptUrl');
-    if (savedUrl) {
-      document.getElementById('appsScriptUrl').value = savedUrl;
+    function setMasterStatus(type, html) {
+      var el = document.getElementById('masterResult');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
     }
 
-    // Save URL to localStorage on change
-    document.getElementById('appsScriptUrl').addEventListener('input', function() {
-      localStorage.setItem('appsScriptUrl', this.value);
-    });
+    async function createMasterPlayersTab() {
+      var url = getUrl();
+      if (!url) {
+        setMasterStatus('error', '<strong>Apps Script URL not configured.</strong> Open the URL settings below and paste your deployment URL.');
+        document.getElementById('configSection').classList.add('visible');
+        document.getElementById('configToggle').textContent = 'Hide URL settings';
+        return;
+      }
 
-    log('Admin page loaded. Configure the Apps Script URL above to begin.');
+      var btn = document.getElementById('btnCreateMaster');
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      setMasterStatus('pending', 'Creating MasterPlayers tab...');
+
+      log('Creating MasterPlayers tab');
+
+      try {
+        var response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'createMasterPlayersTab'
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          if (data.alreadyExisted) {
+            setMasterStatus('ok', '<strong>MasterPlayers tab already exists.</strong> No action needed.');
+            log('MasterPlayers tab already existed');
+          } else {
+            setMasterStatus('ok', '<strong>Done!</strong> MasterPlayers tab created with ' + data.columns + ' columns.');
+            log('SUCCESS: MasterPlayers tab created');
+          }
+        } else {
+          setMasterStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setMasterStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create MasterPlayers Tab';
+      }
+    }
+
+    // Init: restore saved URL, set default date
+    (function init() {
+      var savedUrl = localStorage.getItem('appsScriptUrl');
+      if (savedUrl) {
+        document.getElementById('appsScriptUrl').value = savedUrl;
+      }
+
+      document.getElementById('appsScriptUrl').addEventListener('input', function() {
+        localStorage.setItem('appsScriptUrl', this.value);
+      });
+
+      document.getElementById('leagueDate').valueAsDate = new Date();
+
+      log('Admin page loaded');
+    })();
   </script>
 </body>
 </html>

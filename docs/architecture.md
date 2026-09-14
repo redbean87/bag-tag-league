@@ -91,13 +91,14 @@ The sign-in URL format:
 - Provide a downloadable/printable QR code for the admin
 - QR code encodes the full sign-in URL
 
-### CSV Import
+### UDisc Import
 
-- Parse CSV on the server (not client-side)
-- Validate CSV structure before processing
-- Return import results (matched, unmatched, missing from CSV)
+- Parse the UDisc Excel workbook on the server (not client-side)
+- Validate the `Event results` sheet structure before processing
+- Return import results (matched, unmatched, missing from import)
 - Support re-import (merge, not replace)
-- Store raw CSV content in ImportHistory for reference
+- Store raw import content in ImportHistory for reference
+- See `udisc-import-mapping.md` for the complete field mapping
 
 ### Authentication
 
@@ -109,13 +110,13 @@ The sign-in URL format:
 
 The tag calculation:
 
-1. Collect all participating players (those who signed in)
+1. Collect all participating players (those who checked in)
 2. Sort by score ascending, then by in_tag ascending for ties
 3. Collect the in_tag values of all participating players into a pool
 4. Sort the pool ascending
 5. Assign tags in finishing order: 1st gets the lowest tag from the pool, 2nd gets the next lowest, etc.
 6. Store results in out_tag on each participant's WeeklyPlayerRecords row
-7. After finalization, update current_tag in MasterPlayers for participating players
+7. After finalization, update current_tag in MasterPlayers for participating players (last-known calculated value, not guaranteed to represent physical tag)
 
 This is implemented as a server-side function.
 
