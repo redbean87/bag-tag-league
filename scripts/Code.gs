@@ -74,6 +74,25 @@ const WEEKLY_RECORD_HEADERS = [
   'updated_at'
 ];
 
+// League sheet column headers (15 columns)
+const LEAGUE_SHEET_HEADERS = [
+  'league_name',
+  'description',
+  'location',
+  'schedule',
+  'contact_information',
+  'entry_fee',
+  'ace_pot_contribution',
+  'ace_pot_current_total',
+  'ace_pot_calculated_total',
+  'ace_pot_total',
+  'ctp_contribution',
+  'ctp_calculated_total',
+  'ctp_total',
+  'created_at',
+  'updated_at'
+];
+
 /**
  * Handles GET requests. Returns a test response.
  */
@@ -108,6 +127,15 @@ function doPost(e) {
     }
     if (data.action === 'createWeeklyTab') {
       return handleCreateWeeklyTab(data);
+    }
+    if (data.action === 'createLeagueSheet') {
+      return handleCreateLeagueSheet(data);
+    }
+    if (data.action === 'getLeagueSettings') {
+      return handleGetLeagueSettings(data);
+    }
+    if (data.action === 'saveLeagueSettings') {
+      return handleSaveLeagueSettings(data);
     }
 
     return respond('error', 'Unknown action: ' + data.action);
@@ -460,6 +488,225 @@ function handleSubmitCheckIn(data) {
     player_name: trimmedName,
     in_tag: inTagNum,
     weekly_tab: mostRecentTabName
+  });
+}
+
+/**
+ * Creates the League sheet if it does not already exist.
+ * Initializes with headers and an empty row for future settings.
+ * Idempotent: returns alreadyExisted=true if the sheet already exists.
+ * Migrates existing 12-column sheets to the current 15-column schema.
+ */
+function handleCreateLeagueSheet(data) {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const existing = spreadsheet.getSheetByName('League');
+
+  if (existing) {
+    // Check if migration is needed (old 12-column schema)
+    const currentHeaders = existing.getRange(1, 1, 1, existing.getLastColumn()).getValues()[0];
+    const OLD_LEAGUE_HEADERS = [
+      'league_name', 'description', 'location', 'schedule', 'contact_information',
+      'entry_fee', 'ace_pot_contribution', 'ace_pot_total',
+      'ctp_contribution', 'ctp_prize',
+      'created_at', 'updated_at'
+    ];
+
+    const isOldSchema = currentHeaders.length === OLD_LEAGUE_HEADERS.length &&
+      currentHeaders.every(function(h, i) { return h === OLD_LEAGUE_HEADERS[i]; });
+
+    if (isOldSchema) {
+      // Migrate: read existing data, build new row, write back
+      const allData = existing.getDataRange().getValues();
+      const oldRow = allData.length >= 2 ? allData[1] : [];
+
+      const newRow = [];
+      for (let i = 0; i < LEAGUE_SHEET_HEADERS.length; i++) {
+        const header = LEAGUE_SHEET_HEADERS[i];
+        if (header === 'ace_pot_current_total') {
+          // Old ace_pot_total value becomes ace_pot_current_total
+          const oldIdx = OLD_LEAGUE_HEADERS.indexOf('ace_pot_total');
+          newRow.push(oldIdx !== -1 && oldRow[oldIdx] ? oldRow[oldIdx] : '');
+        } else if (header === 'ace_pot_calculated_total' || header === 'ace_pot_total' ||
+                   header === 'ctp_calculated_total' || header === 'ctp_total') {
+          // New fields: no old data to map
+          newRow.push('');
+        } else if (header === 'ctp_prize') {
+          // Removed field: skip
+          continue;
+        } else {
+          // Map directly from old schema
+          const oldIdx = OLD_LEAGUE_HEADERS.indexOf(header);
+          newRow.push(oldIdx !== -1 && oldRow[oldIdx] ? oldRow[oldIdx] : '');
+        }
+      }
+
+      // Clear and rewrite
+      existing.clear();
+      existing.appendRow(LEAGUE_SHEET_HEADERS);
+      if (newRow.some(function(v) { return v !== ''; })) {
+        existing.appendRow(newRow);
+      }
+
+      const headerRange = existing.getRange(1, 1, 1, LEAGUE_SHEET_HEADERS.length);
+      headerRange.setFontWeight('bold');
+      existing.setFrozenRows(1);
+
+      return respond('ok', 'League sheet migrated to new schema.', {
+        alreadyExisted: true,
+        migrated: true,
+        columns: LEAGUE_SHEET_HEADERS.length
+      });
+    }
+
+    // Already correct schema
+    return respond('ok', 'League sheet already exists.', {
+      alreadyExisted: true,
+      migrated: false
+    });
+  }
+
+  const sheet = spreadsheet.insertSheet('League');
+  sheet.appendRow(LEAGUE_SHEET_HEADERS);
+
+  const headerRange = sheet.getRange(1, 1, 1, LEAGUE_SHEET_HEADERS.length);
+  headerRange.setFontWeight('bold');
+  sheet.setFrozenRows(1);
+
+  return respond('ok', 'League sheet created successfully.', {
+    alreadyExisted: false,
+    columns: LEAGUE_SHEET_HEADERS.length
+  });
+}
+
+/**
+ * Reads the League settings from the League sheet.
+ * Returns the current state with a status field indicating:
+ *   - "missing" if the League sheet does not exist
+ *   - "empty" if the sheet exists but has no settings row
+ *   - "ok" if the sheet exists and contains settings
+ */
+function handleGetLeagueSettings(data) {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = spreadsheet.getSheetByName('League');
+
+  if (!sheet) {
+    return respond('ok', 'League sheet not found.', {
+      state: 'missing'
+    });
+  }
+
+  const allData = sheet.getDataRange().getValues();
+
+  if (allData.length < 2) {
+    return respond('ok', 'League sheet exists but has no settings.', {
+      state: 'empty'
+    });
+  }
+
+  const headers = allData[0];
+  const row = allData[1];
+  const settings = {};
+
+  for (let i = 0; i < headers.length; i++) {
+    const key = headers[i];
+    const val = row[i];
+    // Preserve blank strings and numbers; only coerce null/undefined to empty string
+    settings[key] = (val === null || val === undefined) ? '' : val;
+  }
+
+  return respond('ok', 'League settings loaded.', {
+    state: 'ok',
+    settings: settings
+  });
+}
+
+/**
+ * Saves or updates League settings on the League sheet.
+ * Numeric fields: entry_fee, ace_pot_contribution, ace_pot_current_total,
+ *   ace_pot_calculated_total, ace_pot_total, ctp_contribution,
+ *   ctp_calculated_total, ctp_total.
+ *   Must be non-negative numbers. Blank is allowed (treated as empty).
+ * Optional text fields: league_name, description, location, schedule, contact_information.
+ *   Blank values are preserved (not overwritten with defaults).
+ * Timestamps: created_at is preserved on update; updated_at is set on every save.
+ */
+function handleSaveLeagueSettings(data) {
+  const settings = data.settings;
+
+  if (!settings || typeof settings !== 'object') {
+    return respond('error', 'No settings provided.');
+  }
+
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = spreadsheet.getSheetByName('League');
+
+  if (!sheet) {
+    return respond('error', 'League sheet not found. Create it first.');
+  }
+
+  // Validate numeric fields
+  const numericFields = [
+    'entry_fee', 'ace_pot_contribution', 'ace_pot_current_total',
+    'ace_pot_calculated_total', 'ace_pot_total',
+    'ctp_contribution', 'ctp_calculated_total', 'ctp_total'
+  ];
+  for (const field of numericFields) {
+    const raw = settings[field];
+    // Allow blank/empty (treated as empty)
+    if (raw === '' || raw === null || raw === undefined) {
+      continue;
+    }
+    const num = Number(raw);
+    if (isNaN(num) || num < 0) {
+      return respond('error', 'Field "' + field + '" must be a non-negative number.');
+    }
+  }
+
+  const allData = sheet.getDataRange().getValues();
+  const now = new Date().toISOString();
+  const hasExistingRow = allData.length >= 2;
+
+  // Preserve created_at from existing row, or set new
+  let createdAt = now;
+  if (hasExistingRow) {
+    const headers = allData[0];
+    const existingRow = allData[1];
+    const createdAtIdx = headers.indexOf('created_at');
+    if (createdAtIdx !== -1 && existingRow[createdAtIdx]) {
+      createdAt = existingRow[createdAtIdx];
+    }
+  }
+
+  // Build the row values in header order
+  const newRow = [];
+  for (const header of LEAGUE_SHEET_HEADERS) {
+    if (header === 'created_at') {
+      newRow.push(createdAt);
+    } else if (header === 'updated_at') {
+      newRow.push(now);
+    } else if (numericFields.indexOf(header) !== -1) {
+      const raw = settings[header];
+      newRow.push((raw === '' || raw === null || raw === undefined) ? '' : Number(raw));
+    } else {
+      const val = settings[header];
+      newRow.push((val === null || val === undefined) ? '' : val);
+    }
+  }
+
+  if (hasExistingRow) {
+    sheet.getRange(2, 1, 1, newRow.length).setValues([newRow]);
+  } else {
+    sheet.appendRow(newRow);
+  }
+
+  // Return the saved settings as an object
+  const saved = {};
+  for (let i = 0; i < LEAGUE_SHEET_HEADERS.length; i++) {
+    saved[LEAGUE_SHEET_HEADERS[i]] = newRow[i];
+  }
+
+  return respond('ok', 'League settings saved.', {
+    settings: saved
   });
 }
 

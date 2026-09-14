@@ -117,6 +117,63 @@
     <div id="masterResult" class="status hidden"></div>
   </div>
 
+  <div class="card" id="leagueCard">
+    <h2>League Settings</h2>
+    <div id="leagueMissing">
+      <p class="help-text">
+        The <code>League</code> sheet does not exist in the spreadsheet yet.
+        Create it to store league-wide information and settings.
+      </p>
+      <button type="button" id="btnCreateLeague" onclick="createLeagueSheet()">Create League Sheet</button>
+      <div id="leagueMissingResult" class="status hidden"></div>
+    </div>
+    <div id="leagueForm" style="display:none;">
+      <form onsubmit="saveLeagueSettings(event)">
+        <h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">League Information</h3>
+        <div class="field-group">
+          <label for="league_name">League Name</label>
+          <input type="text" id="league_name" placeholder="">
+        </div>
+        <div class="field-group">
+          <label for="description">Description</label>
+          <input type="text" id="description" placeholder="">
+        </div>
+        <div class="field-group">
+          <label for="location">Location</label>
+          <input type="text" id="location" placeholder="">
+        </div>
+        <div class="field-group">
+          <label for="schedule">Schedule</label>
+          <input type="text" id="schedule" placeholder="">
+        </div>
+        <div class="field-group">
+          <label for="contact_information">Contact Information</label>
+          <input type="text" id="contact_information" placeholder="">
+        </div>
+
+        <h3 style="font-size:1rem; margin-bottom:0.75rem; margin-top:1rem; color:#555;">Entry and Pots</h3>
+        <div class="field-group">
+          <label for="entry_fee">Entry Fee</label>
+          <input type="number" id="entry_fee" step="0.01" min="0" placeholder="">
+        </div>
+        <div class="field-group">
+          <label for="ace_pot_contribution">Ace Pot Contribution</label>
+          <input type="number" id="ace_pot_contribution" step="0.01" min="0" placeholder="">
+        </div>
+        <div class="field-group">
+          <label for="ace_pot_current_total">Ace Pot Current Total (carry-in)</label>
+          <input type="number" id="ace_pot_current_total" step="0.01" min="0" placeholder="">
+        </div>
+        <div class="field-group">
+          <label for="ctp_contribution">CTP Contribution</label>
+          <input type="number" id="ctp_contribution" step="0.01" min="0" placeholder="">
+        </div>
+        <button type="submit" id="btnSaveLeague">Save Settings</button>
+      </form>
+      <div id="leagueSaveResult" class="status hidden"></div>
+    </div>
+  </div>
+
   <details>
     <summary>Activity Log</summary>
     <div id="log"></div>
@@ -234,10 +291,149 @@
       }
     }
 
+    function setLeagueStatus(type, html, targetId) {
+      var el = document.getElementById(targetId || 'leagueSaveResult');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    async function loadLeagueSettings() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getLeagueSettings' })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueMissingResult');
+          return;
+        }
+
+        if (data.state === 'missing') {
+          document.getElementById('leagueMissing').style.display = '';
+          document.getElementById('leagueForm').style.display = 'none';
+          log('League sheet not found — create prompt shown');
+          return;
+        }
+
+        document.getElementById('leagueMissing').style.display = 'none';
+        document.getElementById('leagueForm').style.display = '';
+
+        if (data.state === 'ok' && data.settings) {
+          var s = data.settings;
+          document.getElementById('league_name').value = s.league_name || '';
+          document.getElementById('description').value = s.description || '';
+          document.getElementById('location').value = s.location || '';
+          document.getElementById('schedule').value = s.schedule || '';
+          document.getElementById('contact_information').value = s.contact_information || '';
+          document.getElementById('entry_fee').value = s.entry_fee !== undefined && s.entry_fee !== '' ? s.entry_fee : '';
+          document.getElementById('ace_pot_contribution').value = s.ace_pot_contribution !== undefined && s.ace_pot_contribution !== '' ? s.ace_pot_contribution : '';
+          document.getElementById('ace_pot_current_total').value = s.ace_pot_current_total !== undefined && s.ace_pot_current_total !== '' ? s.ace_pot_current_total : '';
+          document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
+          log('League settings loaded');
+        } else {
+          log('League sheet exists but has no settings row');
+        }
+      } catch (err) {
+        setLeagueStatus('error', '<strong>Request failed:</strong> ' + err.message, 'leagueMissingResult');
+        log('FAILED to load league settings: ' + err.message);
+      }
+    }
+
+    async function createLeagueSheet() {
+      var btn = document.getElementById('btnCreateLeague');
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      setLeagueStatus('pending', 'Creating League sheet...', 'leagueMissingResult');
+
+      log('Creating League sheet');
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'createLeagueSheet' })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          if (data.alreadyExisted) {
+            setLeagueStatus('ok', '<strong>League sheet already exists.</strong> Loading settings...', 'leagueMissingResult');
+            log('League sheet already existed');
+          } else {
+            setLeagueStatus('ok', '<strong>Done!</strong> League sheet created with ' + data.columns + ' columns.', 'leagueMissingResult');
+            log('SUCCESS: League sheet created');
+          }
+          await loadLeagueSettings();
+        } else {
+          setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueMissingResult');
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setLeagueStatus('error', '<strong>Request failed:</strong> ' + err.message, 'leagueMissingResult');
+        log('FAILED: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create League Sheet';
+      }
+    }
+
+    async function saveLeagueSettings(e) {
+      e.preventDefault();
+
+      var btn = document.getElementById('btnSaveLeague');
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      setLeagueStatus('pending', 'Saving league settings...', 'leagueSaveResult');
+
+      var settings = {
+        league_name: document.getElementById('league_name').value.trim(),
+        description: document.getElementById('description').value.trim(),
+        location: document.getElementById('location').value.trim(),
+        schedule: document.getElementById('schedule').value.trim(),
+        contact_information: document.getElementById('contact_information').value.trim(),
+        entry_fee: document.getElementById('entry_fee').value,
+        ace_pot_contribution: document.getElementById('ace_pot_contribution').value,
+        ace_pot_current_total: document.getElementById('ace_pot_current_total').value,
+        ctp_contribution: document.getElementById('ctp_contribution').value
+      };
+
+      log('Saving league settings');
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'saveLeagueSettings',
+            settings: settings
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          setLeagueStatus('ok', '<strong>Settings saved.</strong>', 'leagueSaveResult');
+          log('SUCCESS: League settings saved');
+        } else {
+          setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueSaveResult');
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setLeagueStatus('error', '<strong>Request failed:</strong> ' + err.message, 'leagueSaveResult');
+        log('FAILED: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save Settings';
+      }
+    }
+
     // Init: set default date
     (function init() {
       document.getElementById('leagueDate').valueAsDate = new Date();
       log('Admin page loaded');
+      loadLeagueSettings();
     })();
   </script>
 </body>
