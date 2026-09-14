@@ -11,7 +11,7 @@ The application reads from and writes to Google Sheets through a server-side ser
 ### Identifiers
 
 - **Primary keys:** UUID v4 strings, generated server-side (e.g., `"a1b2c3d4-e5f6-7890-abcd-ef1234567890"`) — used by `WeeklyLeagues` and `ImportHistory`
-- **WeeklyPlayerRecords identity:** Logical composite of `weekly_league_id` + `member_number`. No per-row UUID. A player has at most one record per weekly sheet.
+- **WeeklyPlayerRecords identity:** `member_number` within each weekly sheet. No per-row UUID. A player has at most one record per weekly sheet.
 - **Foreign keys:** UUID strings matching the referenced primary key (except `member_number`, which is a sequential integer)
 - **`member_number`:** Sequential integer starting at 1. App-generated via `LockService` to prevent collisions. Immutable after assignment. Never reused.
 - **Google Sheets row numbers are ephemeral.** Never use row numbers as identifiers. All lookups and joins use UUIDs (or `member_number` for player identity).
@@ -113,105 +113,104 @@ Fields in this tab fall into four categories based on their source and role:
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 1 | `weekly_league_id` | string (UUID) | Yes | System | Foreign key to `WeeklyLeagues.id`. |
-| 2 | `member_number` | integer | Yes | System | Foreign key to `ClubMembers.member_number`. Immutable after assignment. |
+| 1 | `member_number` | integer | Yes | System | Foreign key to `ClubMembers.member_number`. Immutable after assignment. |
 
 #### Snapshot Fields (copied from ClubMembers at sign-in, never changed after)
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 3 | `player_name_snapshot` | string | Yes | System | Player's name at sign-in time. Preserved for historical accuracy. |
-| 4 | `udisc_username_snapshot` | string | No | System | Player's UDisc username at sign-in time. |
-| 5 | `pdga_number_snapshot` | string | No | System | Player's PDGA number at sign-in time. |
+| 2 | `player_name_snapshot` | string | Yes | System | Player's name at sign-in time. Preserved for historical accuracy. |
+| 3 | `udisc_username_snapshot` | string | No | System | Player's UDisc username at sign-in time. |
+| 4 | `pdga_number_snapshot` | string | No | System | Player's PDGA number at sign-in time. |
 
 #### Tag Fields
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 6 | `in_tag` | integer | Yes | App check-in | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Do not auto-derive from `ClubMembers.current_tag`. Used as input to tag calculation. |
-| 7 | `out_tag` | integer | No | Calculated | Calculated ending tag assigned after tag calculation. Written to `ClubMembers.current_tag` during finalization. Null until calculation runs. |
+| 5 | `in_tag` | integer | Yes | App check-in | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Do not auto-derive from `ClubMembers.current_tag`. Used as input to tag calculation. |
+| 6 | `out_tag` | integer | No | Calculated | Calculated ending tag assigned after tag calculation. Written to `ClubMembers.current_tag` during finalization. Null until calculation runs. |
 
 #### App Check-In Fields
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 8 | `checked_in` | boolean | Yes | App check-in | Explicit participation flag. Set `TRUE` when the player completes check-in through the app. This is the authoritative participation indicator for tag calculation. |
-| 9 | `signed_in_at` | string (ISO 8601 UTC) | Yes | App check-in | Timestamp when the player signed in through the app. The presence of this timestamp historically defined participation; now superseded by `checked_in` for participation logic. |
-| 10 | `paid` | boolean | Yes | App check-in | Payment status for this league, confirmed during check-in. Default: `FALSE`. |
-| 11 | `ctp` | boolean | Yes | App check-in | Closest-to-pin status for this league. Default: `FALSE`. |
-| 12 | `ace_pot` | boolean | Yes | App check-in | Ace pot status for this league. Default: `FALSE`. |
+| 7 | `checked_in` | boolean | Yes | App check-in | Explicit participation flag. Set `TRUE` when the player completes check-in through the app. This is the authoritative participation indicator for tag calculation. |
+| 8 | `signed_in_at` | string (ISO 8601 UTC) | Yes | App check-in | Timestamp when the player signed in through the app. The presence of this timestamp historically defined participation; now superseded by `checked_in` for participation logic. |
+| 9 | `paid` | boolean | Yes | App check-in | Payment status for this league, confirmed during check-in. Default: `FALSE`. |
+| 10 | `ctp` | boolean | Yes | App check-in | Closest-to-pin status for this league. Default: `FALSE`. |
+| 11 | `ace_pot` | boolean | Yes | App check-in | Ace pot status for this league. Default: `FALSE`. |
 
 #### UDisc Import Fields — Identity (for matching)
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 13 | `udisc_name_import` | string | No | Imported | Player name as imported from UDisc. Used for matching and reference. |
-| 14 | `udisc_username_import` | string | No | Imported | UDisc username as imported from UDisc. Primary matching field. |
-| 15 | `udisc_pdga_number_import` | string | No | Imported | PDGA number as imported from UDisc. Secondary matching field. |
+| 12 | `udisc_name_import` | string | No | Imported | Player name as imported from UDisc. Used for matching and reference. |
+| 13 | `udisc_username_import` | string | No | Imported | UDisc username as imported from UDisc. Primary matching field. |
+| 14 | `udisc_pdga_number_import` | string | No | Imported | PDGA number as imported from UDisc. Secondary matching field. |
 
 #### UDisc Import Fields — Score and Performance
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 16 | `score` | integer | No | Imported | Player's round score imported from UDisc (`round_total_score`). This is the primary score used for tag calculation ranking. Lower is better. This is a score, not a bag tag. |
-| 17 | `round_relative_score` | integer | No | Reference-only | Player's score relative to par for this round. Displayed for reference; not used in tag calculation. |
-| 18 | `round_rating` | integer | No | Reference-only | UDisc computed round rating. Displayed for reference; not used in tag calculation. |
-| 19 | `event_relative_score` | integer | No | Reference-only | Player's score relative to par for the entire event. Reference only. |
-| 20 | `event_total_score` | integer | No | Reference-only | Player's total strokes for the entire event. Reference only. |
+| 15 | `score` | integer | No | Imported | Player's round score imported from UDisc (`round_total_score`). This is the primary score used for tag calculation ranking. Lower is better. This is a score, not a bag tag. |
+| 16 | `round_relative_score` | integer | No | Reference-only | Player's score relative to par for this round. Displayed for reference; not used in tag calculation. |
+| 17 | `round_rating` | integer | No | Reference-only | UDisc computed round rating. Displayed for reference; not used in tag calculation. |
+| 18 | `event_relative_score` | integer | No | Reference-only | Player's score relative to par for the entire event. Reference only. |
+| 19 | `event_total_score` | integer | No | Reference-only | Player's total strokes for the entire event. Reference only. |
 
 #### UDisc Import Fields — Participation and Logistics
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 21 | `udisc_checked_in` | boolean | No | Imported | UDisc's participation status. Separate from the app's `checked_in` field. Imported as reference. |
-| 22 | `udisc_paid` | boolean | No | Imported | UDisc's payment status. Separate from the app's `paid` field. Imported as reference. |
-| 23 | `starting_hole` | integer | No | Imported | Starting hole number from UDisc data. |
-| 24 | `start_time` | string (ISO 8601 UTC) | No | Imported | Start time from UDisc data. |
-| 25 | `division` | string | No | Reference-only | Player's division as recorded in UDisc (e.g., "MPO", "FPO", "MA1"). |
-| 26 | `udisc_position` | integer | No | Reference-only | Finishing position within the division as recorded by UDisc. |
-| 27 | `udisc_position_raw` | integer | No | Reference-only | Raw position before tie adjustments as recorded by UDisc. |
+| 20 | `udisc_checked_in` | boolean | No | Imported | UDisc's participation status. Separate from the app's `checked_in` field. Imported as reference. |
+| 21 | `udisc_paid` | boolean | No | Imported | UDisc's payment status. Separate from the app's `paid` field. Imported as reference. |
+| 22 | `starting_hole` | integer | No | Imported | Starting hole number from UDisc data. |
+| 23 | `start_time` | string (ISO 8601 UTC) | No | Imported | Start time from UDisc data. |
+| 24 | `division` | string | No | Reference-only | Player's division as recorded in UDisc (e.g., "MPO", "FPO", "MA1"). |
+| 25 | `udisc_position` | integer | No | Reference-only | Finishing position within the division as recorded by UDisc. |
+| 26 | `udisc_position_raw` | integer | No | Reference-only | Raw position before tie adjustments as recorded by UDisc. |
 
 #### UDisc Import Fields — Hole-by-Hole Scores
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 28 | `hole_1` | integer | No | Imported | Score on hole 1. |
-| 29 | `hole_2` | integer | No | Imported | Score on hole 2. |
-| 30 | `hole_3` | integer | No | Imported | Score on hole 3. |
-| 31 | `hole_4` | integer | No | Imported | Score on hole 4. |
-| 32 | `hole_5` | integer | No | Imported | Score on hole 5. |
-| 33 | `hole_6` | integer | No | Imported | Score on hole 6. |
-| 34 | `hole_7` | integer | No | Imported | Score on hole 7. |
-| 35 | `hole_8` | integer | No | Imported | Score on hole 8. |
-| 36 | `hole_9` | integer | No | Imported | Score on hole 9. |
-| 37 | `hole_10` | integer | No | Imported | Score on hole 10. |
-| 38 | `hole_11` | integer | No | Imported | Score on hole 11. |
-| 39 | `hole_12` | integer | No | Imported | Score on hole 12. |
-| 40 | `hole_13` | integer | No | Imported | Score on hole 13. |
-| 41 | `hole_14` | integer | No | Imported | Score on hole 14. |
-| 42 | `hole_15` | integer | No | Imported | Score on hole 15. |
-| 43 | `hole_16` | integer | No | Imported | Score on hole 16. |
-| 44 | `hole_17` | integer | No | Imported | Score on hole 17. |
-| 45 | `hole_18` | integer | No | Imported | Score on hole 18. |
+| 27 | `hole_1` | integer | No | Imported | Score on hole 1. |
+| 28 | `hole_2` | integer | No | Imported | Score on hole 2. |
+| 29 | `hole_3` | integer | No | Imported | Score on hole 3. |
+| 30 | `hole_4` | integer | No | Imported | Score on hole 4. |
+| 31 | `hole_5` | integer | No | Imported | Score on hole 5. |
+| 32 | `hole_6` | integer | No | Imported | Score on hole 6. |
+| 33 | `hole_7` | integer | No | Imported | Score on hole 7. |
+| 34 | `hole_8` | integer | No | Imported | Score on hole 8. |
+| 35 | `hole_9` | integer | No | Imported | Score on hole 9. |
+| 36 | `hole_10` | integer | No | Imported | Score on hole 10. |
+| 37 | `hole_11` | integer | No | Imported | Score on hole 11. |
+| 38 | `hole_12` | integer | No | Imported | Score on hole 12. |
+| 39 | `hole_13` | integer | No | Imported | Score on hole 13. |
+| 40 | `hole_14` | integer | No | Imported | Score on hole 14. |
+| 41 | `hole_15` | integer | No | Imported | Score on hole 15. |
+| 42 | `hole_16` | integer | No | Imported | Score on hole 16. |
+| 43 | `hole_17` | integer | No | Imported | Score on hole 17. |
+| 44 | `hole_18` | integer | No | Imported | Score on hole 18. |
 
 #### UDisc Import Fields — Reference Only
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 46 | `udisc_ending_tag` | integer | No | Reference-only | Optional ending bag tag value from UDisc (`bag_tag_at_end`). Retained for reference and transition purposes only. Must not be used to calculate `out_tag`. |
+| 45 | `udisc_ending_tag` | integer | No | Reference-only | Optional ending bag tag value from UDisc (`bag_tag_at_end`). Retained for reference and transition purposes only. Must not be used to calculate `out_tag`. |
 
 #### Admin Fields
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 47 | `notes` | string | No | System | Admin notes about this player's participation. |
+| 46 | `notes` | string | No | System | Admin notes about this player's participation. |
 
 #### Timestamps
 
 | # | Column Name | Data Type | Required | Category | Description |
 |---|-------------|-----------|----------|----------|-------------|
-| 48 | `created_at` | string (ISO 8601 UTC) | Yes | System | Timestamp when this record was created (at sign-in). |
-| 49 | `updated_at` | string (ISO 8601 UTC) | Yes | System | Timestamp of last modification to this record. |
+| 47 | `created_at` | string (ISO 8601 UTC) | Yes | System | Timestamp when this record was created (at sign-in). |
+| 48 | `updated_at` | string (ISO 8601 UTC) | Yes | System | Timestamp of last modification to this record. |
 
 ### Notes
 
@@ -289,14 +288,13 @@ Fields in this tab fall into four categories based on their source and role:
 ## Relationships
 
 ```
-ClubMembers (1) ---< (many) WeeklyPlayerRecords >--- (1) WeeklyLeagues
+ClubMembers (1) ---< (many) WeeklyPlayerRecords
 WeeklyLeagues (1) ---< (many) ImportHistory
 ```
 
 ### Foreign Key Constraints (Application-Enforced)
 
 - `WeeklyPlayerRecords.member_number` must reference a valid `ClubMembers.member_number`
-- `WeeklyPlayerRecords.weekly_league_id` must reference a valid `WeeklyLeagues.id`
 - `ImportHistory.weekly_league_id` must reference a valid `WeeklyLeagues.id`
 
 Google Sheets does not enforce foreign keys. The application layer must validate referential integrity on write operations.
