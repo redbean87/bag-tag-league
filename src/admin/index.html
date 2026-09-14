@@ -109,12 +109,17 @@
 
   <div class="card">
     <h2>Setup Club Members</h2>
-    <p class="help-text">
-      Create the <code>ClubMembers</code> tab if it doesn't exist. This is a one-time setup step.
-      Players will register themselves during check-in.
-    </p>
-    <button type="button" id="btnCreateMaster" onclick="createClubMembersTab()">Create Club Members Tab</button>
-    <div id="masterResult" class="status hidden"></div>
+    <div id="clubMembersMissing">
+      <p class="help-text">
+        Create the <code>ClubMembers</code> tab if it doesn't exist. This is a one-time setup step.
+        Players will register themselves during check-in.
+      </p>
+      <button type="button" id="btnCreateMaster" onclick="createClubMembersTab()">Create Club Members Tab</button>
+      <div id="masterResult" class="status hidden"></div>
+    </div>
+    <div id="clubMembersExists" style="display:none;">
+      <p class="help-text">The Club Members sheet is already set up.</p>
+    </div>
   </div>
 
   <div class="card" id="leagueCard">
@@ -252,6 +257,36 @@
       el.innerHTML = html;
     }
 
+    async function loadClubMembersStatus() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getClubMembersStatus' })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setMasterStatus('error', '<strong>Error:</strong> ' + data.message);
+          return;
+        }
+
+        if (data.state === 'missing') {
+          document.getElementById('clubMembersMissing').style.display = '';
+          document.getElementById('clubMembersExists').style.display = 'none';
+          log('ClubMembers sheet not found — create prompt shown');
+          return;
+        }
+
+        document.getElementById('clubMembersMissing').style.display = 'none';
+        document.getElementById('clubMembersExists').style.display = '';
+        log('ClubMembers sheet exists');
+      } catch (err) {
+        setMasterStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED to load club members status: ' + err.message);
+      }
+    }
+
     async function createClubMembersTab() {
       var btn = document.getElementById('btnCreateMaster');
       btn.disabled = true;
@@ -272,12 +307,12 @@
 
         if (data.status === 'ok') {
           if (data.alreadyExisted) {
-            setMasterStatus('ok', '<strong>ClubMembers tab already exists.</strong> No action needed.');
             log('ClubMembers tab already existed');
           } else {
-            setMasterStatus('ok', '<strong>Done!</strong> ClubMembers tab created with ' + data.columns + ' columns.');
             log('SUCCESS: ClubMembers tab created');
           }
+          document.getElementById('clubMembersMissing').style.display = 'none';
+          document.getElementById('clubMembersExists').style.display = '';
         } else {
           setMasterStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
@@ -434,6 +469,7 @@
       document.getElementById('leagueDate').valueAsDate = new Date();
       log('Admin page loaded');
       loadLeagueSettings();
+      loadClubMembersStatus();
     })();
   </script>
 </body>

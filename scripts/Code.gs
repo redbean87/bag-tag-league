@@ -116,6 +116,9 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
 
+    if (data.action === 'getClubMembersStatus') {
+      return handleGetClubMembersStatus(data);
+    }
     if (data.action === 'createClubMembersTab') {
       return handleCreateClubMembersTab(data);
     }
@@ -143,6 +146,21 @@ function doPost(e) {
   } catch (error) {
     return respond('error', error.message);
   }
+}
+
+/**
+ * Returns whether the ClubMembers sheet exists.
+ * Used by the admin page to show the correct setup state.
+ */
+function handleGetClubMembersStatus(data) {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = spreadsheet.getSheetByName('ClubMembers');
+
+  if (!sheet) {
+    return respond('ok', 'ClubMembers sheet not found.', { state: 'missing' });
+  }
+
+  return respond('ok', 'ClubMembers sheet found.', { state: 'ok' });
 }
 
 /**
