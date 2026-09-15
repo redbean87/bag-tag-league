@@ -291,31 +291,25 @@
   <!-- 3. Active League Date -->
   <div class="card" id="activeLeagueDateCard">
     <h2>Active League Date</h2>
-    <p class="help-text">Select an existing league date to work with.</p>
+    <p class="help-text">Select a date to work with. Dates with existing sheets will unlock the workflow.</p>
     <div class="field-group">
-      <label for="activeLeagueDate">League Date</label>
-      <select id="activeLeagueDate" onchange="onActiveLeagueDateChange()">
-        <option value="">-- Select a league date --</option>
-      </select>
+      <label for="activeLeagueDate">Active League Date</label>
+      <input type="date" id="activeLeagueDate" onchange="onActiveLeagueDateChange()">
     </div>
-    <div id="activeLeagueDateEmpty" style="display:none;">
-      <p class="help-text">No league days available. Create a league day to continue.</p>
-    </div>
+    <div id="activeLeagueDateStatus"></div>
   </div>
 
   <!-- 4. Create League Day -->
   <div class="card">
     <h2>Create League Day</h2>
     <p class="help-text">
-      Pick a date and create a new tab in the spreadsheet. The tab will be named
+      Create a new tab in the spreadsheet for the Active League Date. The tab will be named
       <code>Week YYYY-MM-DD</code> with the standard 48-column roster template.
     </p>
-    <form id="createForm" onsubmit="createWeeklyTab(event)">
-      <div class="field-group">
-        <label for="leagueDate">League Date</label>
-        <input type="date" id="leagueDate" required onchange="checkCreateLeagueDate()">
-      </div>
-      <div id="createDateStatus" class="status hidden"></div>
+    <div id="createLeagueDaySheetExists" style="display:none;">
+      <p class="status ok" style="margin-bottom:0;"><strong>League Already Created</strong></p>
+    </div>
+    <form id="createForm" onsubmit="createWeeklyTab(event)" style="display:none;">
       <button type="submit" id="btnCreate">Create League Day</button>
     </form>
     <div id="result" class="status hidden"></div>
@@ -526,18 +520,59 @@
       return document.getElementById('activeLeagueDate').value;
     }
 
+    function sheetExistsForDate(dateStr) {
+      return cachedWeeklyTabs.some(function(w) { return w.date === dateStr; });
+    }
+
     function updateGating() {
       var activeDate = getActiveLeagueDate();
-      var hasValidSheet = activeDate && cachedWeeklyTabs.some(function(w) { return w.date === activeDate; });
+      var hasSheet = activeDate && sheetExistsForDate(activeDate);
       var gateMessage = document.getElementById('gateMessage');
       var gatedSections = document.getElementById('gatedSections');
 
-      if (hasValidSheet) {
+      if (hasSheet) {
         gateMessage.style.display = 'none';
         gatedSections.classList.remove('gated');
       } else {
         gateMessage.style.display = '';
         gatedSections.classList.add('gated');
+      }
+
+      updateCreateLeagueDayStatus();
+      updateActiveLeagueDateStatus();
+    }
+
+    function updateActiveLeagueDateStatus() {
+      var activeDate = getActiveLeagueDate();
+      var statusEl = document.getElementById('activeLeagueDateStatus');
+      if (!activeDate) {
+        statusEl.innerHTML = '';
+        return;
+      }
+      if (sheetExistsForDate(activeDate)) {
+        statusEl.innerHTML = '<p class="help-text" style="margin-bottom:0; color:#34a853;">Sheet exists: <code>Week ' + activeDate + '</code></p>';
+      } else {
+        statusEl.innerHTML = '<p class="help-text" style="margin-bottom:0; color:#888;">No sheet for this date yet.</p>';
+      }
+    }
+
+    function updateCreateLeagueDayStatus() {
+      var activeDate = getActiveLeagueDate();
+      var existsEl = document.getElementById('createLeagueDaySheetExists');
+      var formEl = document.getElementById('createForm');
+
+      if (!activeDate) {
+        existsEl.style.display = 'none';
+        formEl.style.display = 'none';
+        return;
+      }
+
+      if (sheetExistsForDate(activeDate)) {
+        existsEl.style.display = '';
+        formEl.style.display = 'none';
+      } else {
+        existsEl.style.display = 'none';
+        formEl.style.display = '';
       }
     }
 
@@ -559,39 +594,17 @@
       clearFinalizeRoundStatus();
     }
 
-    function checkCreateLeagueDate() {
-      var dateInput = document.getElementById('leagueDate');
-      var leagueDate = dateInput.value;
-      var statusEl = document.getElementById('createDateStatus');
-      var btn = document.getElementById('btnCreate');
-
-      if (!leagueDate) {
-        statusEl.className = 'status hidden';
-        statusEl.innerHTML = '';
-        btn.disabled = false;
-        return;
-      }
-
-      var exists = cachedWeeklyTabs.some(function(w) { return w.date === leagueDate; });
-
-      if (exists) {
-        statusEl.innerHTML = '<strong>League Already Created</strong>';
-        statusEl.className = 'status ok';
-        btn.disabled = true;
-      } else {
-        statusEl.className = 'status hidden';
-        statusEl.innerHTML = '';
-        btn.disabled = false;
-      }
-    }
-
     async function createWeeklyTab(e) {
       e.preventDefault();
 
-      var dateInput = document.getElementById('leagueDate');
-      var leagueDate = dateInput.value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) {
-        setStatus('error', '<strong>Please select a league date.</strong>');
+        setStatus('error', '<strong>Please select an Active League Date first.</strong>');
+        return;
+      }
+
+      if (sheetExistsForDate(leagueDate)) {
+        setStatus('error', '<strong>League Already Created</strong> for ' + leagueDate + '.');
         return;
       }
 
@@ -619,7 +632,6 @@
           await loadWeeklyTabs();
           document.getElementById('activeLeagueDate').value = leagueDate;
           updateGating();
-          checkCreateLeagueDate();
         } else {
           setStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
@@ -862,27 +874,6 @@
         }
 
         cachedWeeklyTabs = data.weeks || [];
-
-        var select = document.getElementById('activeLeagueDate');
-        var emptyMsg = document.getElementById('activeLeagueDateEmpty');
-
-        while (select.options.length > 1) {
-          select.remove(1);
-        }
-
-        if (cachedWeeklyTabs.length === 0) {
-          emptyMsg.style.display = '';
-        } else {
-          emptyMsg.style.display = 'none';
-          for (var i = 0; i < cachedWeeklyTabs.length; i++) {
-            var week = cachedWeeklyTabs[i];
-            var option = document.createElement('option');
-            option.value = week.date;
-            option.textContent = week.date + ' (' + week.sheet_name + ')';
-            select.appendChild(option);
-          }
-        }
-
         updateGating();
         log('Loaded ' + cachedWeeklyTabs.length + ' weekly tab(s)');
       } catch (err) {
@@ -1675,7 +1666,11 @@
 
     // Init
     (function init() {
-      document.getElementById('leagueDate').valueAsDate = new Date();
+      var today = new Date();
+      var yyyy = today.getFullYear();
+      var mm = String(today.getMonth() + 1).padStart(2, '0');
+      var dd = String(today.getDate()).padStart(2, '0');
+      document.getElementById('activeLeagueDate').value = yyyy + '-' + mm + '-' + dd;
       log('Admin page loaded');
       loadLeagueSettings();
       loadClubMembersStatus();
