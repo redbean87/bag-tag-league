@@ -93,6 +93,110 @@ const LEAGUE_SHEET_HEADERS = [
   'updated_at'
 ];
 
+// ─── Sheet-position helpers ─────────────────────────────────────────────────
+
+/**
+ * Ensures a named sheet exists in the spreadsheet.
+ * If it does not exist, creates it with the given headers, bolds row 1, and freezes row 1.
+ * Returns { sheet, alreadyExisted }.
+ */
+function ensureCanonicalSheet(spreadsheet, name, headers) {
+  const existing = spreadsheet.getSheetByName(name);
+  if (existing) {
+    return { sheet: existing, alreadyExisted: true };
+  }
+
+  const sheet = spreadsheet.insertSheet(name);
+  if (headers && headers.length > 0) {
+    sheet.appendRow(headers);
+    const headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+
+  return { sheet: sheet, alreadyExisted: false };
+}
+
+/**
+ * Moves a sheet to a specific 0-based index position in the spreadsheet.
+ * Uses setActiveSheet + moveActiveSheet (1-based position).
+ */
+function moveSheetToPosition(spreadsheet, sheetName, targetIndex) {
+  const sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet) return;
+
+  spreadsheet.setActiveSheet(sheet);
+  spreadsheet.moveActiveSheet(targetIndex + 1);
+}
+
+/**
+ * Returns all sheets whose names match the pattern "Week YYYY-MM-DD",
+ * sorted chronologically (earliest date first).
+ */
+function getWeekSheets(spreadsheet) {
+  return spreadsheet.getSheets()
+    .filter(function(s) {
+      return /^Week \d{4}-\d{2}-\d{2}$/.test(s.getName());
+    })
+    .sort(function(a, b) {
+      return a.getName().localeCompare(b.getName());
+    });
+}
+
+/**
+ * Organizes all Week YYYY-MM-DD sheets in chronological order after
+ * League (position 0) and ClubMembers (position 1).
+ *
+ * Explicitly enforces canonical positions for League and ClubMembers,
+ * then sorts Week sheets in reverse order (last-to-first) so that
+ * earlier moves do not disturb already-placed later sheets.
+ * Leaves unrelated sheets untouched at the end.
+ */
+function organizeWeekSheetsChronologically(spreadsheet) {
+  // Step 1: Ensure League is at position 0
+  var league = spreadsheet.getSheetByName('League');
+  if (league && league.getIndex() !== 1) {
+    moveSheetToPosition(spreadsheet, 'League', 0);
+  }
+
+  // Step 2: Ensure ClubMembers is at position 1
+  var clubMembers = spreadsheet.getSheetByName('ClubMembers');
+  if (clubMembers && clubMembers.getIndex() !== 2) {
+    moveSheetToPosition(spreadsheet, 'ClubMembers', 1);
+  }
+
+  // Step 3: Sort Week sheets chronologically, iterating in reverse
+  // so earlier weeks don't shift when later weeks are moved
+  var weekSheets = getWeekSheets(spreadsheet);
+  for (var i = weekSheets.length - 1; i >= 0; i--) {
+    var targetIndex = i + 2; // League=0, ClubMembers=1, Weeks start at 2
+    var currentSheet = spreadsheet.getSheetByName(weekSheets[i].getName());
+    if (currentSheet.getIndex() !== targetIndex + 1) {
+      moveSheetToPosition(spreadsheet, weekSheets[i].getName(), targetIndex);
+    }
+  }
+}
+
+/**
+ * Removes the default blank sheet from a new spreadsheet if it is safe to do so.
+ * Only removes a sheet that has no data (headers or content) and is not the only sheet.
+ * Does not assume the default sheet is named "Sheet1".
+ */
+function removeDefaultBlankSheet(spreadsheet) {
+  var sheets = spreadsheet.getSheets();
+  if (sheets.length <= 1) return;
+
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    if (sheet.getLastRow() === 0 && sheet.getLastColumn() === 0) {
+      spreadsheet.deleteSheet(sheet);
+      return;
+    }
+  }
+}
+
+// ─── End sheet-position helpers ─────────────────────────────────────────────
+
 /**
  * Handles GET requests. Returns a test response.
  */
@@ -190,12 +294,30 @@ function handleGetClubMembersStatus(data) {
 /**
  * Creates the ClubMembers tab if it does not already exist.
  * One-time admin setup action.
+ * Ensures League exists first (prerequisite for canonical order).
+ * Ensures ClubMembers is positioned immediately after League.
+ * Cleans up default blank sheets after creation.
  */
 function handleCreateClubMembersTab(data) {
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+  // Ensure League exists first — prerequisite for canonical order
+  ensureCanonicalSheet(spreadsheet, 'League', LEAGUE_SHEET_HEADERS);
+  if (spreadsheet.getSheetByName('League').getIndex() !== 1) {
+    moveSheetToPosition(spreadsheet, 'League', 0);
+  }
+
   const existing = spreadsheet.getSheetByName('ClubMembers');
 
   if (existing) {
+    // Ensure position immediately after League
+    if (existing.getIndex() !== 2) {
+      moveSheetToPosition(spreadsheet, 'ClubMembers', 1);
+    }
+
+    // Re-sort Week sheets in case ClubMembers was displaced
+    organizeWeekSheetsChronologically(spreadsheet);
+
     return respond('ok', 'ClubMembers tab already exists.', {
       alreadyExisted: true
     });
@@ -208,6 +330,15 @@ function handleCreateClubMembersTab(data) {
   headerRange.setFontWeight('bold');
   sheet.setFrozenRows(1);
 
+  // Position immediately after League
+  moveSheetToPosition(spreadsheet, 'ClubMembers', 1);
+
+  // Re-sort Week sheets that may already exist
+  organizeWeekSheetsChronologically(spreadsheet);
+
+  // Clean up default blank sheet if present
+  removeDefaultBlankSheet(spreadsheet);
+
   return respond('ok', 'ClubMembers tab created successfully.', {
     alreadyExisted: false,
     columns: CLUB_MEMBER_HEADERS.length
@@ -218,6 +349,9 @@ function handleCreateClubMembersTab(data) {
  * Creates a new weekly tab in the spreadsheet for the given league date.
  * Uses the documented WeeklyPlayerRecords schema (48 columns) as the template.
  * Prevents duplicate tabs for the same date.
+ * Ensures League (position 1) and ClubMembers (position 2) exist first.
+ * Inserts the new Week sheet into the correct chronological position.
+ * Cleans up default blank sheets after creation.
  */
 function handleCreateWeeklyTab(data) {
   const leagueDate = data.leagueDate;
@@ -236,6 +370,17 @@ function handleCreateWeeklyTab(data) {
 
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
 
+  // Ensure canonical prerequisite sheets exist in correct order
+  ensureCanonicalSheet(spreadsheet, 'League', LEAGUE_SHEET_HEADERS);
+  if (spreadsheet.getSheetByName('League').getIndex() !== 1) {
+    moveSheetToPosition(spreadsheet, 'League', 0);
+  }
+
+  ensureCanonicalSheet(spreadsheet, 'ClubMembers', CLUB_MEMBER_HEADERS);
+  if (spreadsheet.getSheetByName('ClubMembers').getIndex() !== 2) {
+    moveSheetToPosition(spreadsheet, 'ClubMembers', 1);
+  }
+
   // Check for duplicate tab
   const existing = spreadsheet.getSheetByName(tabName);
   if (existing) {
@@ -252,6 +397,12 @@ function handleCreateWeeklyTab(data) {
   const headerRange = sheet.getRange(1, 1, 1, WEEKLY_RECORD_HEADERS.length);
   headerRange.setFontWeight('bold');
   sheet.setFrozenRows(1);
+
+  // Organize all Week sheets chronologically after canonical sheets
+  organizeWeekSheetsChronologically(spreadsheet);
+
+  // Clean up default blank sheet if present
+  removeDefaultBlankSheet(spreadsheet);
 
   return respond('ok', 'Tab "' + tabName + '" created successfully.', {
     tabName: tabName,
@@ -538,6 +689,7 @@ function handleSubmitCheckIn(data) {
  * Initializes with headers and an empty row for future settings.
  * Idempotent: returns alreadyExisted=true if the sheet already exists.
  * Migrates existing 12-column sheets to the current 15-column schema.
+ * Ensures League is at position 1 (first tab).
  */
 function handleCreateLeagueSheet(data) {
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -593,6 +745,14 @@ function handleCreateLeagueSheet(data) {
       headerRange.setFontWeight('bold');
       existing.setFrozenRows(1);
 
+      // Ensure League is at position 1 (first tab)
+      if (existing.getIndex() !== 1) {
+        moveSheetToPosition(spreadsheet, 'League', 0);
+      }
+
+      // Clean up default blank sheet if present
+      removeDefaultBlankSheet(spreadsheet);
+
       return respond('ok', 'League sheet migrated to new schema.', {
         alreadyExisted: true,
         migrated: true,
@@ -600,7 +760,14 @@ function handleCreateLeagueSheet(data) {
       });
     }
 
-    // Already correct schema
+    // Already correct schema — ensure position
+    if (existing.getIndex() !== 1) {
+      moveSheetToPosition(spreadsheet, 'League', 0);
+    }
+
+    // Clean up default blank sheet if present
+    removeDefaultBlankSheet(spreadsheet);
+
     return respond('ok', 'League sheet already exists.', {
       alreadyExisted: true,
       migrated: false
@@ -613,6 +780,12 @@ function handleCreateLeagueSheet(data) {
   const headerRange = sheet.getRange(1, 1, 1, LEAGUE_SHEET_HEADERS.length);
   headerRange.setFontWeight('bold');
   sheet.setFrozenRows(1);
+
+  // Ensure League is at position 1 (first tab)
+  moveSheetToPosition(spreadsheet, 'League', 0);
+
+  // Clean up default blank sheet if present
+  removeDefaultBlankSheet(spreadsheet);
 
   return respond('ok', 'League sheet created successfully.', {
     alreadyExisted: false,
