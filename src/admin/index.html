@@ -197,12 +197,17 @@
     .modal-close:hover {
       background: #333;
     }
+    #gatedSections.gated {
+      opacity: 0.5;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
   <h1>Bag Tag League</h1>
   <p class="subtitle">League Admin</p>
 
+  <!-- 1. League Settings -->
   <details class="card" id="leagueCard">
     <summary>
       <div class="summary-text">
@@ -267,22 +272,7 @@
     </div>
   </details>
 
-  <div class="card">
-    <h2>Create League Day</h2>
-    <p class="help-text">
-      Pick a date and create a new tab in the spreadsheet. The tab will be named
-      <code>Week YYYY-MM-DD</code> with the standard 48-column roster template.
-    </p>
-    <form id="createForm" onsubmit="createWeeklyTab(event)">
-      <div class="field-group">
-        <label for="leagueDate">League Date</label>
-        <input type="date" id="leagueDate" required>
-      </div>
-      <button type="submit" id="btnCreate">Create League Day</button>
-    </form>
-    <div id="result" class="status hidden"></div>
-  </div>
-
+  <!-- 2. Setup Club Members -->
   <div class="card">
     <h2>Setup Club Members</h2>
     <div id="clubMembersMissing">
@@ -298,38 +288,65 @@
     </div>
   </div>
 
-  <div class="card">
-    <h2>Player Sign-In QR Code</h2>
-    <p class="help-text">
-      Display a QR code that players can scan to open the sign-in page on their phone.
-    </p>
-    <button type="button" id="btnShowQR" onclick="showSignInQR()">Show Player Sign-In QR Code</button>
+  <!-- 3. Active League Date -->
+  <div class="card" id="activeLeagueDateCard">
+    <h2>Active League Date</h2>
+    <p class="help-text">Select an existing league date to work with.</p>
+    <div class="field-group">
+      <label for="activeLeagueDate">League Date</label>
+      <select id="activeLeagueDate" onchange="onActiveLeagueDateChange()">
+        <option value="">-- Select a league date --</option>
+      </select>
+    </div>
+    <div id="activeLeagueDateEmpty" style="display:none;">
+      <p class="help-text">No league days available. Create a league day to continue.</p>
+    </div>
   </div>
 
-  <div class="card" id="preRoundCard">
-    <h2>Pre-Round Review</h2>
-    <div id="preRoundMissing">
+  <!-- 4. Create League Day -->
+  <div class="card">
+    <h2>Create League Day</h2>
+    <p class="help-text">
+      Pick a date and create a new tab in the spreadsheet. The tab will be named
+      <code>Week YYYY-MM-DD</code> with the standard 48-column roster template.
+    </p>
+    <form id="createForm" onsubmit="createWeeklyTab(event)">
+      <div class="field-group">
+        <label for="leagueDate">League Date</label>
+        <input type="date" id="leagueDate" required onchange="checkCreateLeagueDate()">
+      </div>
+      <div id="createDateStatus" class="status hidden"></div>
+      <button type="submit" id="btnCreate">Create League Day</button>
+    </form>
+    <div id="result" class="status hidden"></div>
+  </div>
+
+  <!-- Gate message (shown when no active date) -->
+  <div id="gateMessage" class="card" style="display:none;">
+    <p class="help-text" style="margin-bottom:0;">Select an existing league date or create a league day to access this section.</p>
+  </div>
+
+  <!-- Gated sections -->
+  <div id="gatedSections">
+
+    <!-- 5. Player Sign-In QR Code -->
+    <div class="card" id="playerSignInCard">
+      <h2>Player Sign-In QR Code</h2>
       <p class="help-text">
-        The <code>League</code> sheet does not exist yet. Create it to enable pre-round review.
+        Display a QR code that players can scan to open the sign-in page on their phone.
       </p>
+      <button type="button" id="btnShowQR" onclick="showSignInQR()">Show Player Sign-In QR Code</button>
     </div>
-    <div id="preRoundForm" style="display:none;">
+
+    <!-- 6. Pre-Round Review -->
+    <div class="card" id="preRoundCard">
+      <h2>Pre-Round Review</h2>
       <p class="help-text">
-        Select a league date to review participating players and calculate ace pot and CTP totals.
+        Review participating players and calculate ace pot and CTP totals.
         The calculated totals are based on League settings and checked-in players.
         You can override the final totals before saving.
       </p>
-      <div class="field-group">
-        <label for="preRoundDate">League Date</label>
-        <select id="preRoundDate" onchange="loadPreRoundReview()">
-          <option value="">-- Select a league date --</option>
-        </select>
-      </div>
-      <div id="preRoundNoWeeks" style="display:none;">
-        <p class="help-text">
-          No weekly tabs found. Create a league day first using the form above.
-        </p>
-      </div>
+      <button type="button" id="btnLoadPreRound" onclick="loadPreRoundReview()">Load Review</button>
       <div id="preRoundReviewData" style="display:none;">
         <h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Participation</h3>
         <div class="field-group">
@@ -389,33 +406,15 @@
       </div>
       <div id="preRoundResult" class="status hidden"></div>
     </div>
-  </div>
 
-  <div class="card" id="udiscImportCard">
-    <h2>UDisc Import</h2>
-    <div id="udiscImportMissing">
-      <p class="help-text">
-        The <code>League</code> sheet or <code>ClubMembers</code> tab does not exist yet.
-        Complete setup above before importing UDisc data.
-      </p>
-    </div>
-    <div id="udiscImportForm" style="display:none;">
+    <!-- 7. UDisc Import -->
+    <div class="card" id="udiscImportCard">
+      <h2>UDisc Import</h2>
       <p class="help-text">
         Upload a UDisc <code>Event results</code> xlsx export to import scores
         and player data into a weekly sheet. Preview is write-free. Approval
         commits the import.
       </p>
-      <div class="field-group">
-        <label for="udiscImportDate">League Date</label>
-        <select id="udiscImportDate">
-          <option value="">-- Select a league date --</option>
-        </select>
-      </div>
-      <div id="udiscImportNoWeeks" style="display:none;">
-        <p class="help-text">
-          No weekly tabs found. Create a league day first using the form above.
-        </p>
-      </div>
       <div class="field-group">
         <label for="udiscFile">UDisc Export (.xlsx)</label>
         <input type="file" id="udiscFile" accept=".xlsx,.xls">
@@ -424,60 +423,43 @@
       <div id="udiscImportPreview" style="display:none;"></div>
       <div id="udiscImportResult" class="status hidden"></div>
     </div>
-  </div>
 
-  <div class="card" id="tagCalcCard">
-    <h2>Tag Calculation</h2>
-    <p class="help-text">
-      Calculate tag assignments for all players in a weekly league.
-      Every player in the selected week's sheet is included.
-      Preview is write-free. Confirm writes <code>out_tag</code> values.
-    </p>
-    <div class="field-group">
-      <label for="tagCalcDate">League Date</label>
-      <select id="tagCalcDate">
-        <option value="">-- Select a league date --</option>
-      </select>
-    </div>
-    <div id="tagCalcNoWeeks" style="display:none;">
+    <!-- 8. Tag Calculation -->
+    <div class="card" id="tagCalcCard">
+      <h2>Tag Calculation</h2>
       <p class="help-text">
-        No weekly tabs found. Create a league day first using the form above.
+        Calculate tag assignments for all players in a weekly league.
+        Every player in the selected week's sheet is included.
+        Preview is write-free. Confirm writes <code>out_tag</code> values.
       </p>
+      <button type="button" id="btnCalcTags" onclick="calculateTags()">Calculate Tags</button>
+      <div id="tagCalcPreview" style="display:none;"></div>
+      <div id="tagCalcResult" class="status hidden"></div>
     </div>
-    <button type="button" id="btnCalcTags" onclick="calculateTags()">Calculate Tags</button>
-    <div id="tagCalcPreview" style="display:none;"></div>
-    <div id="tagCalcResult" class="status hidden"></div>
-  </div>
 
-  <div class="card" id="finalizeRoundCard">
-    <h2>Finalize Round</h2>
-    <p class="help-text">
-      Propagate <code>out_tag</code> values from the weekly sheet to each
-      matching ClubMembers record's <code>current_tag</code>. Only players
-      with a confirmed, nonblank <code>out_tag</code> and a matching
-      ClubMembers record are updated.
-    </p>
-    <div class="field-group">
-      <label for="finalizeRoundDate">League Date</label>
-      <select id="finalizeRoundDate">
-        <option value="">-- Select a league date --</option>
-      </select>
-    </div>
-    <div id="finalizeRoundNoWeeks" style="display:none;">
+    <!-- 9. Finalize Round -->
+    <div class="card" id="finalizeRoundCard">
+      <h2>Finalize Round</h2>
       <p class="help-text">
-        No weekly tabs found. Create a league day first using the form above.
+        Propagate <code>out_tag</code> values from the weekly sheet to each
+        matching ClubMembers record's <code>current_tag</code>. Only players
+        with a confirmed, nonblank <code>out_tag</code> and a matching
+        ClubMembers record are updated.
       </p>
+      <button type="button" id="btnPreviewFinalize" onclick="previewFinalizeRound()">Preview</button>
+      <div id="finalizeRoundPreview" style="display:none;"></div>
+      <div id="finalizeRoundResult" class="status hidden"></div>
     </div>
-    <button type="button" id="btnPreviewFinalize" onclick="previewFinalizeRound()">Preview</button>
-    <div id="finalizeRoundPreview" style="display:none;"></div>
-    <div id="finalizeRoundResult" class="status hidden"></div>
+
   </div>
 
+  <!-- 10. Activity Log -->
   <details>
     <summary>Activity Log</summary>
     <div id="log"></div>
   </details>
 
+  <!-- QR Modal -->
   <div id="qrModal" class="modal-overlay" onclick="closeQRModal(event)">
     <div class="modal-content">
       <h2>Player Sign-In</h2>
@@ -493,6 +475,8 @@
     var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
 
     var PLAYER_SIGN_IN_PATH = '/player/sign-in/';
+
+    var cachedWeeklyTabs = [];
 
     function showSignInQR() {
       var url = window.location.origin + PLAYER_SIGN_IN_PATH;
@@ -538,6 +522,69 @@
       el.innerHTML = '';
     }
 
+    function getActiveLeagueDate() {
+      return document.getElementById('activeLeagueDate').value;
+    }
+
+    function updateGating() {
+      var activeDate = getActiveLeagueDate();
+      var hasValidSheet = activeDate && cachedWeeklyTabs.some(function(w) { return w.date === activeDate; });
+      var gateMessage = document.getElementById('gateMessage');
+      var gatedSections = document.getElementById('gatedSections');
+
+      if (hasValidSheet) {
+        gateMessage.style.display = 'none';
+        gatedSections.classList.remove('gated');
+      } else {
+        gateMessage.style.display = '';
+        gatedSections.classList.add('gated');
+      }
+    }
+
+    function onActiveLeagueDateChange() {
+      updateGating();
+      clearStaleSectionData();
+    }
+
+    function clearStaleSectionData() {
+      document.getElementById('preRoundReviewData').style.display = 'none';
+      clearPreRoundStatus();
+
+      resetImportUI();
+
+      document.getElementById('tagCalcPreview').style.display = 'none';
+      clearTagCalcStatus();
+
+      document.getElementById('finalizeRoundPreview').style.display = 'none';
+      clearFinalizeRoundStatus();
+    }
+
+    function checkCreateLeagueDate() {
+      var dateInput = document.getElementById('leagueDate');
+      var leagueDate = dateInput.value;
+      var statusEl = document.getElementById('createDateStatus');
+      var btn = document.getElementById('btnCreate');
+
+      if (!leagueDate) {
+        statusEl.className = 'status hidden';
+        statusEl.innerHTML = '';
+        btn.disabled = false;
+        return;
+      }
+
+      var exists = cachedWeeklyTabs.some(function(w) { return w.date === leagueDate; });
+
+      if (exists) {
+        statusEl.innerHTML = '<strong>League Already Created</strong>';
+        statusEl.className = 'status ok';
+        btn.disabled = true;
+      } else {
+        statusEl.className = 'status hidden';
+        statusEl.innerHTML = '';
+        btn.disabled = false;
+      }
+    }
+
     async function createWeeklyTab(e) {
       e.preventDefault();
 
@@ -569,6 +616,10 @@
         if (data.status === 'ok') {
           setStatus('ok', '<strong>Done!</strong> Tab <code>' + data.tabName + '</code> created with ' + data.columns + ' columns.');
           log('SUCCESS: Tab "' + data.tabName + '" created');
+          await loadWeeklyTabs();
+          document.getElementById('activeLeagueDate').value = leagueDate;
+          updateGating();
+          checkCreateLeagueDate();
         } else {
           setStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
@@ -795,19 +846,7 @@
       }
     }
 
-    // Pre-Round Review functions
-    function setPreRoundStatus(type, html) {
-      var el = document.getElementById('preRoundResult');
-      el.className = 'status ' + type;
-      el.innerHTML = html;
-    }
-
-    function clearPreRoundStatus() {
-      var el = document.getElementById('preRoundResult');
-      el.className = 'status hidden';
-      el.innerHTML = '';
-    }
-
+    // Centralized weekly tabs loader
     async function loadWeeklyTabs() {
       try {
         var response = await fetch(API_URL, {
@@ -822,40 +861,52 @@
           return;
         }
 
-        var select = document.getElementById('preRoundDate');
-        var noWeeksMsg = document.getElementById('preRoundNoWeeks');
+        cachedWeeklyTabs = data.weeks || [];
 
-        // Clear existing options except the placeholder
+        var select = document.getElementById('activeLeagueDate');
+        var emptyMsg = document.getElementById('activeLeagueDateEmpty');
+
         while (select.options.length > 1) {
           select.remove(1);
         }
 
-        if (!data.weeks || data.weeks.length === 0) {
-          noWeeksMsg.style.display = '';
-          return;
+        if (cachedWeeklyTabs.length === 0) {
+          emptyMsg.style.display = '';
+        } else {
+          emptyMsg.style.display = 'none';
+          for (var i = 0; i < cachedWeeklyTabs.length; i++) {
+            var week = cachedWeeklyTabs[i];
+            var option = document.createElement('option');
+            option.value = week.date;
+            option.textContent = week.date + ' (' + week.sheet_name + ')';
+            select.appendChild(option);
+          }
         }
 
-        noWeeksMsg.style.display = 'none';
-
-        // Add options for each weekly tab
-        for (var i = 0; i < data.weeks.length; i++) {
-          var week = data.weeks[i];
-          var option = document.createElement('option');
-          option.value = week.date;
-          option.textContent = week.date + ' (' + week.sheet_name + ')';
-          select.appendChild(option);
-        }
-
-        log('Loaded ' + data.weeks.length + ' weekly tab(s)');
+        updateGating();
+        log('Loaded ' + cachedWeeklyTabs.length + ' weekly tab(s)');
       } catch (err) {
         log('FAILED to load weekly tabs: ' + err.message);
       }
     }
 
+    // Pre-Round Review functions
+    function setPreRoundStatus(type, html) {
+      var el = document.getElementById('preRoundResult');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearPreRoundStatus() {
+      var el = document.getElementById('preRoundResult');
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
     async function loadPreRoundReview() {
       clearPreRoundStatus();
 
-      var leagueDate = document.getElementById('preRoundDate').value;
+      var leagueDate = getActiveLeagueDate();
       var reviewData = document.getElementById('preRoundReviewData');
 
       if (!leagueDate) {
@@ -883,7 +934,6 @@
           return;
         }
 
-        // Populate review data
         document.getElementById('preRoundLeagueDate').textContent = data.league_date;
         document.getElementById('preRoundTabName').textContent = data.weekly_tab;
         document.getElementById('preRoundParticipatingCount').textContent = data.participating_count;
@@ -910,7 +960,7 @@
     }
 
     async function savePreRoundReview() {
-      var leagueDate = document.getElementById('preRoundDate').value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) {
         setPreRoundStatus('error', '<strong>Please select a league date first.</strong>');
         return;
@@ -947,7 +997,6 @@
         if (data.status === 'ok') {
           setPreRoundStatus('ok', '<strong>Review saved successfully.</strong>');
           log('SUCCESS: Pre-round review saved');
-          // Refresh the review data
           await loadPreRoundReview();
         } else {
           setPreRoundStatus('error', '<strong>Error:</strong> ' + data.message);
@@ -959,29 +1008,6 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Save Review';
-      }
-    }
-
-    async function loadPreRoundStatus() {
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getLeagueSettings' })
-        });
-        var data = await response.json();
-
-        if (data.status !== 'ok' || data.state === 'missing' || data.state === 'empty') {
-          document.getElementById('preRoundMissing').style.display = '';
-          document.getElementById('preRoundForm').style.display = 'none';
-          return;
-        }
-
-        document.getElementById('preRoundMissing').style.display = 'none';
-        document.getElementById('preRoundForm').style.display = '';
-        await loadWeeklyTabs();
-      } catch (err) {
-        log('FAILED to load pre-round status: ' + err.message);
       }
     }
 
@@ -1000,86 +1026,13 @@
       el.innerHTML = '';
     }
 
-    async function loadUdiscImportTabs() {
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getWeeklyTabs' })
-        });
-        var data = await response.json();
-
-        if (data.status !== 'ok') {
-          log('ERROR loading weekly tabs for import: ' + data.message);
-          return;
-        }
-
-        var select = document.getElementById('udiscImportDate');
-        var noWeeksMsg = document.getElementById('udiscImportNoWeeks');
-
-        while (select.options.length > 1) {
-          select.remove(1);
-        }
-
-        if (!data.weeks || data.weeks.length === 0) {
-          noWeeksMsg.style.display = '';
-          return;
-        }
-
-        noWeeksMsg.style.display = 'none';
-
-        for (var i = 0; i < data.weeks.length; i++) {
-          var week = data.weeks[i];
-          var option = document.createElement('option');
-          option.value = week.date;
-          option.textContent = week.date + ' (' + week.sheet_name + ')';
-          select.appendChild(option);
-        }
-
-        log('Loaded ' + data.weeks.length + ' weekly tab(s) for UDisc import');
-      } catch (err) {
-        log('FAILED to load weekly tabs for import: ' + err.message);
-      }
-    }
-
-    async function loadUdiscImportStatus() {
-      try {
-        var clubResp = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getClubMembersStatus' })
-        });
-        var clubData = await clubResp.json();
-
-        var leagueResp = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getLeagueSettings' })
-        });
-        var leagueData = await leagueResp.json();
-
-        if (clubData.status !== 'ok' || clubData.state === 'missing' ||
-            leagueData.status !== 'ok' || leagueData.state === 'missing') {
-          document.getElementById('udiscImportMissing').style.display = '';
-          document.getElementById('udiscImportForm').style.display = 'none';
-          return;
-        }
-
-        document.getElementById('udiscImportMissing').style.display = 'none';
-        document.getElementById('udiscImportForm').style.display = '';
-        await loadUdiscImportTabs();
-      } catch (err) {
-        log('FAILED to load UDisc import status: ' + err.message);
-      }
-    }
-
     async function previewUdiscImport() {
       clearUdiscImportStatus();
       var previewEl = document.getElementById('udiscImportPreview');
       previewEl.style.display = 'none';
       previewEl.innerHTML = '';
 
-      var leagueDate = document.getElementById('udiscImportDate').value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) {
         setUdiscImportStatus('error', '<strong>Please select a league date.</strong>');
         return;
@@ -1105,11 +1058,9 @@
       log('Parsing UDisc file: ' + file.name);
 
       try {
-        // Parse xlsx client-side with SheetJS
         var arrayBuffer = await file.arrayBuffer();
         var workbook = XLSX.read(arrayBuffer, { type: 'array' });
 
-        // Find the Event results sheet
         var sheetName = null;
         for (var s = 0; s < workbook.SheetNames.length; s++) {
           if (workbook.SheetNames[s].toLowerCase().indexOf('event result') !== -1) {
@@ -1118,7 +1069,6 @@
           }
         }
         if (!sheetName) {
-          // Fallback: try exact match
           for (var s2 = 0; s2 < workbook.SheetNames.length; s2++) {
             if (workbook.SheetNames[s2] === 'Event results') {
               sheetName = workbook.SheetNames[s2];
@@ -1148,7 +1098,6 @@
         log('Parsed ' + rows.length + ' rows from "' + sheetName + '"');
         setUdiscImportStatus('pending', 'Matching against weekly sheet...');
 
-        // Send to Apps Script for preview
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
@@ -1185,7 +1134,6 @@
       var previewEl = document.getElementById('udiscImportPreview');
       var html = '';
 
-      // Summary
       html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Import Summary</h3>';
       html += '<div class="field-group">';
       html += '<p>Total UDisc rows: <strong>' + data.summary.total_udisc_rows + '</strong></p>';
@@ -1197,7 +1145,6 @@
       html += '<p>Errors: <strong>' + data.summary.errors + '</strong></p>';
       html += '</div>';
 
-      // Matched (Update) section
       if (data.matched && data.matched.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Matched — Update Existing</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1219,7 +1166,6 @@
         html += '</table>';
       }
 
-      // Existing Member, New Weekly Row section
       if (data.existing_member_new_weekly && data.existing_member_new_weekly.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">New Weekly Row — Existing Club Member</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1239,7 +1185,6 @@
         html += '</table>';
       }
 
-      // Completely New Player section
       if (data.completely_new && data.completely_new.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Completely New Player</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1261,7 +1206,6 @@
         html += '</table>';
       }
 
-      // Missing from UDisc section
       if (data.missing_from_udisc && data.missing_from_udisc.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Missing from UDisc (no action)</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1277,7 +1221,6 @@
         html += '</table>';
       }
 
-      // Ambiguous section
       if (data.ambiguous && data.ambiguous.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#ea4335;">Ambiguous (manual resolution needed)</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1298,7 +1241,6 @@
         html += '</table>';
       }
 
-      // Errors section
       if (data.errors && data.errors.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#ea4335;">Errors</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1314,7 +1256,6 @@
         html += '</table>';
       }
 
-      // Approve / Cancel buttons
       var hasWork = (data.summary.matched_update + data.summary.existing_member_new_weekly + data.summary.completely_new) > 0;
       if (hasWork) {
         html += '<button type="button" id="btnCommitImport" onclick="commitUdiscImport()" style="background:#34a853;">Approve Import</button> ';
@@ -1336,7 +1277,7 @@
         return;
       }
 
-      var leagueDate = document.getElementById('udiscImportDate').value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) {
         setUdiscImportStatus('error', '<strong>Please select a league date.</strong>');
         return;
@@ -1409,48 +1350,8 @@
       el.innerHTML = '';
     }
 
-    async function loadTagCalcTabs() {
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getWeeklyTabs' })
-        });
-        var data = await response.json();
-
-        if (data.status !== 'ok') {
-          log('ERROR loading weekly tabs for tag calc: ' + data.message);
-          return;
-        }
-
-        var select = document.getElementById('tagCalcDate');
-        var noWeeksMsg = document.getElementById('tagCalcNoWeeks');
-
-        while (select.options.length > 1) {
-          select.remove(1);
-        }
-
-        if (!data.weeks || data.weeks.length === 0) {
-          noWeeksMsg.style.display = '';
-          return;
-        }
-
-        noWeeksMsg.style.display = 'none';
-
-        for (var i = 0; i < data.weeks.length; i++) {
-          var week = data.weeks[i];
-          var option = document.createElement('option');
-          option.value = week.date;
-          option.textContent = week.date + ' (' + week.sheet_name + ')';
-          select.appendChild(option);
-        }
-      } catch (err) {
-        log('FAILED to load weekly tabs for tag calc: ' + err.message);
-      }
-    }
-
     async function calculateTags() {
-      var leagueDate = document.getElementById('tagCalcDate').value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) {
         setTagCalcStatus('error', '<strong>Please select a league date.</strong>');
         return;
@@ -1498,7 +1399,6 @@
       var previewEl = document.getElementById('tagCalcPreview');
       var html = '';
 
-      // Summary
       html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
       html += '<div class="field-group">';
       html += '<p>Weekly tab: <strong>' + escHtml(data.tab_name) + '</strong></p>';
@@ -1506,11 +1406,9 @@
       html += '<p>Tags in pool: <strong>' + data.tag_pool_count + '</strong></p>';
       html += '</div>';
 
-      // Tag pool
       html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Available Tag Pool</h3>';
       html += '<p style="font-size:0.875rem; color:#333;">' + escHtml(data.tag_pool.join(', ')) + '</p>';
 
-      // Redistribution table
       html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Tag Assignments</h3>';
       html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
       html += '<tr style="background:#f0f0f0;">';
@@ -1537,7 +1435,6 @@
       }
       html += '</table>';
 
-      // Confirm button
       html += '<button type="button" id="btnConfirmTags" onclick="confirmTags()" style="background:#34a853;">Confirm &amp; Write</button> ';
 
       previewEl.innerHTML = html;
@@ -1545,7 +1442,7 @@
     }
 
     async function confirmTags() {
-      var leagueDate = document.getElementById('tagCalcDate').value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) return;
 
       var btn = document.getElementById('btnConfirmTags');
@@ -1602,48 +1499,8 @@
       el.innerHTML = '';
     }
 
-    async function loadFinalizeRoundTabs() {
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getWeeklyTabs' })
-        });
-        var data = await response.json();
-
-        if (data.status !== 'ok') {
-          log('ERROR loading weekly tabs for finalize: ' + data.message);
-          return;
-        }
-
-        var select = document.getElementById('finalizeRoundDate');
-        var noWeeksMsg = document.getElementById('finalizeRoundNoWeeks');
-
-        while (select.options.length > 1) {
-          select.remove(1);
-        }
-
-        if (!data.weeks || data.weeks.length === 0) {
-          noWeeksMsg.style.display = '';
-          return;
-        }
-
-        noWeeksMsg.style.display = 'none';
-
-        for (var i = 0; i < data.weeks.length; i++) {
-          var week = data.weeks[i];
-          var option = document.createElement('option');
-          option.value = week.date;
-          option.textContent = week.date + ' (' + week.sheet_name + ')';
-          select.appendChild(option);
-        }
-      } catch (err) {
-        log('FAILED to load weekly tabs for finalize: ' + err.message);
-      }
-    }
-
     async function previewFinalizeRound() {
-      var leagueDate = document.getElementById('finalizeRoundDate').value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) {
         setFinalizeRoundStatus('error', '<strong>Please select a league date.</strong>');
         return;
@@ -1691,7 +1548,6 @@
       var previewEl = document.getElementById('finalizeRoundPreview');
       var html = '';
 
-      // Summary
       html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
       html += '<div class="field-group">';
       html += '<p>Weekly tab: <strong>' + escHtml(data.tab_name) + '</strong></p>';
@@ -1700,7 +1556,6 @@
       html += '<p>Skipped (no ClubMembers record): <strong>' + data.summary.skipped_no_club_member_count + '</strong></p>';
       html += '</div>';
 
-      // Updated table
       if (data.updated.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Will Update</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1723,7 +1578,6 @@
         html += '</table>';
       }
 
-      // Skipped (no out_tag)
       if (data.skipped_no_out_tag.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Skipped (no out_tag)</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1744,7 +1598,6 @@
         html += '</table>';
       }
 
-      // Skipped (no ClubMembers record)
       if (data.skipped_no_club_member.length > 0) {
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Skipped (no ClubMembers record)</h3>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
@@ -1765,7 +1618,6 @@
         html += '</table>';
       }
 
-      // Confirm button
       if (data.updated.length > 0) {
         html += '<button type="button" id="btnConfirmFinalize" onclick="confirmFinalizeRound()" style="background:#34a853;">Confirm &amp; Finalize</button> ';
       } else {
@@ -1777,7 +1629,7 @@
     }
 
     async function confirmFinalizeRound() {
-      var leagueDate = document.getElementById('finalizeRoundDate').value;
+      var leagueDate = getActiveLeagueDate();
       if (!leagueDate) return;
 
       var btn = document.getElementById('btnConfirmFinalize');
@@ -1821,16 +1673,13 @@
       }
     }
 
-    // Init: set default date
+    // Init
     (function init() {
       document.getElementById('leagueDate').valueAsDate = new Date();
       log('Admin page loaded');
       loadLeagueSettings();
       loadClubMembersStatus();
-      loadPreRoundStatus();
-      loadUdiscImportStatus();
-      loadTagCalcTabs();
-      loadFinalizeRoundTabs();
+      loadWeeklyTabs();
     })();
   </script>
 </body>
