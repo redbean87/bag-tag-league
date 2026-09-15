@@ -324,6 +324,30 @@
     <div id="tagCalcResult" class="status hidden"></div>
   </div>
 
+  <div class="card" id="finalizeRoundCard">
+    <h2>Finalize Round</h2>
+    <p class="help-text">
+      Propagate <code>out_tag</code> values from the weekly sheet to each
+      matching ClubMembers record's <code>current_tag</code>. Only players
+      with a confirmed, nonblank <code>out_tag</code> and a matching
+      ClubMembers record are updated.
+    </p>
+    <div class="field-group">
+      <label for="finalizeRoundDate">League Date</label>
+      <select id="finalizeRoundDate">
+        <option value="">-- Select a league date --</option>
+      </select>
+    </div>
+    <div id="finalizeRoundNoWeeks" style="display:none;">
+      <p class="help-text">
+        No weekly tabs found. Create a league day first using the form above.
+      </p>
+    </div>
+    <button type="button" id="btnPreviewFinalize" onclick="previewFinalizeRound()">Preview</button>
+    <div id="finalizeRoundPreview" style="display:none;"></div>
+    <div id="finalizeRoundResult" class="status hidden"></div>
+  </div>
+
   <details>
     <summary>Activity Log</summary>
     <div id="log"></div>
@@ -1403,6 +1427,238 @@
       }
     }
 
+    // Finalize Round functions
+    function setFinalizeRoundStatus(type, html) {
+      var el = document.getElementById('finalizeRoundResult');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearFinalizeRoundStatus() {
+      var el = document.getElementById('finalizeRoundResult');
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
+    async function loadFinalizeRoundTabs() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getWeeklyTabs' })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          log('ERROR loading weekly tabs for finalize: ' + data.message);
+          return;
+        }
+
+        var select = document.getElementById('finalizeRoundDate');
+        var noWeeksMsg = document.getElementById('finalizeRoundNoWeeks');
+
+        while (select.options.length > 1) {
+          select.remove(1);
+        }
+
+        if (!data.weeks || data.weeks.length === 0) {
+          noWeeksMsg.style.display = '';
+          return;
+        }
+
+        noWeeksMsg.style.display = 'none';
+
+        for (var i = 0; i < data.weeks.length; i++) {
+          var week = data.weeks[i];
+          var option = document.createElement('option');
+          option.value = week.date;
+          option.textContent = week.date + ' (' + week.sheet_name + ')';
+          select.appendChild(option);
+        }
+      } catch (err) {
+        log('FAILED to load weekly tabs for finalize: ' + err.message);
+      }
+    }
+
+    async function previewFinalizeRound() {
+      var leagueDate = document.getElementById('finalizeRoundDate').value;
+      if (!leagueDate) {
+        setFinalizeRoundStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnPreviewFinalize');
+      btn.disabled = true;
+      btn.textContent = 'Previewing...';
+      clearFinalizeRoundStatus();
+      document.getElementById('finalizeRoundPreview').style.display = 'none';
+
+      log('Previewing finalize for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'finalizeRound',
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setFinalizeRoundStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          btn.disabled = false;
+          btn.textContent = 'Preview';
+          return;
+        }
+
+        renderFinalizeRoundPreview(data);
+        log('Finalize preview generated for ' + leagueDate + ': ' + data.summary.updated_count + ' to update, ' + data.summary.skipped_no_out_tag_count + ' skipped (no out_tag), ' + data.summary.skipped_no_club_member_count + ' skipped (no ClubMembers record)');
+      } catch (err) {
+        setFinalizeRoundStatus('error', '<strong>Preview failed:</strong> ' + err.message);
+        log('FAILED to preview finalize: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Preview';
+      }
+    }
+
+    function renderFinalizeRoundPreview(data) {
+      var previewEl = document.getElementById('finalizeRoundPreview');
+      var html = '';
+
+      // Summary
+      html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
+      html += '<div class="field-group">';
+      html += '<p>Weekly tab: <strong>' + escHtml(data.tab_name) + '</strong></p>';
+      html += '<p>Players to update: <strong>' + data.summary.updated_count + '</strong></p>';
+      html += '<p>Skipped (no out_tag): <strong>' + data.summary.skipped_no_out_tag_count + '</strong></p>';
+      html += '<p>Skipped (no ClubMembers record): <strong>' + data.summary.skipped_no_club_member_count + '</strong></p>';
+      html += '</div>';
+
+      // Updated table
+      if (data.updated.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Will Update</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#f0f0f0;">';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Member #</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Old Tag</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">New Tag</th>';
+        html += '</tr>';
+
+        for (var i = 0; i < data.updated.length; i++) {
+          var u = data.updated[i];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + u.member_number + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(u.player_name) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + (u.old_tag !== '' && u.old_tag !== null ? escHtml(String(u.old_tag)) : '<span style="color:#888;">—</span>') + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + escHtml(String(u.new_tag)) + '</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Skipped (no out_tag)
+      if (data.skipped_no_out_tag.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Skipped (no out_tag)</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#f0f0f0;">';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Member #</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">out_tag (raw)</th>';
+        html += '</tr>';
+
+        for (var j = 0; j < data.skipped_no_out_tag.length; j++) {
+          var s = data.skipped_no_out_tag[j];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + s.member_number + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(s.player_name) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd; color:#888;">' + (s.out_tag_raw !== '' && s.out_tag_raw !== null ? escHtml(String(s.out_tag_raw)) : '—') + '</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Skipped (no ClubMembers record)
+      if (data.skipped_no_club_member.length > 0) {
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Skipped (no ClubMembers record)</h3>';
+        html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+        html += '<tr style="background:#f0f0f0;">';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Member #</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">out_tag</th>';
+        html += '</tr>';
+
+        for (var k = 0; k < data.skipped_no_club_member.length; k++) {
+          var sc = data.skipped_no_club_member[k];
+          html += '<tr>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + sc.member_number + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(sc.player_name) + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(String(sc.out_tag)) + '</td>';
+          html += '</tr>';
+        }
+        html += '</table>';
+      }
+
+      // Confirm button
+      if (data.updated.length > 0) {
+        html += '<button type="button" id="btnConfirmFinalize" onclick="confirmFinalizeRound()" style="background:#34a853;">Confirm &amp; Finalize</button> ';
+      } else {
+        html += '<p style="color:#888; font-style:italic;">No players to update.</p>';
+      }
+
+      previewEl.innerHTML = html;
+      previewEl.style.display = '';
+    }
+
+    async function confirmFinalizeRound() {
+      var leagueDate = document.getElementById('finalizeRoundDate').value;
+      if (!leagueDate) return;
+
+      var btn = document.getElementById('btnConfirmFinalize');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Finalizing...';
+      }
+      setFinalizeRoundStatus('pending', 'Finalizing round...');
+
+      log('Confirming finalize for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'finalizeRound',
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          setFinalizeRoundStatus('ok',
+            '<strong>Round finalized.</strong> ' +
+            data.summary.updated_count + ' ClubMembers records updated in ' + escHtml(data.tab_name) + '.');
+          log('SUCCESS: Round finalized. ' + data.summary.updated_count + ' records updated.');
+          document.getElementById('finalizeRoundPreview').style.display = 'none';
+        } else {
+          setFinalizeRoundStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setFinalizeRoundStatus('error', '<strong>Finalize failed:</strong> ' + err.message);
+        log('FAILED to finalize round: ' + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Confirm & Finalize';
+        }
+      }
+    }
+
     // Init: set default date
     (function init() {
       document.getElementById('leagueDate').valueAsDate = new Date();
@@ -1412,6 +1668,7 @@
       loadPreRoundStatus();
       loadUdiscImportStatus();
       loadTagCalcTabs();
+      loadFinalizeRoundTabs();
     })();
   </script>
 </body>

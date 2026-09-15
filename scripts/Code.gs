@@ -161,6 +161,9 @@ function doPost(e) {
     if (data.action === 'confirmTags') {
       return handleConfirmTags(data);
     }
+    if (data.action === 'finalizeRound') {
+      return handleFinalizeRound(data);
+    }
 
     return respond('error', 'Unknown action: ' + data.action);
 
@@ -1983,6 +1986,131 @@ function handleConfirmTags(data) {
     tab_name: tabName,
     players_updated: updated,
     tag_pool_used: tagPool.length
+  });
+}
+
+/**
+ * Finalizes a round by propagating out_tag values from the weekly sheet
+ * to each matching ClubMembers record's current_tag.
+ *
+ * Inputs: league_date (required, YYYY-MM-DD format)
+ *
+ * For each player row with a confirmed, nonblank out_tag:
+ *   - Find the matching ClubMembers row by member_number
+ *   - Update ClubMembers.current_tag to the weekly out_tag
+ *
+ * Players without a matching ClubMembers record or without a nonblank
+ * out_tag are skipped. Returns a summary of updated and skipped records.
+ */
+function handleFinalizeRound(data) {
+  var leagueDate = data.league_date;
+
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date.');
+  }
+
+  var tabName = 'Week ' + leagueDate;
+  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var weeklySheet = spreadsheet.getSheetByName(tabName);
+
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+
+  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  if (!clubSheet) {
+    return respond('error', 'ClubMembers tab not found.');
+  }
+
+  // Read weekly sheet
+  var weeklyData = weeklySheet.getDataRange().getValues();
+  var wHeaders = weeklyData[0];
+
+  var wMember = wHeaders.indexOf('member_number');
+  var wName = wHeaders.indexOf('player_name_snapshot');
+  var wOutTag = wHeaders.indexOf('out_tag');
+  var wInTag = wHeaders.indexOf('in_tag');
+
+  // Read ClubMembers sheet
+  var clubData = clubSheet.getDataRange().getValues();
+  var cHeaders = clubData[0];
+
+  var cMemberCol = cHeaders.indexOf('member_number');
+  var cNameCol = cHeaders.indexOf('name');
+  var cCurrentTagCol = cHeaders.indexOf('current_tag');
+  var cActiveCol = cHeaders.indexOf('is_active');
+
+  // Build ClubMembers index: member_number -> { row_index, name, is_active }
+  var clubByNumber = {};
+  for (var j = 1; j < clubData.length; j++) {
+    var crow = clubData[j];
+    var memberNum = crow[cMemberCol];
+    if (memberNum === '' || memberNum === null || memberNum === undefined) continue;
+    clubByNumber[memberNum] = {
+      row_index: j,
+      name: crow[cNameCol] || '',
+      is_active: crow[cActiveCol]
+    };
+  }
+
+  // Process each weekly player row
+  var updated = [];
+  var skippedNoOutTag = [];
+  var skippedNoClubMember = [];
+
+  for (var i = 1; i < weeklyData.length; i++) {
+    var row = weeklyData[i];
+    var memberNumber = row[wMember];
+    if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+
+    var outTag = row[wOutTag];
+    var outTagNum = parseInt(outTag, 10);
+
+    // Skip players without a confirmed, nonblank out_tag
+    if (outTag === '' || outTag === null || outTag === undefined || isNaN(outTagNum)) {
+      skippedNoOutTag.push({
+        member_number: memberNumber,
+        player_name: row[wName] || '',
+        in_tag: row[wInTag],
+        out_tag_raw: outTag
+      });
+      continue;
+    }
+
+    // Find matching ClubMembers record
+    var clubRecord = clubByNumber[memberNumber];
+    if (!clubRecord) {
+      skippedNoClubMember.push({
+        member_number: memberNumber,
+        player_name: row[wName] || '',
+        out_tag: outTagNum
+      });
+      continue;
+    }
+
+    // Update ClubMembers.current_tag
+    var oldTag = clubSheet.getRange(clubRecord.row_index + 1, cCurrentTagCol + 1).getValue();
+    clubSheet.getRange(clubRecord.row_index + 1, cCurrentTagCol + 1).setValue(outTagNum);
+
+    updated.push({
+      member_number: memberNumber,
+      player_name: clubRecord.name,
+      old_tag: oldTag,
+      new_tag: outTagNum
+    });
+  }
+
+  return respond('ok', 'Round finalized. ' + updated.length + ' ClubMembers records updated.', {
+    league_date: leagueDate,
+    tab_name: tabName,
+    updated: updated,
+    skipped_no_out_tag: skippedNoOutTag,
+    skipped_no_club_member: skippedNoClubMember,
+    summary: {
+      updated_count: updated.length,
+      skipped_no_out_tag_count: skippedNoOutTag.length,
+      skipped_no_club_member_count: skippedNoClubMember.length
+    }
   });
 }
 
