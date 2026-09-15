@@ -95,28 +95,27 @@ Import history is recorded in the ImportHistory tab, including the raw CSV conte
 
 ### Bag-Tag Calculation
 
-Only players who checked in for that weekly league participate in tag redistribution. Players who did not check in are not included in the tag pool, and their club member tags remain unchanged.
+Every player in the selected weekly league sheet is included in tag calculation, regardless of `checked_in` status, score, or `in_tag` validity.
 
-The app calculates `out_tag` using only the following inputs:
+The app calculates `out_tag` using the following inputs:
 
-- Players who checked in (`checked_in = TRUE`)
-- Each participant's `score` (for ranking)
-- Each participant's `in_tag` (for tie-breaking, supplied by the player during check-in)
-- The participating players' starting-tag pool (all `in_tag` values)
+- All players in the weekly sheet (each player's `score`, `in_tag`)
+- The tag pool built from valid `in_tag` values in the sheet
 - The agreed rules: lowest score wins, lower `in_tag` breaks ties, tags redistribute ascending
 
 `udisc_ending_tag` must not be used as input to tag calculation.
 
 The confirmed algorithm:
 
-1. Rank participating players by lowest score first
-2. Ties are resolved by lower in_tag (the player with the lower starting tag finishes first)
-3. Collect the in_tag values of all participating players into a pool
-4. Sort the pool ascending
-5. Assign tags in finishing order: 1st gets the lowest tag from the pool, 2nd gets the next lowest, and so on
-6. Store the result in out_tag on each participant's WeeklyPlayerRecords row
+1. Read all player records from the selected `Week YYYY-MM-DD` sheet
+2. Build the tag pool from valid `in_tag` values (positive integers), sorted ascending
+3. Rank all players by lowest score first; players without a valid score are appended at the end
+4. Ties are resolved by lower in_tag (the player with the lower starting tag finishes first)
+5. Assign tags from the pool in rank order: 1st gets the lowest tag from the pool, 2nd gets the next lowest, and so on
+6. If the pool has fewer tags than players, remaining players receive no out_tag (left blank)
+7. Store the result in out_tag on each player's WeeklyPlayerRecords row
 
-The first-place finisher does not necessarily receive tag 1 -- they receive the lowest tag that was brought into the pool by participating players.
+The first-place finisher does not necessarily receive tag 1 -- they receive the lowest tag that was brought into the pool by players in the sheet.
 
 The calculation should be transparent and display:
 

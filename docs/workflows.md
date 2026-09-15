@@ -83,22 +83,22 @@
 
 ## Workflow 5: Tag Calculation (System/Admin)
 
-1. After UDisc import is confirmed, system calculates finishing order
-2. Consider only checked-in/participating players (those with `checked_in = TRUE`)
-3. Finishing order: lowest score first (score is a round score from UDisc, not a bag tag), ties broken by lower in_tag (starting bag tag)
-4. System collects the in_tag values of all participating players into a pool
-5. System sorts the pool ascending
-6. System assigns new tags (out_tag) based on finishing position: 1st gets lowest tag from pool, 2nd gets next lowest, etc.
-7. System writes out_tag values to the WeeklyPlayerRecords tab
-8. System displays a comparison table:
+1. After UDisc import is confirmed, admin selects the league date in the Tag Calculation section
+2. Admin clicks "Calculate Tags"
+3. System reads all player records from the selected `Week YYYY-MM-DD` sheet
+4. System builds the tag pool from valid `in_tag` values (positive integers) found in the sheet, sorted ascending
+5. System ranks all players by lowest score first; players without a valid score are appended at the end
+6. System assigns tags from the pool in rank order: 1st gets lowest tag, 2nd gets next lowest, etc.
+7. If the pool has fewer tags than players, remaining players receive no out_tag (left blank)
+8. System displays a preview table:
    - Finishing position
    - Player
-   - Score (round score from UDisc)
-   - in_tag (starting bag tag, supplied by the player)
-   - out_tag (ending bag tag, calculated by the app)
-   - udisc_ending_tag (if available, for reference only; not used in calculation)
+   - Score
+   - in_tag
+   - out_tag
 9. Admin reviews the tag assignments
-10. Admin can correct any data before finalization (edit fields directly in the sheet or through the app)
+10. Admin clicks "Confirm & Write" to write out_tag values to the sheet
+11. Admin can correct data and recalculate before finalization
 
 ## Workflow 6: League Finalization (Admin)
 

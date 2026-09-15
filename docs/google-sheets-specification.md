@@ -222,7 +222,7 @@ Fields in this tab fall into four categories based on their source and role:
 - `checked_in` is the explicit participation boolean. It supersedes the historical participation check based on `signed_in_at` being non-null.
 - `udisc_checked_in` is UDisc's separate participation flag. It is imported as reference only and is not used for app participation logic.
 - `udisc_paid` is UDisc's separate payment flag. It is imported as reference only; the app's `paid` field is the authoritative payment status.
-- The app calculates `out_tag` using only: players who checked in (`checked_in = TRUE`), each participant's score, each participant's `in_tag` for tie-breaking, the participating players' starting-tag pool, and the agreed lowest-score / lower-`in_tag` tie-break / ascending-tag redistribution rules.
+- The app calculates `out_tag` for every player in the weekly sheet. The tag pool is built from valid `in_tag` values, sorted ascending, and assigned to players ranked by lowest score (lower `in_tag` breaks ties). If the pool has fewer tags than players, remaining players receive no `out_tag`.
 - Once the league is `finalized`, all fields in this tab become read-only.
 - See `udisc-import-mapping.md` for the complete UDisc field mapping and identity matching strategy.
 
@@ -315,13 +315,17 @@ Players do not authenticate. The public flow is registration and check-in throug
 
 ## Tag Calculation
 
-The app calculates `out_tag` using only the following inputs:
+The app calculates `out_tag` for every player in the selected weekly league sheet. Participation is determined by presence in the sheet, not by `checked_in` status.
 
-- Players who checked in (`checked_in = TRUE`)
-- Each participant's `score` (for ranking)
-- Each participant's `in_tag` (for tie-breaking)
-- The participating players' starting-tag pool (all `in_tag` values)
-- The agreed rules: lowest score wins, lower `in_tag` breaks ties, tags redistribute ascending
+### Algorithm
+
+1. **Read all player records** from the selected `Week YYYY-MM-DD` sheet. Every row with a `member_number` is included.
+2. **Build the tag pool** from valid `in_tag` values (positive integers) found in the sheet. Duplicate or blank values are excluded from the pool. Sort ascending.
+3. **Rank players** by lowest `score` first. Players without a valid score are appended at the end, sorted by `in_tag` ascending.
+4. **Tie-break** score ties using lower `in_tag`. Players without a valid `in_tag` sort after players with valid `in_tag` in tie-breaking.
+5. **Assign tags** from the sorted pool in rank order. The highest-ranked player receives the lowest available tag.
+6. If the tag pool has fewer tags than players, remaining players receive no `out_tag` (left blank).
+7. **Persist** the assigned result as each player's `out_tag` on their `WeeklyPlayerRecords` row.
 
 `udisc_ending_tag` must not be used as input to tag calculation.
 
@@ -329,47 +333,37 @@ The app calculates `out_tag` using only the following inputs:
 
 At finalization:
 
-1. Consider only checked-in/participating players.
+1. All players in the weekly sheet are included.
 2. Rank players by lowest round score first, then by lower `in_tag` to break ties.
-3. Build the available tag pool from participating players' `in_tag` values, sorted ascending.
+3. Build the available tag pool from all valid `in_tag` values in the sheet, sorted ascending.
 4. Assign the sorted available tags to the ranked players.
-5. The highest-ranked player receives the lowest available participating tag.
+5. The highest-ranked player receives the lowest available tag.
 6. Persist the assigned result as each player's `out_tag`.
 7. Update `ClubMembers.current_tag` with the finalized `out_tag` as the player's last known calculated tag.
 
-### Algorithm
-
-1. **Only checked-in players participate.** A player is a participant if they have a `WeeklyPlayerRecords` row with `checked_in = TRUE` for that league. Players who did not check in are excluded and retain their existing `ClubMembers.current_tag`.
-2. **Rank by lowest score first.** Ties are resolved by lower `in_tag` (the player with the lower starting tag finishes first).
-3. **Build the tag pool.** Collect the `in_tag` values from all participating players.
-4. **Sort the pool ascending.** The lowest tag is first.
-5. **Assign tags in finishing order.** The first-place finisher receives the lowest tag from the pool, second place receives the next lowest, and so on.
-6. **Store the result in `out_tag`** on each participant's `WeeklyPlayerRecords` row.
-7. **After the organizer finalizes the weekly league,** update each participating player's `current_tag` in `ClubMembers` with their `out_tag` value (linked via `member_number`). This is a last-known calculated value; it is not guaranteed to represent the player's physical tag because players may trade tags between league days.
-
 ### Example
 
-Participating players and their `in_tag` values:
+Players in the weekly sheet:
 
-| Player | in_tag |
-|--------|--------|
-| A      | 22     |
-| B      | 8      |
-| C      | 15     |
-| D      | 12     |
-
-Finishing order (by score, then by `in_tag`): B, D, C, A
+| Player | in_tag | score |
+|--------|--------|-------|
+| A      | 22     | 61    |
+| B      | 8      | 58    |
+| C      | 15     | 63    |
+| D      | 12     | 60    |
 
 Tag pool sorted ascending: 8, 12, 15, 22
+
+Ranking (score, then in_tag): B(58), D(60), A(61), C(63)
 
 | Player | in_tag | out_tag |
 |--------|--------|---------|
 | B      | 8      | 8       |
 | D      | 12     | 12      |
-| C      | 15     | 15      |
-| A      | 22     | 22      |
+| A      | 22     | 15      |
+| C      | 15     | 22      |
 
-In this example the tags did not change because the strongest tag holder won. In a different finishing order, tags would shuffle among participants. Non-signers are unaffected.
+Tags shuffled: A improved from 22 to 15. C dropped from 15 to 22. Non-participants are unaffected because they have no row in the weekly sheet.
 
 ---
 

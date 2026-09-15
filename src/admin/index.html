@@ -301,6 +301,29 @@
     </div>
   </div>
 
+  <div class="card" id="tagCalcCard">
+    <h2>Tag Calculation</h2>
+    <p class="help-text">
+      Calculate tag assignments for all players in a weekly league.
+      Every player in the selected week's sheet is included.
+      Preview is write-free. Confirm writes <code>out_tag</code> values.
+    </p>
+    <div class="field-group">
+      <label for="tagCalcDate">League Date</label>
+      <select id="tagCalcDate">
+        <option value="">-- Select a league date --</option>
+      </select>
+    </div>
+    <div id="tagCalcNoWeeks" style="display:none;">
+      <p class="help-text">
+        No weekly tabs found. Create a league day first using the form above.
+      </p>
+    </div>
+    <button type="button" id="btnCalcTags" onclick="calculateTags()">Calculate Tags</button>
+    <div id="tagCalcPreview" style="display:none;"></div>
+    <div id="tagCalcResult" class="status hidden"></div>
+  </div>
+
   <details>
     <summary>Activity Log</summary>
     <div id="log"></div>
@@ -1187,6 +1210,199 @@
       clearUdiscImportStatus();
     }
 
+    // Tag Calculation functions
+    function setTagCalcStatus(type, html) {
+      var el = document.getElementById('tagCalcResult');
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearTagCalcStatus() {
+      var el = document.getElementById('tagCalcResult');
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
+    async function loadTagCalcTabs() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getWeeklyTabs' })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          log('ERROR loading weekly tabs for tag calc: ' + data.message);
+          return;
+        }
+
+        var select = document.getElementById('tagCalcDate');
+        var noWeeksMsg = document.getElementById('tagCalcNoWeeks');
+
+        while (select.options.length > 1) {
+          select.remove(1);
+        }
+
+        if (!data.weeks || data.weeks.length === 0) {
+          noWeeksMsg.style.display = '';
+          return;
+        }
+
+        noWeeksMsg.style.display = 'none';
+
+        for (var i = 0; i < data.weeks.length; i++) {
+          var week = data.weeks[i];
+          var option = document.createElement('option');
+          option.value = week.date;
+          option.textContent = week.date + ' (' + week.sheet_name + ')';
+          select.appendChild(option);
+        }
+      } catch (err) {
+        log('FAILED to load weekly tabs for tag calc: ' + err.message);
+      }
+    }
+
+    async function calculateTags() {
+      var leagueDate = document.getElementById('tagCalcDate').value;
+      if (!leagueDate) {
+        setTagCalcStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnCalcTags');
+      btn.disabled = true;
+      btn.textContent = 'Calculating...';
+      clearTagCalcStatus();
+      document.getElementById('tagCalcPreview').style.display = 'none';
+
+      log('Calculating tags for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'calculateTags',
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setTagCalcStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          btn.disabled = false;
+          btn.textContent = 'Calculate Tags';
+          return;
+        }
+
+        renderTagCalcPreview(data);
+        log('Tag calculation preview generated for ' + leagueDate);
+      } catch (err) {
+        setTagCalcStatus('error', '<strong>Calculation failed:</strong> ' + err.message);
+        log('FAILED to calculate tags: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Calculate Tags';
+      }
+    }
+
+    function renderTagCalcPreview(data) {
+      var previewEl = document.getElementById('tagCalcPreview');
+      var html = '';
+
+      // Summary
+      html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
+      html += '<div class="field-group">';
+      html += '<p>Weekly tab: <strong>' + escHtml(data.tab_name) + '</strong></p>';
+      html += '<p>Total players: <strong>' + data.total_players + '</strong></p>';
+      html += '<p>Tags in pool: <strong>' + data.tag_pool_count + '</strong></p>';
+      html += '</div>';
+
+      // Tag pool
+      html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Available Tag Pool</h3>';
+      html += '<p style="font-size:0.875rem; color:#333;">' + escHtml(data.tag_pool.join(', ')) + '</p>';
+
+      // Redistribution table
+      html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Tag Assignments</h3>';
+      html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+      html += '<tr style="background:#f0f0f0;">';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Rank</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Score</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">in_tag</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">out_tag</th>';
+      html += '</tr>';
+
+      for (var i = 0; i < data.players.length; i++) {
+        var pl = data.players[i];
+        var tagClass = pl.has_valid_tag ? '' : ' style="color:#ea4335;"';
+        var scoreClass = pl.has_valid_score ? '' : ' style="color:#ea4335;"';
+        var outTagDisplay = pl.proposed_out_tag !== null ? escHtml(String(pl.proposed_out_tag)) : '<span style="color:#ea4335;">—</span>';
+
+        html += '<tr>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + pl.rank + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(pl.player_name) + ' <span style="color:#888;">(#' + pl.member_number + ')</span></td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;"' + scoreClass + '>' + (pl.score !== null ? escHtml(String(pl.score)) : '<span style="color:#ea4335;">—</span>') + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;"' + tagClass + '>' + (pl.in_tag !== null ? escHtml(String(pl.in_tag)) : '<span style="color:#ea4335;">—</span>') + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + outTagDisplay + '</td>';
+        html += '</tr>';
+      }
+      html += '</table>';
+
+      // Confirm button
+      html += '<button type="button" id="btnConfirmTags" onclick="confirmTags()" style="background:#34a853;">Confirm &amp; Write</button> ';
+
+      previewEl.innerHTML = html;
+      previewEl.style.display = '';
+    }
+
+    async function confirmTags() {
+      var leagueDate = document.getElementById('tagCalcDate').value;
+      if (!leagueDate) return;
+
+      var btn = document.getElementById('btnConfirmTags');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Writing...';
+      }
+      setTagCalcStatus('pending', 'Writing tag assignments...');
+
+      log('Confirming tag assignments for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'confirmTags',
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          setTagCalcStatus('ok',
+            '<strong>Tag assignments written.</strong> ' +
+            data.players_updated + ' players updated in ' + escHtml(data.tab_name) + '.');
+          log('SUCCESS: Tags written. ' + data.players_updated + ' players updated.');
+          document.getElementById('tagCalcPreview').style.display = 'none';
+        } else {
+          setTagCalcStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setTagCalcStatus('error', '<strong>Write failed:</strong> ' + err.message);
+        log('FAILED to write tags: ' + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Confirm & Write';
+        }
+      }
+    }
+
     // Init: set default date
     (function init() {
       document.getElementById('leagueDate').valueAsDate = new Date();
@@ -1195,6 +1411,7 @@
       loadClubMembersStatus();
       loadPreRoundStatus();
       loadUdiscImportStatus();
+      loadTagCalcTabs();
     })();
   </script>
 </body>

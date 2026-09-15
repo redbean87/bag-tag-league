@@ -81,7 +81,7 @@
 **Goal:** System calculates tag assignments.
 
 - Finishing order calculation (score, tie-break by in_tag)
-- Tag assignment algorithm (pool-based: participating players' in_tag values redistributed in finishing order)
+- Tag assignment algorithm (pool-based: all players in the weekly sheet, in_tag values redistributed in finishing order)
 - Results display with comparison table
 - Admin can correct data before finalization
 

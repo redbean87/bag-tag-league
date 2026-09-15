@@ -72,15 +72,16 @@ Clear field ownership prevents silent data corruption and ensures each value com
 
 ### Decision
 
-At finalization:
+At calculation:
 
-1. Consider only checked-in/participating players.
-2. Rank players by lowest round score first, then by lower `in_tag` to break ties.
-3. Build the available tag pool from participating players' `in_tag` values, sorted ascending.
+1. Read all player records from the selected `Week YYYY-MM-DD` sheet. Every row with a `member_number` is included.
+2. Rank players by lowest round score first, then by lower `in_tag` to break ties. Players without a valid score are appended at the end.
+3. Build the available tag pool from valid `in_tag` values in the sheet, sorted ascending.
 4. Assign the sorted available tags to the ranked players.
-5. The highest-ranked player receives the lowest available participating tag.
-6. Persist the assigned result as each player's `out_tag`.
-7. Update `ClubMembers.current_tag` with the finalized `out_tag` as the player's last known calculated tag (linked via `member_number`).
+5. The highest-ranked player receives the lowest available tag.
+6. If the tag pool has fewer tags than players, remaining players receive no `out_tag`.
+7. Persist the assigned result as each player's `out_tag`.
+8. Update `ClubMembers.current_tag` with the finalized `out_tag` as the player's last known calculated tag (linked via `member_number`).
 
 ### Constraints
 
@@ -90,4 +91,4 @@ At finalization:
 
 ### Reasoning
 
-The pool-based redistribution ensures tags stay within the participating group. The lowest-score-first ranking with `in_tag` tie-breaking is simple and deterministic. Updating `current_tag` provides a reasonable default for display purposes, but the check-in flow must always ask the player for their actual tag to avoid silent mismatches.
+The pool-based redistribution ensures tags stay within the group of players present in the weekly sheet. The lowest-score-first ranking with `in_tag` tie-breaking is simple and deterministic. Including all players (not just checked-in ones) ensures no one is silently excluded from the tag redistribution.

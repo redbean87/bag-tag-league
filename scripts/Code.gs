@@ -155,6 +155,12 @@ function doPost(e) {
     if (data.action === 'commitUdiscImport') {
       return handleCommitUdiscImport(data);
     }
+    if (data.action === 'calculateTags') {
+      return handleCalculateTags(data);
+    }
+    if (data.action === 'confirmTags') {
+      return handleConfirmTags(data);
+    }
 
     return respond('error', 'Unknown action: ' + data.action);
 
@@ -1722,6 +1728,262 @@ function buildMatchEntry(udiscRow, weeklyRow, matchMethod) {
       ace_pot: weeklyRow[headers.indexOf('ace_pot')]
     }
   };
+}
+
+/**
+ * Calculates tag assignments for a weekly league.
+ * Reads all player records from the selected Week YYYY-MM-DD sheet.
+ * Includes every player regardless of checked_in, score, or in_tag status.
+ *
+ * Inputs: league_date (required, YYYY-MM-DD format)
+ */
+function handleCalculateTags(data) {
+  var leagueDate = data.league_date;
+
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date.');
+  }
+
+  var tabName = 'Week ' + leagueDate;
+  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var weeklySheet = spreadsheet.getSheetByName(tabName);
+
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+
+  var weeklyData = weeklySheet.getDataRange().getValues();
+  var headers = weeklyData[0];
+
+  var hMember = headers.indexOf('member_number');
+  var hName = headers.indexOf('player_name_snapshot');
+  var hInTag = headers.indexOf('in_tag');
+  var hOutTag = headers.indexOf('out_tag');
+  var hScore = headers.indexOf('score');
+  var hCheckedIn = headers.indexOf('checked_in');
+
+  // Collect all players from the sheet
+  var players = [];
+  for (var i = 1; i < weeklyData.length; i++) {
+    var row = weeklyData[i];
+    var memberNumber = row[hMember];
+    if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+
+    var inTag = row[hInTag];
+    var inTagNum = parseInt(inTag, 10);
+    var hasValidTag = !isNaN(inTagNum) && inTagNum >= 1;
+
+    var score = row[hScore];
+    var scoreNum = parseInt(score, 10);
+    var hasValidScore = !isNaN(scoreNum);
+
+    players.push({
+      row_index: i,
+      member_number: memberNumber,
+      player_name: row[hName] || '',
+      in_tag: hasValidTag ? inTagNum : null,
+      in_tag_raw: inTag,
+      score: hasValidScore ? scoreNum : null,
+      score_raw: score,
+      checked_in: row[hCheckedIn],
+      out_tag_current: row[hOutTag]
+    });
+  }
+
+  // Build tag pool from valid in_tag values
+  var tagPool = [];
+  var seenTags = {};
+  for (var p = 0; p < players.length; p++) {
+    if (players[p].in_tag !== null && !seenTags[players[p].in_tag]) {
+      tagPool.push(players[p].in_tag);
+      seenTags[players[p].in_tag] = true;
+    }
+  }
+  tagPool.sort(function(a, b) { return a - b; });
+
+  // Rank players: valid scores first (ascending), then no-score players (by in_tag ascending)
+  var withScore = [];
+  var noScore = [];
+  for (var q = 0; q < players.length; q++) {
+    if (players[q].score !== null) {
+      withScore.push(players[q]);
+    } else {
+      noScore.push(players[q]);
+    }
+  }
+
+  withScore.sort(function(a, b) {
+    if (a.score !== b.score) return a.score - b.score;
+    // Tie-break by in_tag: valid tags sort lower; null tags sort last
+    if (a.in_tag !== null && b.in_tag !== null) return a.in_tag - b.in_tag;
+    if (a.in_tag !== null) return -1;
+    if (b.in_tag !== null) return 1;
+    return 0;
+  });
+
+  noScore.sort(function(a, b) {
+    if (a.in_tag !== null && b.in_tag !== null) return a.in_tag - b.in_tag;
+    if (a.in_tag !== null) return -1;
+    if (b.in_tag !== null) return 1;
+    return 0;
+  });
+
+  var ranked = withScore.concat(noScore);
+
+  // Assign tags from pool in rank order
+  var poolIndex = 0;
+  for (var r = 0; r < ranked.length; r++) {
+    if (poolIndex < tagPool.length) {
+      ranked[r].proposed_out_tag = tagPool[poolIndex];
+      poolIndex++;
+    } else {
+      ranked[r].proposed_out_tag = null;
+    }
+    ranked[r].rank = r + 1;
+  }
+
+  // Build response
+  var result = [];
+  for (var s = 0; s < ranked.length; s++) {
+    var pl = ranked[s];
+    result.push({
+      rank: pl.rank,
+      member_number: pl.member_number,
+      player_name: pl.player_name,
+      in_tag: pl.in_tag,
+      score: pl.score,
+      proposed_out_tag: pl.proposed_out_tag,
+      has_valid_tag: pl.in_tag !== null,
+      has_valid_score: pl.score !== null
+    });
+  }
+
+  return respond('ok', 'Tag calculation preview.', {
+    league_date: leagueDate,
+    tab_name: tabName,
+    total_players: players.length,
+    tag_pool: tagPool,
+    tag_pool_count: tagPool.length,
+    players: result
+  });
+}
+
+/**
+ * Confirms and writes tag assignments for a weekly league.
+ * Re-runs the calculation and writes out_tag values to the sheet.
+ *
+ * Inputs: league_date (required, YYYY-MM-DD format)
+ */
+function handleConfirmTags(data) {
+  var leagueDate = data.league_date;
+
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date.');
+  }
+
+  var tabName = 'Week ' + leagueDate;
+  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var weeklySheet = spreadsheet.getSheetByName(tabName);
+
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+
+  var weeklyData = weeklySheet.getDataRange().getValues();
+  var headers = weeklyData[0];
+
+  var hMember = headers.indexOf('member_number');
+  var hInTag = headers.indexOf('in_tag');
+  var hOutTag = headers.indexOf('out_tag');
+  var hScore = headers.indexOf('score');
+  var hUpdatedAt = headers.indexOf('updated_at');
+
+  // Collect all players
+  var players = [];
+  for (var i = 1; i < weeklyData.length; i++) {
+    var row = weeklyData[i];
+    var memberNumber = row[hMember];
+    if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+
+    var inTag = row[hInTag];
+    var inTagNum = parseInt(inTag, 10);
+    var hasValidTag = !isNaN(inTagNum) && inTagNum >= 1;
+
+    var score = row[hScore];
+    var scoreNum = parseInt(score, 10);
+    var hasValidScore = !isNaN(scoreNum);
+
+    players.push({
+      row_index: i,
+      in_tag: hasValidTag ? inTagNum : null,
+      score: hasValidScore ? scoreNum : null
+    });
+  }
+
+  // Build tag pool
+  var tagPool = [];
+  var seenTags = {};
+  for (var p = 0; p < players.length; p++) {
+    if (players[p].in_tag !== null && !seenTags[players[p].in_tag]) {
+      tagPool.push(players[p].in_tag);
+      seenTags[players[p].in_tag] = true;
+    }
+  }
+  tagPool.sort(function(a, b) { return a - b; });
+
+  // Rank players
+  var withScore = [];
+  var noScore = [];
+  for (var q = 0; q < players.length; q++) {
+    if (players[q].score !== null) {
+      withScore.push(players[q]);
+    } else {
+      noScore.push(players[q]);
+    }
+  }
+
+  withScore.sort(function(a, b) {
+    if (a.score !== b.score) return a.score - b.score;
+    if (a.in_tag !== null && b.in_tag !== null) return a.in_tag - b.in_tag;
+    if (a.in_tag !== null) return -1;
+    if (b.in_tag !== null) return 1;
+    return 0;
+  });
+
+  noScore.sort(function(a, b) {
+    if (a.in_tag !== null && b.in_tag !== null) return a.in_tag - b.in_tag;
+    if (a.in_tag !== null) return -1;
+    if (b.in_tag !== null) return 1;
+    return 0;
+  });
+
+  var ranked = withScore.concat(noScore);
+
+  // Assign tags and write to sheet
+  var poolIndex = 0;
+  var now = new Date().toISOString();
+  var updated = 0;
+
+  for (var r = 0; r < ranked.length; r++) {
+    var pl = ranked[r];
+    var outTag = null;
+    if (poolIndex < tagPool.length) {
+      outTag = tagPool[poolIndex];
+      poolIndex++;
+    }
+
+    var sheetRow = pl.row_index + 1;
+    weeklySheet.getRange(sheetRow, hOutTag + 1).setValue(outTag !== null ? outTag : '');
+    weeklySheet.getRange(sheetRow, hUpdatedAt + 1).setValue(now);
+    updated++;
+  }
+
+  return respond('ok', 'Tag assignments written.', {
+    league_date: leagueDate,
+    tab_name: tabName,
+    players_updated: updated,
+    tag_pool_used: tagPool.length
+  });
 }
 
 /**
