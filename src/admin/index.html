@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bag Tag League - League Admin</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -86,6 +87,58 @@
     #log:empty::before {
       content: 'No activity yet.';
       color: #999;
+    }
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-content {
+      background: white;
+      border-radius: 8px;
+      padding: 2rem;
+      max-width: 400px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .modal-content h2 {
+      margin-bottom: 1rem;
+    }
+    .modal-content #qrCode {
+      display: inline-block;
+      margin: 1rem 0;
+    }
+    .modal-content #qrCode canvas {
+      display: block;
+      margin: 0 auto;
+    }
+    .modal-url {
+      font-family: monospace;
+      font-size: 0.8125rem;
+      color: #666;
+      word-break: break-all;
+      background: #f0f0f0;
+      padding: 0.5rem;
+      border-radius: 4px;
+      margin: 0.75rem 0;
+    }
+    .modal-close {
+      background: #555;
+      margin-top: 1rem;
+    }
+    .modal-close:hover {
+      background: #333;
     }
   </style>
 </head>
@@ -179,6 +232,14 @@
       </form>
       <div id="leagueSaveResult" class="status hidden"></div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Player Sign-In QR Code</h2>
+    <p class="help-text">
+      Display a QR code that players can scan to open the sign-in page on their phone.
+    </p>
+    <button type="button" id="btnShowQR" onclick="showSignInQR()">Show Player Sign-In QR Code</button>
   </div>
 
   <div class="card" id="preRoundCard">
@@ -353,9 +414,46 @@
     <div id="log"></div>
   </details>
 
+  <div id="qrModal" class="modal-overlay" onclick="closeQRModal(event)">
+    <div class="modal-content">
+      <h2>Player Sign-In</h2>
+      <p style="font-size:0.875rem; color:#555;">Scan this QR code to open the sign-in page.</p>
+      <div id="qrCode"></div>
+      <div id="qrUrl" class="modal-url"></div>
+      <button type="button" class="modal-close" onclick="closeQRModal()">Close</button>
+    </div>
+  </div>
+
   <script>
     // Apps Script deployment endpoint — updated in deploy.sh when re-deploying.
     var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
+
+    var PLAYER_SIGN_IN_PATH = '/player/sign-in/';
+
+    function showSignInQR() {
+      var url = window.location.origin + PLAYER_SIGN_IN_PATH;
+      var modal = document.getElementById('qrModal');
+      var qrContainer = document.getElementById('qrCode');
+      var urlDisplay = document.getElementById('qrUrl');
+
+      qrContainer.innerHTML = '';
+      new QRCode(qrContainer, {
+        text: url,
+        width: 256,
+        height: 256,
+        colorDark: '#1a1a1a',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      urlDisplay.textContent = url;
+      modal.classList.add('active');
+    }
+
+    function closeQRModal(e) {
+      if (e && e.target !== e.currentTarget) return;
+      document.getElementById('qrModal').classList.remove('active');
+    }
 
     function log(message) {
       var logEl = document.getElementById('log');
