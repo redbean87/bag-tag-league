@@ -74,6 +74,63 @@
       padding: 0.5rem 0;
     }
     summary:hover { color: #333; }
+    details.card {
+      background: white;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      padding: 0;
+    }
+    details.card > summary {
+      cursor: pointer;
+      padding: 0.875rem 1.25rem;
+      margin: 0;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-radius: 8px;
+      transition: background 0.15s ease;
+      user-select: none;
+    }
+    details.card > summary:hover {
+      background: #f5f5f5;
+    }
+    details.card > summary::-webkit-details-marker {
+      display: none;
+    }
+    details.card > summary::marker {
+      display: none;
+      content: '';
+    }
+    details.card > summary .summary-text {
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+    details.card > summary h2 {
+      margin: 0;
+      font-size: 1.25rem;
+    }
+    details.card > summary .summary-hint {
+      font-size: 0.8125rem;
+      color: #888;
+      font-weight: 400;
+    }
+    details.card > summary::after {
+      content: '\25B6';
+      font-size: 1.125rem;
+      color: #666;
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+      margin-left: 1rem;
+    }
+    details.card[open] > summary::after {
+      transform: rotate(90deg);
+    }
+    details.card > .card-body {
+      padding: 0 1.25rem 1.25rem;
+    }
     #log {
       font-family: monospace;
       font-size: 0.8125rem;
@@ -146,6 +203,70 @@
   <h1>Bag Tag League</h1>
   <p class="subtitle">League Admin</p>
 
+  <details class="card" id="leagueCard">
+    <summary>
+      <div class="summary-text">
+        <h2>League Settings</h2>
+        <span class="summary-hint">Configure league settings</span>
+      </div>
+    </summary>
+    <div class="card-body">
+      <div id="leagueMissing">
+        <p class="help-text">
+          The <code>League</code> sheet does not exist in the spreadsheet yet.
+          Create it to store league-wide information and settings.
+        </p>
+        <button type="button" id="btnCreateLeague" onclick="createLeagueSheet()">Create League Sheet</button>
+        <div id="leagueMissingResult" class="status hidden"></div>
+      </div>
+      <div id="leagueForm" style="display:none;">
+        <form onsubmit="saveLeagueSettings(event)">
+          <h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">League Information</h3>
+          <div class="field-group">
+            <label for="league_name">League Name</label>
+            <input type="text" id="league_name" placeholder="">
+          </div>
+          <div class="field-group">
+            <label for="description">Description</label>
+            <input type="text" id="description" placeholder="">
+          </div>
+          <div class="field-group">
+            <label for="location">Location</label>
+            <input type="text" id="location" placeholder="">
+          </div>
+          <div class="field-group">
+            <label for="schedule">Schedule</label>
+            <input type="text" id="schedule" placeholder="">
+          </div>
+          <div class="field-group">
+            <label for="contact_information">Contact Information</label>
+            <input type="text" id="contact_information" placeholder="">
+          </div>
+
+          <h3 style="font-size:1rem; margin-bottom:0.75rem; margin-top:1rem; color:#555;">Entry and Pots</h3>
+          <div class="field-group">
+            <label for="entry_fee">Entry Fee</label>
+            <input type="number" id="entry_fee" step="0.01" min="0" placeholder="">
+          </div>
+          <div class="field-group">
+            <label for="ace_pot_contribution">Ace Pot Contribution</label>
+            <input type="number" id="ace_pot_contribution" step="0.01" min="0" placeholder="">
+          </div>
+          <div class="field-group">
+            <label for="ace_pot_current_total">Ace Pot Current Total (carry-in)</label>
+            <input type="number" id="ace_pot_current_total" step="0.01" min="0" placeholder="">
+          </div>
+          <div class="field-group">
+            <label for="ctp_contribution">CTP Contribution</label>
+            <input type="number" id="ctp_contribution" step="0.01" min="0" placeholder="">
+          </div>
+          <button type="submit" id="btnSaveLeague">Save Settings</button>
+        </form>
+        <div id="leagueSaveResult" class="status hidden"></div>
+      </div>
+    </div>
+  </details>
+
   <div class="card">
     <h2>Create League Day</h2>
     <p class="help-text">
@@ -174,63 +295,6 @@
     </div>
     <div id="clubMembersExists" style="display:none;">
       <p class="help-text">The Club Members sheet is already set up.</p>
-    </div>
-  </div>
-
-  <div class="card" id="leagueCard">
-    <h2>League Settings</h2>
-    <div id="leagueMissing">
-      <p class="help-text">
-        The <code>League</code> sheet does not exist in the spreadsheet yet.
-        Create it to store league-wide information and settings.
-      </p>
-      <button type="button" id="btnCreateLeague" onclick="createLeagueSheet()">Create League Sheet</button>
-      <div id="leagueMissingResult" class="status hidden"></div>
-    </div>
-    <div id="leagueForm" style="display:none;">
-      <form onsubmit="saveLeagueSettings(event)">
-        <h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">League Information</h3>
-        <div class="field-group">
-          <label for="league_name">League Name</label>
-          <input type="text" id="league_name" placeholder="">
-        </div>
-        <div class="field-group">
-          <label for="description">Description</label>
-          <input type="text" id="description" placeholder="">
-        </div>
-        <div class="field-group">
-          <label for="location">Location</label>
-          <input type="text" id="location" placeholder="">
-        </div>
-        <div class="field-group">
-          <label for="schedule">Schedule</label>
-          <input type="text" id="schedule" placeholder="">
-        </div>
-        <div class="field-group">
-          <label for="contact_information">Contact Information</label>
-          <input type="text" id="contact_information" placeholder="">
-        </div>
-
-        <h3 style="font-size:1rem; margin-bottom:0.75rem; margin-top:1rem; color:#555;">Entry and Pots</h3>
-        <div class="field-group">
-          <label for="entry_fee">Entry Fee</label>
-          <input type="number" id="entry_fee" step="0.01" min="0" placeholder="">
-        </div>
-        <div class="field-group">
-          <label for="ace_pot_contribution">Ace Pot Contribution</label>
-          <input type="number" id="ace_pot_contribution" step="0.01" min="0" placeholder="">
-        </div>
-        <div class="field-group">
-          <label for="ace_pot_current_total">Ace Pot Current Total (carry-in)</label>
-          <input type="number" id="ace_pot_current_total" step="0.01" min="0" placeholder="">
-        </div>
-        <div class="field-group">
-          <label for="ctp_contribution">CTP Contribution</label>
-          <input type="number" id="ctp_contribution" step="0.01" min="0" placeholder="">
-        </div>
-        <button type="submit" id="btnSaveLeague">Save Settings</button>
-      </form>
-      <div id="leagueSaveResult" class="status hidden"></div>
     </div>
   </div>
 
