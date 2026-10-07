@@ -47,13 +47,30 @@ test('the pair verdict badge is rendered and overrides recompute it', () => {
   assert.match(overrideBody, /renderDoublesImportPreview\(doublesPreviewData\)/);
 });
 
-test('the doubles preview is visibly read-only and has no commit path', () => {
+test('the doubles preview adds a commit affordance that posts raw rows and overrides', () => {
   const render = functionBody('renderDoublesImportPreview');
   assert.match(render, /Preview only\./);
-  assert.doesNotMatch(render, /commitUdiscImport/, 'the doubles preview must not commit');
+  assert.match(render, /btnCommitDoublesImport/);
+  assert.match(render, /commitUdiscImportDoubles\(\)/);
 
   const request = functionBody('requestDoublesImportPreview');
   assert.doesNotMatch(request, /action: 'commitUdiscImport'/);
+
+  const commit = functionBody('commitUdiscImportDoubles');
+  assert.match(commit, /action: 'commitUdiscImportDoubles'/);
+  assert.match(commit, /rows: parsedUdiscRows/);
+  assert.match(commit, /overrides: overrides/);
+  assert.match(commit, /approved: true/);
+  // The raw rows plus overrides are posted; no client verdict is authoritative.
+  assert.doesNotMatch(commit, /action: 'commitUdiscImport'/);
+  assert.doesNotMatch(commit, /verdict:/);
+});
+
+test('the commit result renderer surfaces per-pair status and reasons', () => {
+  const result = functionBody('renderDoublesCommitResult');
+  assert.match(result, /data\.results/);
+  assert.match(result, /result\.status/);
+  assert.match(result, /result\.reason/);
 });
 
 test('malformed pair rows surface their errors and warnings', () => {

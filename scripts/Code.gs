@@ -100,6 +100,17 @@ const WEEKLY_RECORD_HEADERS_DOUBLES = WEEKLY_RECORD_HEADERS.concat([
   'weekly_points_status'
 ]);
 
+// Doubles commit defaults for the two doubles-only scoring columns. Points are
+// computed by a later (out-of-scope) points flow; import records the raw team
+// placement and leaves points pending (or not applicable for solo rows).
+const WEEKLY_POINTS_STATUS_PENDING = 'pending';
+const WEEKLY_POINTS_STATUS_NOT_APPLICABLE = 'not_applicable';
+
+// Batch-map scope sentinel for solo (keyless) rows. A solo never fabricates a
+// pair_key; inside the commit batch it still needs a scope key so a solo row
+// and a pair row claiming the same member conflict rather than double-write.
+const DOUBLES_SOLO_SCOPE = '__solo__';
+
 // League sheet column headers (15 columns)
 const LEAGUE_SHEET_HEADERS = [
   'league_name',
@@ -818,6 +829,9 @@ function doPost(e) {
     }
     if (data.action === 'commitUdiscImport') {
       return handleCommitUdiscImport(data);
+    }
+    if (data.action === 'commitUdiscImportDoubles') {
+      return handleCommitUdiscImportDoubles(data);
     }
     if (data.action === 'calculateTags') {
       return handleCalculateTags(data);
@@ -2090,6 +2104,50 @@ function uniqueStrings(list) {
   return out;
 }
 
+/**
+ * Normalizes one doubles partner to a single canonical identity token for the
+ * pair key. Username wins over display name, mirroring the import match chain
+ * (weekly username -> ... -> name). The token is prefixed so a username that
+ * happens to equal another partner's display name can never collide.
+ *
+ * Returns '' when the partner carries no usable identity.
+ */
+function normalizeDoublesIdentityToken(partner) {
+  if (!partner) return '';
+  var username = (partner.username || '').toString().trim().toLowerCase();
+  if (username) return 'u:' + username;
+  var name = (partner.name || '').toString().trim().toLowerCase();
+  if (name) return 'n:' + name;
+  return '';
+}
+
+/**
+ * Computes the ratified doubles pair key: a date-scoped, order-independent key
+ * built from the two partners' canonical identity tokens.
+ *
+ *   dubs:<league_date>:<tokenA>+<tokenB>   (tokens sorted ascending)
+ *
+ * Properties:
+ *  - deterministic and symmetric: (A, B) and (B, A) produce the same key;
+ *  - week-scoped: the same two humans pairing another week is a new pair;
+ *  - solo/keyless: a solo row (or a row whose partner identities are unusable,
+ *    duplicated, or not exactly two) returns null rather than fabricating a
+ *    pair.
+ */
+function computeDoublesPairKey(parsed, leagueDate) {
+  if (!parsed || parsed.is_solo) return null;
+  var partners = parsed.partners || [];
+  if (partners.length !== 2) return null;
+
+  var a = normalizeDoublesIdentityToken(partners[0]);
+  var b = normalizeDoublesIdentityToken(partners[1]);
+  if (!a || !b) return null;
+  if (a === b) return null; // duplicate identity — admin must resolve, never auto-keyed
+
+  var tokens = [a, b].sort();
+  return 'dubs:' + leagueDate + ':' + tokens.join('+');
+}
+
 /** Builds the match-result skeleton shared by every matching path. */
 function emptyDoublesMatch() {
   return {
@@ -2414,6 +2472,906 @@ function handlePreviewUdiscImportDoubles(data) {
   });
 }
 
+// ─── Commit helpers shared by the singles and doubles import commit paths ───
+
+/**
+ * Builds the weekly identity indexes used to re-match imported rows at commit
+ * time. Every lookup is server-side against a fresh sheet read; preview
+ * payloads are never trusted.
+ *
+ * Rows are indexed by lowercased trimmed UDisc username, trimmed PDGA number,
+ * and lowercased trimmed player name. `entries` keeps every row (with its
+ * pair_key and member_number) so doubles can apply pair-scope restrictions and
+ * detect member conflicts without a second read.
+ */
+function buildWeeklyMatchIndexes(weeklyData, headers) {
+  var memberCol = headers.indexOf('member_number');
+  var nameCol = headers.indexOf('player_name_snapshot');
+  var udiscCol = headers.indexOf('udisc_username_snapshot');
+  var pdgaCol = headers.indexOf('pdga_number_snapshot');
+  var pairKeyCol = headers.indexOf('pair_key');
+
+  var byUsername = {};
+  var byPdga = {};
+  var byName = {};
+  var byMember = {};
+  var entries = [];
+
+  for (var i = 1; i < weeklyData.length; i++) {
+    var row = weeklyData[i];
+    var username = (row[udiscCol] || '').toString().trim().toLowerCase();
+    var pdga = (row[pdgaCol] || '').toString().trim();
+    var name = (row[nameCol] || '').toString().trim().toLowerCase();
+    var pairKey = pairKeyCol === -1 ? '' : (row[pairKeyCol] || '').toString().trim();
+    var memberNumber = row[memberCol];
+
+    var entry = {
+      row: row,
+      index: i,
+      pair_key: pairKey,
+      member_number: memberNumber,
+      username: username,
+      pdga: pdga,
+      name: name
+    };
+    entries.push(entry);
+
+    if (username) byUsername[username] = entry;
+    if (pdga) byPdga[pdga] = entry;
+    if (name) {
+      if (!byName[name]) byName[name] = [];
+      byName[name].push(entry);
+    }
+    if (memberNumber !== undefined && memberNumber !== null && memberNumber !== '') {
+      byMember[memberNumber] = entry;
+    }
+  }
+
+  return {
+    memberCol: memberCol,
+    nameCol: nameCol,
+    udiscCol: udiscCol,
+    pdgaCol: pdgaCol,
+    pairKeyCol: pairKeyCol,
+    byUsername: byUsername,
+    byPdga: byPdga,
+    byName: byName,
+    byMember: byMember,
+    entries: entries
+  };
+}
+
+/**
+ * Builds the active ClubMembers indexes used to re-match imported identity
+ * (username then PDGA, plus unique name) and to verify admin overrides.
+ * Inactive members are excluded.
+ */
+function buildClubMatchIndexes(clubData, headers) {
+  var memberCol = headers.indexOf('member_number');
+  var nameCol = headers.indexOf('name');
+  var udiscCol = headers.indexOf('udisc_username');
+  var pdgaCol = headers.indexOf('pdga_number');
+  var activeCol = headers.indexOf('is_active');
+
+  var byUsername = {};
+  var byPdga = {};
+  var byName = {};
+  var byMember = {};
+
+  for (var j = 1; j < clubData.length; j++) {
+    var row = clubData[j];
+    var active = row[activeCol];
+    if (active !== true && active !== 'TRUE') continue;
+
+    var memberNumber = row[memberCol];
+    var name = (row[nameCol] || '').toString();
+    var username = (row[udiscCol] || '').toString().trim().toLowerCase();
+    var pdga = (row[pdgaCol] || '').toString().trim();
+    var lowerName = name.trim().toLowerCase();
+
+    if (username) byUsername[username] = memberNumber;
+    if (pdga) byPdga[pdga] = memberNumber;
+    if (lowerName) {
+      if (!byName[lowerName]) byName[lowerName] = [];
+      byName[lowerName].push({
+        member_number: memberNumber,
+        name: name,
+        udisc_username: row[udiscCol] || ''
+      });
+    }
+    byMember[memberNumber] = {
+      member_number: memberNumber,
+      name: name,
+      udisc_username: row[udiscCol] || ''
+    };
+  }
+
+  return {
+    memberCol: memberCol,
+    nameCol: nameCol,
+    udiscCol: udiscCol,
+    pdgaCol: pdgaCol,
+    activeCol: activeCol,
+    byUsername: byUsername,
+    byPdga: byPdga,
+    byName: byName,
+    byMember: byMember
+  };
+}
+
+/**
+ * Restricts the weekly indexes to the rows a doubles partner may match:
+ * keyless (solo) rows plus rows already carrying this pair's key. Without the
+ * restriction a partner's update could land on a row belonging to a different
+ * imported pair and corrupt that pair's linkage.
+ */
+function scopeWeeklyIndexes(indexes, pairKey, isSolo) {
+  var byUsername = {};
+  var byPdga = {};
+  var byName = {};
+  var byMember = {};
+
+  for (var i = 0; i < indexes.entries.length; i++) {
+    var entry = indexes.entries[i];
+    if (isSolo) {
+      if (entry.pair_key) continue;
+    } else {
+      if (entry.pair_key && entry.pair_key !== pairKey) continue;
+    }
+
+    if (entry.username) byUsername[entry.username] = { row: entry.row, index: entry.index };
+    if (entry.pdga) byPdga[entry.pdga] = { row: entry.row, index: entry.index };
+    if (entry.name) {
+      if (!byName[entry.name]) byName[entry.name] = [];
+      byName[entry.name].push({ row: entry.row, index: entry.index });
+    }
+    byMember[entry.member_number] = entry;
+  }
+
+  return { byUsername: byUsername, byPdga: byPdga, byName: byName, byMember: byMember };
+}
+
+/**
+ * Shapes the scoped weekly indexes plus the full club indexes into the object
+ * `matchDoublesPartner` expects.
+ */
+function buildDoublesMatchIndexes(scoped, clubIndexes, weeklyIndexes) {
+  return {
+    wMemberCol: weeklyIndexes.memberCol,
+    wNameCol: weeklyIndexes.nameCol,
+    wUdiscCol: weeklyIndexes.udiscCol,
+    weeklyByUsername: scoped.byUsername,
+    weeklyByPdga: scoped.byPdga,
+    weeklyByName: scoped.byName,
+    clubByUsername: clubIndexes.byUsername,
+    clubByPdga: clubIndexes.byPdga,
+    clubByName: clubIndexes.byName,
+    clubByMember: clubIndexes.byMember
+  };
+}
+
+/** True when an existing weekly row belongs to this row's pair scope. */
+function doublesSameScope(existingPairKey, pairKey, isSolo) {
+  var key = (existingPairKey || '').toString().trim();
+  if (isSolo) return key === '';
+  return key === pairKey;
+}
+
+/**
+ * Verifies an admin-supplied partner override. A claim is never trusted: the
+ * member must exist and be active, and must not already hold a weekly row in a
+ * different pair scope. Returns { ok, match, reason }.
+ */
+function verifyDoublesOverride(partner, matchIndexes, weeklyIndexes, pairKey, isSolo) {
+  var memberNumber = parseInt(partner.requested_member_number, 10);
+  if (isNaN(memberNumber)) return { ok: false, reason: 'invalid_override' };
+
+  var member = matchIndexes.clubByMember[memberNumber];
+  if (!member) return { ok: false, reason: 'invalid_override' };
+
+  var existing = weeklyIndexes.byMember[memberNumber];
+  if (existing && !doublesSameScope(existing.pair_key, pairKey, isSolo)) {
+    return { ok: false, reason: 'member_conflict' };
+  }
+
+  var match = emptyDoublesMatch();
+  match.status = 'matched';
+  match.source = 'admin_override';
+  match.confidence = 'high';
+  match.member_number = memberNumber;
+  match.matched_name = member.name || '';
+  match.matched_username = member.udisc_username || '';
+  match.club_member = true;
+  return { ok: true, match: match };
+}
+
+/** Maps a resolved partner match onto a commit path. */
+function doublesPartnerPath(match) {
+  if (!match) return null;
+  if (match.status === 'matched') {
+    return (match.source || '').indexOf('weekly_') === 0 ? 'update' : 'existing_new_row';
+  }
+  if (match.status === 'new') return 'create';
+  return null;
+}
+
+/**
+ * Builds the UDisc import fields for a weekly row exactly as the singles
+ * committer writes them (blank for absent optional values, booleans coerced).
+ */
+function buildCommitImportFields(udiscRow) {
+  var row = udiscRow || {};
+  function defined(value) {
+    return value !== undefined ? value : '';
+  }
+
+  var fields = {
+    udisc_name_import: (row.name || '').toString().trim(),
+    udisc_username_import: (row.username || '').toString().trim(),
+    udisc_pdga_number_import: (row.pdga_number || '').toString().trim(),
+    score: defined(row.round_total_score),
+    round_relative_score: defined(row.round_relative_score),
+    round_rating: defined(row.round_rating),
+    event_relative_score: defined(row.event_relative_score),
+    event_total_score: defined(row.event_total_score),
+    udisc_checked_in: row.checked_in === true || row.checked_in === 'TRUE',
+    udisc_paid: row.paid === true || row.paid === 'TRUE',
+    starting_hole: defined(row.starting_hole),
+    start_time: defined(row.start_time),
+    division: defined(row.division),
+    udisc_position: defined(row.position),
+    udisc_position_raw: defined(row.position_raw),
+    udisc_ending_tag: defined(row.bag_tag_at_end)
+  };
+
+  for (var h = 1; h <= 18; h++) {
+    fields['hole_' + h] = defined(row['hole_' + h]);
+  }
+  return fields;
+}
+
+/**
+ * Builds the import fields for one doubles partner row. The shared team
+ * scorecard columns come from the raw UDisc pair row, but the identity columns
+ * are the partner's own name/username/PDGA (the raw row carries the pair name
+ * and comma-joined usernames, not one partner's identity).
+ */
+function buildDoublesImportFields(udiscRow, partner) {
+  var fields = buildCommitImportFields(udiscRow);
+  fields.udisc_name_import = (partner.name || '').toString().trim();
+  fields.udisc_username_import = (partner.username || '').toString().trim();
+  fields.udisc_pdga_number_import = (partner.pdga_number || '').toString().trim();
+  return fields;
+}
+
+/** Writes a { header: value } map onto a row array by header index. */
+function applyFieldsByName(target, headers, fields) {
+  for (var key in fields) {
+    var index = headers.indexOf(key);
+    if (index !== -1) target[index] = fields[key];
+  }
+}
+
+/**
+ * Builds a full new weekly row (singles 48-column or doubles 54-column) with
+ * the same fixed defaults the singles committer uses. `pairFields` is applied
+ * last so doubles-only columns ride the same write.
+ */
+function buildNewWeeklyRecord(headers, identity, importFields, pairFields, now) {
+  var record = new Array(headers.length).fill('');
+
+  record[headers.indexOf('member_number')] = identity.member_number;
+  record[headers.indexOf('player_name_snapshot')] = identity.name;
+  record[headers.indexOf('udisc_username_snapshot')] = identity.username;
+  record[headers.indexOf('pdga_number_snapshot')] = identity.pdga;
+  // in_tag / out_tag / signed_in_at: blank — not invented
+  record[headers.indexOf('checked_in')] = true;
+  record[headers.indexOf('paid')] = false;
+  record[headers.indexOf('ctp')] = false;
+  record[headers.indexOf('ace_pot')] = false;
+
+  applyFieldsByName(record, headers, importFields);
+  if (pairFields) applyFieldsByName(record, headers, pairFields);
+
+  record[headers.indexOf('created_at')] = now;
+  record[headers.indexOf('updated_at')] = now;
+  return record;
+}
+
+/**
+ * Updates an existing weekly row in place from the current row contents so
+ * protected fields (member_number, snapshots, in_tag, out_tag, checked_in,
+ * paid, ctp, ace_pot, notes) survive a re-import.
+ */
+function updateWeeklyImportRow(sheet, rowIndex, headers, fields, now) {
+  var current = sheet.getRange(rowIndex, 1, 1, headers.length).getValues()[0];
+  applyFieldsByName(current, headers, fields);
+  current[headers.indexOf('updated_at')] = now;
+  sheet.getRange(rowIndex, 1, 1, headers.length).setValues([current]);
+}
+
+/**
+ * Creates a ClubMembers row for a new identity. The caller must already hold
+ * the script lock. Re-reads ClubMembers under the lock, scans for a duplicate
+ * username/PDGA, allocates max+1, and appends.
+ *
+ * Returns { created, member_number, row_position, reason }:
+ *  - created true  -> a new member row was appended;
+ *  - created false -> the identity already exists; member_number points at it.
+ */
+function createClubMemberUnderLock(clubSheet, clubHeaders, identity, now) {
+  var memberCol = clubHeaders.indexOf('member_number');
+  var nameCol = clubHeaders.indexOf('name');
+  var udiscCol = clubHeaders.indexOf('udisc_username');
+  var pdgaCol = clubHeaders.indexOf('pdga_number');
+  var activeCol = clubHeaders.indexOf('is_active');
+
+  var username = (identity.username || '').toString().trim().toLowerCase();
+  var pdga = (identity.pdga || '').toString().trim();
+
+  var freshData = clubSheet.getDataRange().getValues();
+  var maxMemberNumber = 0;
+  for (var i = 1; i < freshData.length; i++) {
+    var value = parseInt(freshData[i][memberCol], 10);
+    if (!isNaN(value) && value > maxMemberNumber) maxMemberNumber = value;
+
+    var existingUsername = (freshData[i][udiscCol] || '').toString().trim().toLowerCase();
+    var existingPdga = (freshData[i][pdgaCol] || '').toString().trim();
+    if (username && existingUsername === username) {
+      return { created: false, member_number: freshData[i][memberCol], row_position: null, reason: 'duplicate_identity' };
+    }
+    if (pdga && existingPdga === pdga) {
+      return { created: false, member_number: freshData[i][memberCol], row_position: null, reason: 'duplicate_identity' };
+    }
+  }
+
+  var newMemberNumber = maxMemberNumber + 1;
+  var row = new Array(clubHeaders.length).fill('');
+  row[memberCol] = newMemberNumber;
+  row[nameCol] = (identity.name || '').toString();
+  row[udiscCol] = (identity.username || '').toString();
+  row[pdgaCol] = (identity.pdga || '').toString();
+  // current_tag: empty — not invented, admin assigns before the next league day
+  row[activeCol] = true;
+  row[clubHeaders.indexOf('created_at')] = now;
+  row[clubHeaders.indexOf('updated_at')] = now;
+
+  clubSheet.appendRow(row);
+  return { created: true, member_number: newMemberNumber, row_position: clubSheet.getLastRow(), reason: '' };
+}
+
+/** Normalizes the per-row admin override payload into { partner_index: member_number }. */
+function normalizeDoublesOverrides(overrides, rowIndex) {
+  if (!overrides) return {};
+  var rowOverrides = overrides[rowIndex];
+  if (!rowOverrides) return {};
+
+  var normalized = {};
+  if (Array.isArray(rowOverrides)) {
+    for (var i = 0; i < rowOverrides.length; i++) {
+      if (rowOverrides[i] !== undefined && rowOverrides[i] !== null && rowOverrides[i] !== '') {
+        normalized[i] = parseInt(rowOverrides[i], 10);
+      }
+    }
+    return normalized;
+  }
+
+  for (var key in rowOverrides) {
+    if (rowOverrides[key] !== undefined && rowOverrides[key] !== null && rowOverrides[key] !== '') {
+      normalized[parseInt(key, 10)] = parseInt(rowOverrides[key], 10);
+    }
+  }
+  return normalized;
+}
+
+/** Builds the doubles-only columns written onto one partner's weekly row. */
+function buildDoublesPairFields(headers, udiscRow, memberNumber, pairKey, isSolo) {
+  var row = udiscRow || {};
+  var fields = {};
+  if (headers.indexOf('pair_key') !== -1) {
+    fields.pair_key = pairKey === null || pairKey === undefined ? '' : pairKey;
+  }
+  // partner_member_number is intentionally the row's own member_number: it is a
+  // redundant pair-scan aid; member_number stays authoritative (audit Q1).
+  if (headers.indexOf('partner_member_number') !== -1) {
+    fields.partner_member_number = memberNumber;
+  }
+  if (headers.indexOf('team_position') !== -1) {
+    fields.team_position = row.position !== undefined ? row.position : '';
+  }
+  if (headers.indexOf('team_position_raw') !== -1) {
+    fields.team_position_raw = row.position_raw !== undefined ? row.position_raw : '';
+  }
+  if (headers.indexOf('weekly_points') !== -1) {
+    fields.weekly_points = '';
+  }
+  if (headers.indexOf('weekly_points_status') !== -1) {
+    fields.weekly_points_status = isSolo ? WEEKLY_POINTS_STATUS_NOT_APPLICABLE : WEEKLY_POINTS_STATUS_PENDING;
+  }
+  return fields;
+}
+
+/** Finds the first weekly entry whose identity matches a partner's. */
+function findWeeklyIdentity(indexes, partner) {
+  var username = (partner.username || '').toString().trim().toLowerCase();
+  var pdga = (partner.pdga_number || '').toString().trim();
+  for (var i = 0; i < indexes.entries.length; i++) {
+    var entry = indexes.entries[i];
+    if (username && entry.username === username) return entry;
+    if (pdga && entry.pdga === pdga) return entry;
+  }
+  return null;
+}
+
+/**
+ * Detects commit-only conflicts for a ready doubles row against authoritative
+ * server state. Returns a reason code ('member_conflict' | 'identity_changed')
+ * or null. `includeIdentityChange` is false until every plan member is known.
+ */
+function detectDoublesConflict(plan, pairKey, isSolo, scopeKey, weeklyIndexes, memberToPairKey, includeIdentityChange) {
+  var i;
+
+  // Two partners resolving to the same member would write that member twice.
+  var seenMembers = {};
+  for (i = 0; i < plan.length; i++) {
+    var planMember = plan[i].member_number;
+    if (planMember === null || planMember === undefined) continue;
+    if (seenMembers[planMember]) return 'member_conflict';
+    seenMembers[planMember] = true;
+  }
+
+  for (i = 0; i < plan.length; i++) {
+    var memberNumber = plan[i].member_number;
+    if (memberNumber === null || memberNumber === undefined) continue;
+    if (memberToPairKey[memberNumber] !== undefined && memberToPairKey[memberNumber] !== scopeKey) {
+      return 'member_conflict';
+    }
+  }
+
+  for (i = 0; i < plan.length; i++) {
+    var m = plan[i].member_number;
+    if (m === null || m === undefined) continue;
+    var existing = weeklyIndexes.byMember[m];
+    if (existing && !doublesSameScope(existing.pair_key, pairKey, isSolo)) {
+      return 'member_conflict';
+    }
+  }
+
+  for (i = 0; i < plan.length; i++) {
+    if (plan[i].path !== 'create') continue;
+    var found = findWeeklyIdentity(weeklyIndexes, plan[i].partner);
+    if (found && !doublesSameScope(found.pair_key, pairKey, isSolo)) {
+      return 'member_conflict';
+    }
+  }
+
+  if (includeIdentityChange && !isSolo && pairKey) {
+    var resolvedKnown = {};
+    for (i = 0; i < plan.length; i++) {
+      if (plan[i].member_number !== null && plan[i].member_number !== undefined) {
+        resolvedKnown[plan[i].member_number] = true;
+      }
+    }
+    for (i = 0; i < weeklyIndexes.entries.length; i++) {
+      var entry = weeklyIndexes.entries[i];
+      if (entry.pair_key === pairKey && !resolvedKnown[entry.member_number]) {
+        return 'identity_changed';
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Partner outcomes for one doubles row, from either a resolved plan or matches. */
+function buildDoublesPartnerOutcomes(plan, parsed) {
+  if (plan) {
+    return plan.map(function (item) {
+      return {
+        partner_index: item.partner_index,
+        name: item.partner.name,
+        username: item.partner.username,
+        member_number: item.member_number,
+        path: item.path,
+        match_source: item.partner.match ? item.partner.match.source : null,
+        match_status: item.partner.match ? item.partner.match.status : null
+      };
+    });
+  }
+  return (parsed.partners || []).map(function (partner) {
+    return {
+      partner_index: partner.partner_index,
+      name: partner.name,
+      username: partner.username,
+      member_number: partner.match ? partner.match.member_number : null,
+      path: doublesPartnerPath(partner.match),
+      match_source: partner.match ? partner.match.source : null,
+      match_status: partner.match ? partner.match.status : null
+    };
+  });
+}
+
+/** Builds one per-row doubles commit outcome. */
+function buildDoublesRowResult(rowIndex, parsed, pairKey, isSolo, status, reason, plan) {
+  return {
+    row_index: rowIndex,
+    pair_key: pairKey,
+    is_solo: isSolo,
+    raw_name: parsed.source_name,
+    raw_usernames: parsed.source_usernames,
+    status: status,
+    reason: reason || '',
+    partners: buildDoublesPartnerOutcomes(plan, parsed)
+  };
+}
+
+/** Best-effort compensating delete of weekly rows appended for a failed pair. */
+function compensateAppendedWeeklyRows(appended) {
+  for (var i = appended.length - 1; i >= 0; i--) {
+    try {
+      appended[i].sheet.deleteRow(appended[i].position);
+    } catch (error) {
+      // Best effort only; Apps Script cannot promise a true rollback.
+    }
+  }
+}
+
+/** Best-effort compensating delete of ClubMembers rows created for a failed pair. */
+function compensateAppendedMembers(clubSheet, appendedMembers) {
+  for (var i = appendedMembers.length - 1; i >= 0; i--) {
+    var created = appendedMembers[i];
+    if (!created || !created.created || created.row_position === null || created.row_position === undefined) continue;
+    try {
+      clubSheet.deleteRow(created.row_position);
+    } catch (error) {
+      // Best effort only.
+    }
+  }
+}
+
+/**
+ * Executes the member phase and weekly phase for one ready doubles row while
+ * the caller holds the pair lock. All revalidation reads happen here, inside
+ * the lock, against fresh sheet data. Returns a per-row outcome.
+ */
+function commitDoublesPairUnderLock(context) {
+  var weeklySheet = context.weeklySheet;
+  var weeklyHeaders = context.weeklyHeaders;
+  var clubSheet = context.clubSheet;
+  var clubHeaders = context.clubHeaders;
+  var parsed = context.parsed;
+  var plan = context.plan;
+  var pairKey = context.pairKey;
+  var scopeKey = context.scopeKey;
+  var isSolo = context.isSolo;
+  var udiscRow = context.udiscRow;
+  var now = context.now;
+  var claimedPairMember = context.claimedPairMember;
+  var memberToPairKey = context.memberToPairKey;
+  var createdMemberNumbers = context.createdMemberNumbers;
+
+  // Authoritative fresh reads inside the pair lock.
+  var freshWeeklyData = weeklySheet.getDataRange().getValues();
+  var freshHeaders = freshWeeklyData[0] && freshWeeklyData[0].length ? freshWeeklyData[0] : weeklyHeaders;
+  var freshWeeklyIndexes = buildWeeklyMatchIndexes(freshWeeklyData, freshHeaders);
+
+  var conflict = detectDoublesConflict(plan, pairKey, isSolo, scopeKey, freshWeeklyIndexes, memberToPairKey, false);
+  if (conflict) {
+    return { status: 'review', reason: conflict, plan: plan };
+  }
+
+  // ---- Member phase (0 to 2 creations inside this pair lock) ----
+  var appendedMembers = [];
+  var pairCreatedNumbers = [];
+  try {
+    for (var p = 0; p < plan.length; p++) {
+      if (plan[p].path !== 'create') continue;
+      var identity = {
+        name: plan[p].partner.name,
+        username: plan[p].partner.username,
+        pdga: plan[p].partner.pdga_number
+      };
+      var created = createClubMemberUnderLock(clubSheet, clubHeaders, identity, now);
+      appendedMembers.push(created);
+      plan[p].member_number = created.member_number;
+      if (created.created) pairCreatedNumbers.push(created.member_number);
+    }
+  } catch (memberError) {
+    compensateAppendedMembers(clubSheet, appendedMembers);
+    return { status: 'failed', reason: 'member_phase_failure', plan: plan };
+  }
+
+  // Re-check conflicts (and identity drift) now that every member is resolved.
+  conflict = detectDoublesConflict(plan, pairKey, isSolo, scopeKey, freshWeeklyIndexes, memberToPairKey, true);
+  if (conflict) {
+    return { status: 'review', reason: conflict, plan: plan };
+  }
+
+  // Idempotent replay: every member already claimed for this exact scope.
+  var allClaimed = plan.length > 0;
+  var anyClaimed = false;
+  for (var a = 0; a < plan.length; a++) {
+    if (claimedPairMember[scopeKey + '|' + plan[a].member_number]) {
+      anyClaimed = true;
+    } else {
+      allClaimed = false;
+    }
+  }
+  if (allClaimed) {
+    return { status: 'already_committed', reason: 'idempotent_replay', plan: plan };
+  }
+  if (anyClaimed) {
+    return { status: 'review', reason: 'member_conflict', plan: plan };
+  }
+
+  // ---- Weekly phase (both partner rows, one pair) ----
+  var appendedWeekly = [];
+  var appendedCount = 0;
+  try {
+    for (var w = 0; w < plan.length; w++) {
+      var item = plan[w];
+      var memberNumber = item.member_number;
+      var importFields = buildDoublesImportFields(udiscRow, item.partner);
+      var pairFields = buildDoublesPairFields(freshHeaders, udiscRow, memberNumber, pairKey, isSolo);
+      var fields = {};
+      var key;
+      for (key in importFields) fields[key] = importFields[key];
+      for (key in pairFields) fields[key] = pairFields[key];
+
+      var target = freshWeeklyIndexes.byMember[memberNumber];
+      if (target && doublesSameScope(target.pair_key, pairKey, isSolo)) {
+        updateWeeklyImportRow(weeklySheet, target.index + 1, freshHeaders, fields, now);
+      } else {
+        var snapshotName = item.partner.match && item.partner.match.matched_name
+          ? item.partner.match.matched_name
+          : item.partner.name;
+        var record = buildNewWeeklyRecord(freshHeaders, {
+          member_number: memberNumber,
+          name: snapshotName,
+          username: item.partner.username,
+          pdga: item.partner.pdga_number
+        }, importFields, pairFields, now);
+        weeklySheet.appendRow(record);
+        appendedWeekly.push({ sheet: weeklySheet, position: weeklySheet.getLastRow() });
+        appendedCount++;
+      }
+    }
+  } catch (weeklyError) {
+    compensateAppendedWeeklyRows(appendedWeekly);
+    compensateAppendedMembers(clubSheet, appendedMembers);
+    return { status: 'failed', reason: 'weekly_phase_failure', plan: plan };
+  }
+
+  // Success: publish batch claims and created member numbers.
+  for (var k = 0; k < plan.length; k++) {
+    claimedPairMember[scopeKey + '|' + plan[k].member_number] = true;
+    memberToPairKey[plan[k].member_number] = scopeKey;
+  }
+  for (var n = 0; n < pairCreatedNumbers.length; n++) {
+    createdMemberNumbers.push(pairCreatedNumbers[n]);
+  }
+
+  var hadExisting = false;
+  if (!isSolo && pairKey) {
+    for (var e = 0; e < freshWeeklyIndexes.entries.length; e++) {
+      if (freshWeeklyIndexes.entries[e].pair_key === pairKey) { hadExisting = true; break; }
+    }
+  }
+  var status = hadExisting && appendedCount > 0 ? 'repaired' : 'committed';
+  return { status: status, reason: '', plan: plan };
+}
+
+/**
+ * Commits an approved UDisc doubles import to the selected weekly sheet.
+ *
+ * Doubles rows are grouped by the ratified pair key and processed pair by pair
+ * (solo/keyless rows run the singles-shaped path with a keyless scope). Each
+ * ready pair is validated, its verdict recomputed server-side, revalidated
+ * under a pair-scoped lock, then committed through a member phase followed by a
+ * weekly phase. Every attempted row receives an explicit outcome, including
+ * failures; no failure is silently dropped and one bad pair never stops the
+ * rest of the import.
+ *
+ * Inputs: league_date (required), rows (required, raw UDisc rows), approved
+ * (must be true), overrides (optional per-row, per-partner member claims).
+ */
+function handleCommitUdiscImportDoubles(data) {
+  if (resolveLeagueFormat(leagueSelectorFrom(data)) !== LEAGUE_FORMAT_DOUBLES) {
+    return respond('error', 'Doubles import commit is only available for the doubles spreadsheet.');
+  }
+
+  var leagueDate = data.league_date;
+  var rows = data.rows;
+  var approved = data.approved;
+
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date.');
+  }
+  if (!approved) {
+    return respond('error', 'Import not approved.');
+  }
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    return respond('error', 'No UDisc rows provided.');
+  }
+
+  var tabName = 'Week ' + leagueDate;
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  var weeklySheet = spreadsheet.getSheetByName(tabName);
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  if (!clubSheet) {
+    return respond('error', 'ClubMembers tab not found.');
+  }
+
+  // Re-read and revalidate all data server-side. The raw rows are the only
+  // authority; any client-supplied verdict or match is deliberately ignored.
+  var weeklyData = weeklySheet.getDataRange().getValues();
+  var weeklyHeaders = weeklyData[0];
+  var weeklyIndexes = buildWeeklyMatchIndexes(weeklyData, weeklyHeaders);
+
+  var clubData = clubSheet.getDataRange().getValues();
+  var clubHeaders = clubData[0];
+  var clubIndexes = buildClubMatchIndexes(clubData, clubHeaders);
+
+  var claimedPairMember = {};
+  var memberToPairKey = {};
+  var createdMemberNumbers = [];
+  var results = [];
+  var summary = {
+    total_rows: rows.length,
+    pairs: 0,
+    solos: 0,
+    committed: 0,
+    repaired: 0,
+    already_committed: 0,
+    review: 0,
+    blocked: 0,
+    failed: 0
+  };
+
+  var now = new Date().toISOString();
+
+  for (var r = 0; r < rows.length; r++) {
+    var udiscRow = rows[r] || {};
+    var parsed = parseDoublesRow(udiscRow);
+    var isSolo = parsed.is_solo;
+    var pairKey = computeDoublesPairKey(parsed, leagueDate);
+    var scopeKey = pairKey === null ? DOUBLES_SOLO_SCOPE : pairKey;
+    var rowOverrides = normalizeDoublesOverrides(data.overrides, r);
+
+    if (isSolo) summary.solos++; else summary.pairs++;
+
+    // Attach claimed overrides (verified, never trusted, below).
+    for (var p = 0; p < parsed.partners.length; p++) {
+      if (rowOverrides[p] !== undefined && rowOverrides[p] !== null && rowOverrides[p] !== '') {
+        parsed.partners[p].requested_member_number = rowOverrides[p];
+      }
+    }
+
+    var scoped = scopeWeeklyIndexes(weeklyIndexes, pairKey, isSolo);
+    var matchIndexes = buildDoublesMatchIndexes(scoped, clubIndexes, weeklyIndexes);
+
+    // Match every partner server-side; an override is verified, not trusted.
+    var overrideFailure = null;
+    for (var mp = 0; mp < parsed.partners.length; mp++) {
+      var partner = parsed.partners[mp];
+      if (partner.requested_member_number !== undefined) {
+        var verified = verifyDoublesOverride(partner, matchIndexes, weeklyIndexes, pairKey, isSolo);
+        if (verified.ok) {
+          partner.match = verified.match;
+        } else {
+          partner.match = emptyDoublesMatch();
+          partner.match.status = 'unmatched';
+          partner.match.source = 'invalid_override';
+          if (!overrideFailure) overrideFailure = verified.reason || 'invalid_override';
+        }
+      } else {
+        partner.match = matchDoublesPartner(partner, matchIndexes);
+      }
+    }
+
+    var verdict = computeDoublesPairVerdict(parsed, parsed.partners);
+
+    if (overrideFailure) {
+      summary.review++;
+      results.push(buildDoublesRowResult(r, parsed, pairKey, isSolo, 'review', overrideFailure));
+      continue;
+    }
+    if (verdict.verdict === 'blocked') {
+      summary.blocked++;
+      results.push(buildDoublesRowResult(r, parsed, pairKey, isSolo, 'blocked', verdict.reason));
+      continue;
+    }
+    if (verdict.verdict === 'review') {
+      summary.review++;
+      results.push(buildDoublesRowResult(r, parsed, pairKey, isSolo, 'review', verdict.reason));
+      continue;
+    }
+
+    // ---- Ready: resolve each partner's path from the scoped fresh snapshot ----
+    var plan = [];
+    for (var pp = 0; pp < parsed.partners.length; pp++) {
+      var planPartner = parsed.partners[pp];
+      var path = doublesPartnerPath(planPartner.match);
+      var item = {
+        partner: planPartner,
+        partner_index: planPartner.partner_index,
+        path: path,
+        member_number: planPartner.match.member_number,
+        target_index: null
+      };
+      var scopedEntry = item.member_number !== null && item.member_number !== undefined
+        ? scoped.byMember[item.member_number]
+        : null;
+      if (scopedEntry) {
+        item.path = 'update';
+        item.target_index = scopedEntry.index;
+      } else if (item.path !== 'create') {
+        item.path = 'existing_new_row';
+      }
+      plan.push(item);
+    }
+
+    var conflict = detectDoublesConflict(plan, pairKey, isSolo, scopeKey, weeklyIndexes, memberToPairKey, false);
+    if (conflict) {
+      summary.review++;
+      results.push(buildDoublesRowResult(r, parsed, pairKey, isSolo, 'review', conflict, plan));
+      continue;
+    }
+
+    // ---- Pair-scoped lock: one lock per ready pair, never a global import lock ----
+    var lock = LockService.getScriptLock();
+    var locked = false;
+    try {
+      lock.waitLock(10000);
+      locked = true;
+    } catch (lockError) {
+      summary.failed++;
+      results.push(buildDoublesRowResult(r, parsed, pairKey, isSolo, 'failed', 'lock_timeout', plan));
+      continue;
+    }
+
+    var outcome;
+    try {
+      outcome = commitDoublesPairUnderLock({
+        weeklySheet: weeklySheet,
+        weeklyHeaders: weeklyHeaders,
+        clubSheet: clubSheet,
+        clubHeaders: clubHeaders,
+        parsed: parsed,
+        plan: plan,
+        pairKey: pairKey,
+        scopeKey: scopeKey,
+        isSolo: isSolo,
+        udiscRow: udiscRow,
+        now: now,
+        claimedPairMember: claimedPairMember,
+        memberToPairKey: memberToPairKey,
+        createdMemberNumbers: createdMemberNumbers
+      });
+    } finally {
+      if (locked) lock.releaseLock();
+    }
+
+    results.push(buildDoublesRowResult(r, parsed, pairKey, isSolo, outcome.status, outcome.reason, outcome.plan));
+    if (outcome.status === 'committed') summary.committed++;
+    else if (outcome.status === 'repaired') summary.repaired++;
+    else if (outcome.status === 'already_committed') summary.already_committed++;
+    else if (outcome.status === 'failed') summary.failed++;
+    else summary.review++;
+  }
+
+  return respond('ok', 'Doubles import committed.', {
+    format: LEAGUE_FORMAT_DOUBLES,
+    league_date: leagueDate,
+    summary: summary,
+    results: results,
+    created_member_numbers: createdMemberNumbers
+  });
+}
+
 /**
  * Commits an approved UDisc import to the selected weekly sheet.
  * Revalidates matching server-side. Updates matched rows in place,
@@ -2423,6 +3381,10 @@ function handlePreviewUdiscImportDoubles(data) {
  * Inputs: league_date (required), rows (required), approved (must be true)
  */
 function handleCommitUdiscImport(data) {
+  if (resolveLeagueFormat(leagueSelectorFrom(data)) === LEAGUE_FORMAT_DOUBLES) {
+    return respond('error', 'Singles import commit is not available for the doubles spreadsheet.');
+  }
+
   var leagueDate = data.league_date;
   var rows = data.rows;
   var approved = data.approved;
@@ -2453,55 +3415,11 @@ function handleCommitUdiscImport(data) {
   // Re-read and revalidate all data server-side (do not trust preview payload)
   var weeklyData = weeklySheet.getDataRange().getValues();
   var weeklyHeaders = weeklyData[0];
+  var weeklyIndexes = buildWeeklyMatchIndexes(weeklyData, weeklyHeaders);
 
-  var wMemberCol = weeklyHeaders.indexOf('member_number');
-  var wNameCol = weeklyHeaders.indexOf('player_name_snapshot');
-  var wUdiscCol = weeklyHeaders.indexOf('udisc_username_snapshot');
-  var wPdgaCol = weeklyHeaders.indexOf('pdga_number_snapshot');
-
-  // Build weekly indexes
-  var weeklyByUsername = {};
-  var weeklyByPdga = {};
-  var weeklyByName = {};
-
-  for (var i = 1; i < weeklyData.length; i++) {
-    var row = weeklyData[i];
-    var udisc = (row[wUdiscCol] || '').toString().trim().toLowerCase();
-    var pdga = (row[wPdgaCol] || '').toString().trim();
-    var name = (row[wNameCol] || '').toString().trim().toLowerCase();
-
-    if (udisc) weeklyByUsername[udisc] = { row: row, index: i };
-    if (pdga) weeklyByPdga[pdga] = { row: row, index: i };
-    if (name) {
-      if (!weeklyByName[name]) weeklyByName[name] = [];
-      weeklyByName[name].push({ row: row, index: i });
-    }
-  }
-
-  // Read and index ClubMembers
   var clubData = clubSheet.getDataRange().getValues();
   var clubHeaders = clubData[0];
-
-  var cMemberCol = clubHeaders.indexOf('member_number');
-  var cNameCol = clubHeaders.indexOf('name');
-  var cUdiscCol = clubHeaders.indexOf('udisc_username');
-  var cPdgaCol = clubHeaders.indexOf('pdga_number');
-  var cActiveCol = clubHeaders.indexOf('is_active');
-
-  var clubByUsername = {};
-  var clubByPdga = {};
-
-  for (var j = 1; j < clubData.length; j++) {
-    var crow = clubData[j];
-    var cActive = crow[cActiveCol];
-    if (cActive !== true && cActive !== 'TRUE') continue;
-
-    var cUdisc = (crow[cUdiscCol] || '').toString().trim().toLowerCase();
-    var cPdga = (crow[cPdgaCol] || '').toString().trim();
-
-    if (cUdisc) clubByUsername[cUdisc] = crow[cMemberCol];
-    if (cPdga) clubByPdga[cPdga] = crow[cMemberCol];
-  }
+  var clubIndexes = buildClubMatchIndexes(clubData, clubHeaders);
 
   // Track created member_numbers in this batch to prevent duplicates
   var batchMemberNumbers = {};
@@ -2525,58 +3443,29 @@ function handleCommitUdiscImport(data) {
     var matchMethod = null;
 
     // Step 1: username match against weekly records
-    if (uUsername) {
-      var m = weeklyByUsername[uUsername.toLowerCase()];
-      if (m) { weeklyMatch = m; matchMethod = 'username'; }
+    if (uUsername && weeklyIndexes.byUsername[uUsername.toLowerCase()]) {
+      weeklyMatch = weeklyIndexes.byUsername[uUsername.toLowerCase()];
+      matchMethod = 'username';
     }
     // Step 2: PDGA match against weekly records
-    if (!weeklyMatch && uPdga) {
-      var m = weeklyByPdga[uPdga];
-      if (m) { weeklyMatch = m; matchMethod = 'pdga'; }
+    if (!weeklyMatch && uPdga && weeklyIndexes.byPdga[uPdga]) {
+      weeklyMatch = weeklyIndexes.byPdga[uPdga];
+      matchMethod = 'pdga';
     }
     // Step 3: name match against weekly records
     if (!weeklyMatch) {
-      var nameMatches = weeklyByName[uName.toLowerCase()];
+      var nameMatches = weeklyIndexes.byName[uName.toLowerCase()];
       if (nameMatches && nameMatches.length === 1) {
         weeklyMatch = nameMatches[0];
         matchMethod = 'name';
       }
     }
 
+    var importFields = buildCommitImportFields(udiscRow);
+
     if (weeklyMatch) {
       // --- Path 1: Update existing weekly record in place ---
-      var targetRowIndex = weeklyMatch.index + 1;
-      var existingRow = weeklyMatch.row;
-      var values = existingRow.slice();
-
-      // Read current row state (may have changed since preview)
-      var currentRow = weeklySheet.getRange(targetRowIndex, 1, 1, weeklyHeaders.length).getValues()[0];
-      values = currentRow.slice();
-
-      // Write UDisc import fields only — protected fields untouched
-      values[weeklyHeaders.indexOf('udisc_name_import')] = uName;
-      values[weeklyHeaders.indexOf('udisc_username_import')] = uUsername;
-      values[weeklyHeaders.indexOf('udisc_pdga_number_import')] = uPdga;
-      values[weeklyHeaders.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
-      values[weeklyHeaders.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
-      values[weeklyHeaders.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
-      values[weeklyHeaders.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
-      values[weeklyHeaders.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
-      values[weeklyHeaders.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
-      values[weeklyHeaders.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
-      values[weeklyHeaders.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
-      values[weeklyHeaders.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
-      values[weeklyHeaders.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
-      values[weeklyHeaders.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
-      values[weeklyHeaders.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
-      values[weeklyHeaders.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
-      for (var h = 1; h <= 18; h++) {
-        var holeKey = 'hole_' + h;
-        values[weeklyHeaders.indexOf(holeKey)] = udiscRow[holeKey] !== undefined ? udiscRow[holeKey] : '';
-      }
-      values[weeklyHeaders.indexOf('updated_at')] = now;
-
-      weeklySheet.getRange(targetRowIndex, 1, 1, weeklyHeaders.length).setValues([values]);
+      updateWeeklyImportRow(weeklySheet, weeklyMatch.index + 1, weeklyHeaders, importFields, now);
       matchedUpdated++;
 
     } else {
@@ -2585,19 +3474,19 @@ function handleCommitUdiscImport(data) {
       var existingMemberName = '';
 
       if (uUsername) {
-        existingMemberNum = clubByUsername[uUsername.toLowerCase()];
+        existingMemberNum = clubIndexes.byUsername[uUsername.toLowerCase()];
       }
       if (!existingMemberNum && uPdga) {
-        existingMemberNum = clubByPdga[uPdga];
+        existingMemberNum = clubIndexes.byPdga[uPdga];
       }
 
       if (existingMemberNum) {
         // Verify ClubMembers row still exists and is active
         var memberStillValid = false;
         for (var c = 1; c < clubData.length; c++) {
-          if (clubData[c][cMemberCol] === existingMemberNum &&
-              (clubData[c][cActiveCol] === true || clubData[c][cActiveCol] === 'TRUE')) {
-            existingMemberName = clubData[c][cNameCol] || '';
+          if (clubData[c][clubIndexes.memberCol] === existingMemberNum &&
+              (clubData[c][clubIndexes.activeCol] === true || clubData[c][clubIndexes.activeCol] === 'TRUE')) {
+            existingMemberName = clubData[c][clubIndexes.nameCol] || '';
             memberStillValid = true;
             break;
           }
@@ -2612,7 +3501,7 @@ function handleCommitUdiscImport(data) {
         var existingWeekly = weeklySheet.getDataRange().getValues();
         var alreadyExists = false;
         for (var w = 1; w < existingWeekly.length; w++) {
-          if (existingWeekly[w][wMemberCol] === existingMemberNum) {
+          if (existingWeekly[w][weeklyIndexes.memberCol] === existingMemberNum) {
             alreadyExists = true;
             break;
           }
@@ -2620,44 +3509,12 @@ function handleCommitUdiscImport(data) {
         if (alreadyExists) continue;
 
         // --- Path 2: Existing ClubMembers player, create new weekly row ---
-        var newRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = existingMemberNum;
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = existingMemberName;
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = uUsername;
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = uPdga;
-        // in_tag: blank — not invented
-        // out_tag: blank — not calculated
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
-        // signed_in_at: blank — player did not check in through the app
-        // paid: FALSE — not invented
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('paid')] = false;
-        // ctp: FALSE — not invented
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = false;
-        // ace_pot: FALSE — not invented
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = false;
-        // UDisc import fields
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_name_import')] = uName;
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_import')] = uUsername;
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_pdga_number_import')] = uPdga;
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
-        for (var h = 1; h <= 18; h++) {
-          newRecord[WEEKLY_RECORD_HEADERS.indexOf('hole_' + h)] = udiscRow['hole_' + h] !== undefined ? udiscRow['hole_' + h] : '';
-        }
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
-        newRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
-
+        var newRecord = buildNewWeeklyRecord(WEEKLY_RECORD_HEADERS, {
+          member_number: existingMemberNum,
+          name: existingMemberName,
+          username: uUsername,
+          pdga: uPdga
+        }, importFields, null, now);
         weeklySheet.appendRow(newRecord);
         existingMemberWeeklyCreated++;
 
@@ -2665,63 +3522,31 @@ function handleCommitUdiscImport(data) {
         // --- Path 3: Completely new player — create ClubMembers + weekly row ---
         if (!uUsername && !uPdga) continue;
 
-        // Check if this username/PDGA was already assigned a member_number in this batch
-        var batchKey = (uUsername || '') + '|' + (uPdga || '');
-        var alreadyBatchAssigned = false;
-        for (var bk in batchMemberNumbers) {
-          // batchMemberNumbers stores member_numbers; we need identity-based dedup
-        }
-
         // Check existing ClubMembers one more time
         var doubleCheck = null;
-        if (uUsername && clubByUsername[uUsername.toLowerCase()]) {
-          doubleCheck = clubByUsername[uUsername.toLowerCase()];
+        if (uUsername && clubIndexes.byUsername[uUsername.toLowerCase()]) {
+          doubleCheck = clubIndexes.byUsername[uUsername.toLowerCase()];
         }
-        if (!doubleCheck && uPdga && clubByPdga[uPdga]) {
-          doubleCheck = clubByPdga[uPdga];
+        if (!doubleCheck && uPdga && clubIndexes.byPdga[uPdga]) {
+          doubleCheck = clubIndexes.byPdga[uPdga];
         }
         if (doubleCheck) {
           // Became an existing member between preview and commit — treat as Path 2
           if (batchMemberNumbers[doubleCheck]) continue;
           batchMemberNumbers[doubleCheck] = true;
-          // Find ClubMembers name
           var cmName = '';
           for (var cc = 1; cc < clubData.length; cc++) {
-            if (clubData[cc][cMemberCol] === doubleCheck) {
-              cmName = clubData[cc][cNameCol] || '';
+            if (clubData[cc][clubIndexes.memberCol] === doubleCheck) {
+              cmName = clubData[cc][clubIndexes.nameCol] || '';
               break;
             }
           }
-          var newRecord2 = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = doubleCheck;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = cmName;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = uUsername;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = uPdga;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('paid')] = false;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = false;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = false;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_name_import')] = uName;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_import')] = uUsername;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_pdga_number_import')] = uPdga;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
-          for (var h2 = 1; h2 <= 18; h2++) {
-            newRecord2[WEEKLY_RECORD_HEADERS.indexOf('hole_' + h2)] = udiscRow['hole_' + h2] !== undefined ? udiscRow['hole_' + h2] : '';
-          }
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
-          newRecord2[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
+          var newRecord2 = buildNewWeeklyRecord(WEEKLY_RECORD_HEADERS, {
+            member_number: doubleCheck,
+            name: cmName,
+            username: uUsername,
+            pdga: uPdga
+          }, importFields, null, now);
           weeklySheet.appendRow(newRecord2);
           existingMemberWeeklyCreated++;
           continue;
@@ -2732,86 +3557,23 @@ function handleCommitUdiscImport(data) {
         try {
           lock.waitLock(10000);
 
-          // Re-read ClubMembers inside lock to catch rows created earlier in this batch
-          var freshClubData = clubSheet.getDataRange().getValues();
-          var maxMemberNumber = 0;
-          var duplicateDetected = false;
-          for (var cr = 1; cr < freshClubData.length; cr++) {
-            var val = freshClubData[cr][cMemberCol];
-            var num = parseInt(val, 10);
-            if (!isNaN(num) && num > maxMemberNumber) {
-              maxMemberNumber = num;
-            }
-            // Check for duplicate identity (username or PDGA already exists)
-            var existingUdisc = (freshClubData[cr][cUdiscCol] || '').toString().trim().toLowerCase();
-            var existingPdga = (freshClubData[cr][cPdgaCol] || '').toString().trim();
-            if (uUsername && existingUdisc === uUsername.toLowerCase()) {
-              duplicateDetected = true;
-              break;
-            }
-            if (uPdga && existingPdga === uPdga) {
-              duplicateDetected = true;
-              break;
-            }
-          }
-          if (duplicateDetected) {
-            lock.releaseLock();
-            continue;
-          }
+          var memberResult = createClubMemberUnderLock(clubSheet, CLUB_MEMBER_HEADERS, {
+            name: uName,
+            username: uUsername,
+            pdga: uPdga
+          }, now);
+          if (!memberResult.created) continue;
 
-          var newMemberNumber = maxMemberNumber + 1;
-
-          // Create ClubMembers row
-          var newClubRow = new Array(CLUB_MEMBER_HEADERS.length).fill('');
-          newClubRow[CLUB_MEMBER_HEADERS.indexOf('member_number')] = newMemberNumber;
-          newClubRow[CLUB_MEMBER_HEADERS.indexOf('name')] = uName;
-          newClubRow[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = uUsername;
-          newClubRow[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = uPdga;
-          // current_tag: empty — not invented, admin must assign before next league day
-          newClubRow[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
-          newClubRow[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
-          newClubRow[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
-
-          clubSheet.appendRow(newClubRow);
-
+          var newMemberNumber = memberResult.member_number;
           batchMemberNumbers[newMemberNumber] = true;
           createdMemberNumbers.push(newMemberNumber);
 
-          // Create weekly record
-          var newWeeklyRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = newMemberNumber;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = uName;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = uUsername;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = uPdga;
-          // in_tag: blank — not invented
-          // out_tag: blank — not calculated
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
-          // signed_in_at: blank — player did not check in through the app
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('paid')] = false;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = false;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = false;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_name_import')] = uName;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_import')] = uUsername;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_pdga_number_import')] = uPdga;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('score')] = udiscRow.round_total_score !== undefined ? udiscRow.round_total_score : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('round_relative_score')] = udiscRow.round_relative_score !== undefined ? udiscRow.round_relative_score : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('round_rating')] = udiscRow.round_rating !== undefined ? udiscRow.round_rating : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('event_relative_score')] = udiscRow.event_relative_score !== undefined ? udiscRow.event_relative_score : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('event_total_score')] = udiscRow.event_total_score !== undefined ? udiscRow.event_total_score : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_checked_in')] = udiscRow.checked_in === true || udiscRow.checked_in === 'TRUE';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_paid')] = udiscRow.paid === true || udiscRow.paid === 'TRUE';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('starting_hole')] = udiscRow.starting_hole !== undefined ? udiscRow.starting_hole : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('start_time')] = udiscRow.start_time !== undefined ? udiscRow.start_time : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('division')] = udiscRow.division !== undefined ? udiscRow.division : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position')] = udiscRow.position !== undefined ? udiscRow.position : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_position_raw')] = udiscRow.position_raw !== undefined ? udiscRow.position_raw : '';
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_ending_tag')] = udiscRow.bag_tag_at_end !== undefined ? udiscRow.bag_tag_at_end : '';
-          for (var h3 = 1; h3 <= 18; h3++) {
-            newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('hole_' + h3)] = udiscRow['hole_' + h3] !== undefined ? udiscRow['hole_' + h3] : '';
-          }
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = now;
-          newWeeklyRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = now;
-
+          var newWeeklyRecord = buildNewWeeklyRecord(WEEKLY_RECORD_HEADERS, {
+            member_number: newMemberNumber,
+            name: uName,
+            username: uUsername,
+            pdga: uPdga
+          }, importFields, null, now);
           weeklySheet.appendRow(newWeeklyRecord);
           newMembersCreated++;
 
