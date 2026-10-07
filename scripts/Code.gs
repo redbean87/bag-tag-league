@@ -127,33 +127,79 @@ const LEAGUE_SHEET_HEADERS_DOUBLES = LEAGUE_SHEET_HEADERS.concat([
 
 // ─── Spreadsheet routing ─────────────────────────────────────────────────────
 
+// Opaque public league ids carried in QR URLs and request payloads. These are
+// the only league selectors the client is expected to send; the server maps
+// each one to an allow-listed spreadsheet below. They mirror the ids in
+// src/shared/league-format.js.
+const LEAGUE_ID_SINGLES = 'b-rads-league';
+const LEAGUE_ID_DOUBLES = 'nightfliers-random-dubs';
+const DEFAULT_LEAGUE_ID = LEAGUE_ID_SINGLES;
+
+// Server-side allow-list: opaque league id -> authorized spreadsheet id. A
+// client can only ever select one of these two spreadsheets; a raw Google
+// spreadsheet id is never accepted as storage authority.
+const LEAGUE_SPREADSHEETS = [
+  { id: LEAGUE_ID_SINGLES, spreadsheetId: SPREADSHEET_ID },
+  { id: LEAGUE_ID_DOUBLES, spreadsheetId: SPREADSHEET_ID_DOUBLES }
+];
+
 /**
- * Maps a requested spreadsheet selector to a canonical spreadsheet ID.
- *
- * The singles spreadsheet is the default: any selector that is not the doubles
- * spreadsheet ID (including undefined, blank, the singles ID, or an unknown
- * value) resolves to singles. This keeps every existing caller that omits a
- * selector byte-identical to the previous hard-coded behavior.
+ * Looks up the allow-listed league record for a canonical league id.
+ * Returns null for anything not in the registry.
  */
-function resolveSpreadsheetId(spreadsheetId) {
-  return spreadsheetId === SPREADSHEET_ID_DOUBLES ? SPREADSHEET_ID_DOUBLES : SPREADSHEET_ID;
+function leagueRecordById(leagueId) {
+  for (var i = 0; i < LEAGUE_SPREADSHEETS.length; i++) {
+    if (LEAGUE_SPREADSHEETS[i].id === leagueId) return LEAGUE_SPREADSHEETS[i];
+  }
+  return null;
+}
+
+/**
+ * Normalizes a requested routing selector to a canonical league id.
+ *
+ * Accepts an opaque league id, or (deprecated, during migration) one of the
+ * allow-listed spreadsheet ids. Anything absent, blank, or unknown resolves to
+ * the singles default, so a mistyped QR never selects a non-default league.
+ */
+function resolveLeagueId(selector) {
+  if (leagueRecordById(selector)) return selector;
+  if (selector === SPREADSHEET_ID_DOUBLES) return LEAGUE_ID_DOUBLES;
+  return DEFAULT_LEAGUE_ID;
+}
+
+/**
+ * Picks the routing selector from a request body: the opaque `league` id when
+ * present, otherwise the deprecated `spreadsheetId` fallback. The value is
+ * normalized by resolveLeagueId inside the resolvers below.
+ */
+function leagueSelectorFrom(data) {
+  if (!data) return undefined;
+  return data.league ? data.league : data.spreadsheetId;
+}
+
+/**
+ * Maps a requested selector to a canonical spreadsheet ID through the
+ * server-side league allow-list. This is the single enforcement point: an
+ * unknown selector always resolves to the singles spreadsheet.
+ */
+function resolveSpreadsheetId(selector) {
+  return leagueRecordById(resolveLeagueId(selector)).spreadsheetId;
 }
 
 /**
  * Opens the spreadsheet selected by the caller. This is the only place in the
  * codebase that calls SpreadsheetApp.openById; every handler routes through it.
  */
-function resolveSpreadsheet(spreadsheetId) {
-  return SpreadsheetApp.openById(resolveSpreadsheetId(spreadsheetId));
+function resolveSpreadsheet(selector) {
+  return SpreadsheetApp.openById(resolveSpreadsheetId(selector));
 }
 
 /**
- * Resolves the league format for a requested spreadsheet selector.
- * The doubles spreadsheet is the only doubles format; everything else is
- * singles.
+ * Resolves the league format for a requested selector.
+ * The doubles league is the only doubles format; everything else is singles.
  */
-function resolveLeagueFormat(spreadsheetId) {
-  return resolveSpreadsheetId(spreadsheetId) === SPREADSHEET_ID_DOUBLES
+function resolveLeagueFormat(selector) {
+  return resolveLeagueId(selector) === LEAGUE_ID_DOUBLES
     ? LEAGUE_FORMAT_DOUBLES
     : LEAGUE_FORMAT_SINGLES;
 }
@@ -801,7 +847,7 @@ function doPost(e) {
  * Used by the admin page to show the correct setup state.
  */
 function handleGetClubMembersStatus(data) {
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   const sheet = spreadsheet.getSheetByName('ClubMembers');
 
   if (!sheet) {
@@ -819,8 +865,8 @@ function handleGetClubMembersStatus(data) {
  * Cleans up default blank sheets after creation.
  */
 function handleCreateClubMembersTab(data) {
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
-  const format = resolveLeagueFormat(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  const format = resolveLeagueFormat(leagueSelectorFrom(data));
 
   // Ensure League exists first — prerequisite for canonical order
   ensureLeagueSheetForFormat(spreadsheet, format);
@@ -886,8 +932,8 @@ function handleCreateWeeklyTab(data) {
   // Generate tab name from date
   const tabName = 'Week ' + leagueDate;
 
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
-  const format = resolveLeagueFormat(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  const format = resolveLeagueFormat(leagueSelectorFrom(data));
   const weekHeaders = getWeeklyRecordHeaders(format);
 
   // Ensure canonical prerequisite sheets exist in correct order
@@ -935,16 +981,17 @@ function handleCreateWeeklyTab(data) {
  */
 function handleSearchClubMembers(data) {
   const query = (data.query || '').trim();
+  const leagueId = resolveLeagueId(leagueSelectorFrom(data));
 
   if (query.length < 2) {
-    return respond('ok', 'Query too short.', { results: [] });
+    return respond('ok', 'Query too short.', { results: [], league: leagueId });
   }
 
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueId);
   const playersSheet = spreadsheet.getSheetByName('ClubMembers');
 
   if (!playersSheet) {
-    return respond('ok', 'No members found.', { results: [] });
+    return respond('ok', 'No members found.', { results: [], league: leagueId });
   }
 
   const playersData = playersSheet.getDataRange().getValues();
@@ -986,7 +1033,7 @@ function handleSearchClubMembers(data) {
     }
   }
 
-  return respond('ok', 'Search complete.', { results: results });
+  return respond('ok', 'Search complete.', { results: results, league: leagueId });
 }
 
 /**
@@ -1021,7 +1068,8 @@ function handleSubmitCheckIn(data) {
     return respond('error', 'Please enter a valid tag number (1 or higher).');
   }
 
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const leagueId = resolveLeagueId(leagueSelectorFrom(data));
+  const spreadsheet = resolveSpreadsheet(leagueId);
 
   // --- Step 1: Find or create club member ---
   const playersSheet = spreadsheet.getSheetByName('ClubMembers');
@@ -1197,7 +1245,8 @@ function handleSubmitCheckIn(data) {
     member_number: memberId,
     player_name: trimmedName,
     in_tag: inTagNum,
-    weekly_tab: mostRecentTabName
+    weekly_tab: mostRecentTabName,
+    league: leagueId
   });
 }
 
@@ -1209,8 +1258,8 @@ function handleSubmitCheckIn(data) {
  * Ensures League is at position 1 (first tab).
  */
 function handleCreateLeagueSheet(data) {
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
-  const format = resolveLeagueFormat(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  const format = resolveLeagueFormat(leagueSelectorFrom(data));
 
   let migrated = false;
   if (format === LEAGUE_FORMAT_SINGLES) {
@@ -1249,7 +1298,7 @@ function handleCreateLeagueSheet(data) {
  *   - "ok" if the sheet exists and contains settings
  */
 function handleGetLeagueSettings(data) {
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   const sheet = spreadsheet.getSheetByName('League');
 
   if (!sheet) {
@@ -1300,7 +1349,7 @@ function handleSaveLeagueSettings(data) {
     return respond('error', 'No settings provided.');
   }
 
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   const sheet = spreadsheet.getSheetByName('League');
 
   if (!sheet) {
@@ -1379,7 +1428,7 @@ function handleSaveLeagueSettings(data) {
  * by date descending (most recent first).
  */
 function handleGetWeeklyTabs(data) {
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   const sheets = spreadsheet.getSheets();
   const weekTabs = [];
 
@@ -1420,7 +1469,7 @@ function handleGetPreRoundReview(data) {
   }
 
   const tabName = 'Week ' + leagueDate;
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
 
   // Check if weekly sheet exists
   const weeklySheet = spreadsheet.getSheetByName(tabName);
@@ -1554,7 +1603,7 @@ function handleSavePreRoundReview(data) {
   }
 
   const tabName = 'Week ' + leagueDate;
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
 
   // Verify weekly sheet exists
   const weeklySheet = spreadsheet.getSheetByName(tabName);
@@ -1657,7 +1706,7 @@ function handlePreviewUdiscImport(data) {
   }
 
   const tabName = 'Week ' + leagueDate;
-  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
 
   const weeklySheet = spreadsheet.getSheetByName(tabName);
   if (!weeklySheet) {
@@ -2211,7 +2260,7 @@ function buildDoublesRoster(clubData, headers) {
  * Inputs: league_date (required), rows (required), spreadsheetId (doubles).
  */
 function handlePreviewUdiscImportDoubles(data) {
-  if (resolveLeagueFormat(data && data.spreadsheetId) !== LEAGUE_FORMAT_DOUBLES) {
+  if (resolveLeagueFormat(leagueSelectorFrom(data)) !== LEAGUE_FORMAT_DOUBLES) {
     return respond('error', 'Doubles import preview is only available for the doubles spreadsheet.');
   }
 
@@ -2226,7 +2275,7 @@ function handlePreviewUdiscImportDoubles(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
 
   var weeklySheet = spreadsheet.getSheetByName(tabName);
   if (!weeklySheet) {
@@ -2389,7 +2438,7 @@ function handleCommitUdiscImport(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
 
   var weeklySheet = spreadsheet.getSheetByName(tabName);
   if (!weeklySheet) {
@@ -2844,7 +2893,7 @@ function buildMatchEntry(udiscRow, weeklyRow, matchMethod) {
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
 function handleCalculateTags(data) {
-  var format = resolveLeagueFormat(data && data.spreadsheetId);
+  var format = resolveLeagueFormat(leagueSelectorFrom(data));
   if (format === LEAGUE_FORMAT_DOUBLES) {
     return respond('error', 'Tag operations are not available for the doubles league.');
   }
@@ -2856,7 +2905,7 @@ function handleCalculateTags(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   var weeklySheet = spreadsheet.getSheetByName(tabName);
 
   if (!weeklySheet) {
@@ -2986,7 +3035,7 @@ function handleCalculateTags(data) {
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
 function handleConfirmTags(data) {
-  var format = resolveLeagueFormat(data && data.spreadsheetId);
+  var format = resolveLeagueFormat(leagueSelectorFrom(data));
   if (format === LEAGUE_FORMAT_DOUBLES) {
     return respond('error', 'Tag operations are not available for the doubles league.');
   }
@@ -2998,7 +3047,7 @@ function handleConfirmTags(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   var weeklySheet = spreadsheet.getSheetByName(tabName);
 
   if (!weeklySheet) {
@@ -3116,7 +3165,7 @@ function handleConfirmTags(data) {
  * out_tag are skipped. Returns a summary of updated and skipped records.
  */
 function handleFinalizeRound(data) {
-  var format = resolveLeagueFormat(data && data.spreadsheetId);
+  var format = resolveLeagueFormat(leagueSelectorFrom(data));
   if (format === LEAGUE_FORMAT_DOUBLES) {
     return respond('error', 'Tag operations are not available for the doubles league.');
   }
@@ -3128,7 +3177,7 @@ function handleFinalizeRound(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   var weeklySheet = spreadsheet.getSheetByName(tabName);
 
   if (!weeklySheet) {
