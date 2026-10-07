@@ -6,6 +6,7 @@
   <title>Bag Tag League - League Admin</title>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script src="../shared/league-format.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -206,6 +207,36 @@
 <body>
   <h1>Bag Tag League</h1>
   <p class="subtitle">League Admin</p>
+
+  <!-- 0. League Format Selector -->
+  <div class="card" id="leagueFormatCard">
+    <h2>League Format</h2>
+    <p class="help-text">
+      Choose which league you are managing. The selection is saved in this
+      browser; Singles remains the default.
+    </p>
+    <div class="field-group">
+      <label for="leagueFormat">Format</label>
+      <select id="leagueFormat" onchange="onLeagueFormatChange()">
+        <option value="singles">Singles</option>
+        <option value="doubles">Doubles</option>
+      </select>
+    </div>
+    <p class="help-text" id="leagueFormatStatus" style="margin:0;"></p>
+  </div>
+
+  <!-- 0b. Doubles Provisioning (doubles mode only) -->
+  <div class="card" id="doublesProvisionCard" style="display:none;">
+    <h2>Doubles Provisioning</h2>
+    <p class="help-text">
+      Create the League (with <code>league_format=doubles</code>), ClubMembers,
+      and Week template tabs in the Doubles spreadsheet, and seed its roster
+      from the Singles league. Safe to run repeatedly; the Singles
+      spreadsheet is never written.
+    </p>
+    <button type="button" id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet()">Provision Doubles Spreadsheet</button>
+    <div id="doublesProvisionResult" class="status hidden"></div>
+  </div>
 
   <!-- 1. League Settings -->
   <details class="card" id="leagueCard">
@@ -472,6 +503,104 @@
 
     var cachedWeeklyTabs = [];
 
+    // ─── League format selection ──────────────────────────────────────────
+    // Persisted in localStorage by src/shared/league-format.js. Singles is the
+    // default; the derived spreadsheetId is attached to every action request.
+    function getLeagueFormat() {
+      return window.LeagueFormat
+        ? window.LeagueFormat.readStoredFormat(window.localStorage)
+        : 'singles';
+    }
+
+    function getSpreadsheetId() {
+      return window.LeagueFormat
+        ? window.LeagueFormat.spreadsheetIdForFormat(getLeagueFormat())
+        : '';
+    }
+
+    function onLeagueFormatChange() {
+      var format = document.getElementById('leagueFormat').value;
+      if (window.LeagueFormat) {
+        window.LeagueFormat.persistFormat(window.localStorage, format);
+      }
+      applyLeagueFormat(format);
+      clearStaleSectionData();
+      loadLeagueSettings();
+      loadClubMembersStatus();
+      loadWeeklyTabs();
+      log('Switched league format to ' + format);
+    }
+
+    function applyLeagueFormat(format) {
+      var isDoubles = format === 'doubles';
+
+      var selector = document.getElementById('leagueFormat');
+      if (selector) selector.value = format;
+
+      var statusEl = document.getElementById('leagueFormatStatus');
+      if (statusEl) {
+        statusEl.textContent = isDoubles
+          ? 'Managing the Doubles league.'
+          : 'Managing the Singles league.';
+      }
+
+      // Tags are singles-only; hide tag tooling while managing doubles.
+      var tagCard = document.getElementById('tagCalcCard');
+      if (tagCard) tagCard.style.display = isDoubles ? 'none' : '';
+      var finalizeCard = document.getElementById('finalizeRoundCard');
+      if (finalizeCard) finalizeCard.style.display = isDoubles ? 'none' : '';
+
+      var provisionCard = document.getElementById('doublesProvisionCard');
+      if (provisionCard) provisionCard.style.display = isDoubles ? '' : 'none';
+    }
+
+    function setDoublesProvisionStatus(type, html) {
+      var el = document.getElementById('doublesProvisionResult');
+      if (!el) return;
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    async function provisionDoublesSpreadsheet() {
+      var btn = document.getElementById('btnProvisionDoubles');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Provisioning...';
+      }
+      setDoublesProvisionStatus('pending', 'Provisioning doubles spreadsheet...');
+      log('Provisioning doubles spreadsheet');
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'provisionDoubles', spreadsheetId: getSpreadsheetId() })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          var seed = data.roster_seed || {};
+          setDoublesProvisionStatus('ok',
+            '<strong>Doubles spreadsheet provisioned.</strong> Roster seeded: ' +
+            (seed.seeded || 0) + ' member(s).');
+          log('SUCCESS: Doubles provisioned; seeded ' + (seed.seeded || 0) + ' member(s)');
+          await loadLeagueSettings();
+          await loadClubMembersStatus();
+        } else {
+          setDoublesProvisionStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setDoublesProvisionStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED: ' + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Provision Doubles Spreadsheet';
+        }
+      }
+    }
+
     function showSignInQR() {
       var url = window.location.origin + PLAYER_SIGN_IN_PATH;
       var modal = document.getElementById('qrModal');
@@ -620,7 +749,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'createWeeklyTab',
+            action: 'createWeeklyTab', spreadsheetId: getSpreadsheetId(),
             leagueDate: leagueDate
           })
         });
@@ -656,7 +785,7 @@
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getClubMembersStatus' })
+          body: JSON.stringify({ action: 'getClubMembersStatus', spreadsheetId: getSpreadsheetId() })
         });
         var data = await response.json();
 
@@ -694,7 +823,8 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'createClubMembersTab'
+            action: 'createClubMembersTab',
+            spreadsheetId: getSpreadsheetId()
           })
         });
         var data = await response.json();
@@ -731,7 +861,7 @@
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getLeagueSettings' })
+          body: JSON.stringify({ action: 'getLeagueSettings', spreadsheetId: getSpreadsheetId() })
         });
         var data = await response.json();
 
@@ -783,7 +913,7 @@
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'createLeagueSheet' })
+          body: JSON.stringify({ action: 'createLeagueSheet', spreadsheetId: getSpreadsheetId() })
         });
         var data = await response.json();
 
@@ -836,7 +966,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'saveLeagueSettings',
+            action: 'saveLeagueSettings', spreadsheetId: getSpreadsheetId(),
             settings: settings
           })
         });
@@ -864,7 +994,7 @@
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getWeeklyTabs' })
+          body: JSON.stringify({ action: 'getWeeklyTabs', spreadsheetId: getSpreadsheetId() })
         });
         var data = await response.json();
 
@@ -912,7 +1042,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'getPreRoundReview',
+            action: 'getPreRoundReview', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate
           })
         });
@@ -977,7 +1107,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'savePreRoundReview',
+            action: 'savePreRoundReview', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate,
             ace_pot_total: Number(acePotTotal),
             ctp_total: Number(ctpTotal)
@@ -1093,7 +1223,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'previewUdiscImport',
+            action: 'previewUdiscImport', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate,
             rows: rows
           })
@@ -1288,7 +1418,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'commitUdiscImport',
+            action: 'commitUdiscImport', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate,
             rows: parsedUdiscRows,
             approved: true
@@ -1361,7 +1491,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'calculateTags',
+            action: 'calculateTags', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate
           })
         });
@@ -1450,7 +1580,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'confirmTags',
+            action: 'confirmTags', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate
           })
         });
@@ -1510,7 +1640,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'finalizeRound',
+            action: 'finalizeRound', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate
           })
         });
@@ -1637,7 +1767,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
-            action: 'finalizeRound',
+            action: 'finalizeRound', spreadsheetId: getSpreadsheetId(),
             league_date: leagueDate
           })
         });
@@ -1671,6 +1801,7 @@
       var mm = String(today.getMonth() + 1).padStart(2, '0');
       var dd = String(today.getDate()).padStart(2, '0');
       document.getElementById('activeLeagueDate').value = yyyy + '-' + mm + '-' + dd;
+      applyLeagueFormat(getLeagueFormat());
       log('Admin page loaded');
       loadLeagueSettings();
       loadClubMembersStatus();

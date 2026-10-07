@@ -10,6 +10,20 @@
 // Replace with your actual spreadsheet ID
 const SPREADSHEET_ID = '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik';
 
+// Doubles league spreadsheet (second spreadsheet). The singles spreadsheet
+// above stays the default for every caller that does not select doubles.
+const SPREADSHEET_ID_DOUBLES = '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8';
+
+// Supported league formats. `league_format` gates format-specific behavior so
+// tag and points code paths do not duplicate a singles/doubles implementation.
+const LEAGUE_FORMAT_SINGLES = 'singles';
+const LEAGUE_FORMAT_DOUBLES = 'doubles';
+const LEAGUE_FORMATS = [LEAGUE_FORMAT_SINGLES, LEAGUE_FORMAT_DOUBLES];
+
+// Name of the doubles weekly template tab (not a dated Week sheet, so it is
+// ignored by the Week YYYY-MM-DD discovery logic).
+const WEEK_TEMPLATE_SHEET_NAME = 'Week template';
+
 // ClubMembers tab column headers
 const CLUB_MEMBER_HEADERS = [
   'member_number',
@@ -74,6 +88,18 @@ const WEEKLY_RECORD_HEADERS = [
   'updated_at'
 ];
 
+// Doubles WeeklyPlayerRecords headers: the 48 singles columns plus the six
+// doubles-only columns from the design report. The singles constant is
+// untouched and the six columns are append-only so the 48 stay in order.
+const WEEKLY_RECORD_HEADERS_DOUBLES = WEEKLY_RECORD_HEADERS.concat([
+  'pair_key',
+  'partner_member_number',
+  'team_position',
+  'team_position_raw',
+  'weekly_points',
+  'weekly_points_status'
+]);
+
 // League sheet column headers (15 columns)
 const LEAGUE_SHEET_HEADERS = [
   'league_name',
@@ -92,6 +118,67 @@ const LEAGUE_SHEET_HEADERS = [
   'created_at',
   'updated_at'
 ];
+
+// Doubles League sheet headers: the 15 singles columns plus the league_format
+// column. The singles League schema is unchanged (no league_format column).
+const LEAGUE_SHEET_HEADERS_DOUBLES = LEAGUE_SHEET_HEADERS.concat([
+  'league_format'
+]);
+
+// ─── Spreadsheet routing ─────────────────────────────────────────────────────
+
+/**
+ * Maps a requested spreadsheet selector to a canonical spreadsheet ID.
+ *
+ * The singles spreadsheet is the default: any selector that is not the doubles
+ * spreadsheet ID (including undefined, blank, the singles ID, or an unknown
+ * value) resolves to singles. This keeps every existing caller that omits a
+ * selector byte-identical to the previous hard-coded behavior.
+ */
+function resolveSpreadsheetId(spreadsheetId) {
+  return spreadsheetId === SPREADSHEET_ID_DOUBLES ? SPREADSHEET_ID_DOUBLES : SPREADSHEET_ID;
+}
+
+/**
+ * Opens the spreadsheet selected by the caller. This is the only place in the
+ * codebase that calls SpreadsheetApp.openById; every handler routes through it.
+ */
+function resolveSpreadsheet(spreadsheetId) {
+  return SpreadsheetApp.openById(resolveSpreadsheetId(spreadsheetId));
+}
+
+/**
+ * Resolves the league format for a requested spreadsheet selector.
+ * The doubles spreadsheet is the only doubles format; everything else is
+ * singles.
+ */
+function resolveLeagueFormat(spreadsheetId) {
+  return resolveSpreadsheetId(spreadsheetId) === SPREADSHEET_ID_DOUBLES
+    ? LEAGUE_FORMAT_DOUBLES
+    : LEAGUE_FORMAT_SINGLES;
+}
+
+/**
+ * Weekly record headers for a league format. Singles keeps the 48-column
+ * schema; doubles appends the six doubles-only columns.
+ */
+function getWeeklyRecordHeaders(format) {
+  return format === LEAGUE_FORMAT_DOUBLES
+    ? WEEKLY_RECORD_HEADERS_DOUBLES
+    : WEEKLY_RECORD_HEADERS;
+}
+
+/**
+ * League sheet headers for a league format. Singles keeps the 15-column
+ * schema; doubles appends the league_format column.
+ */
+function getLeagueSheetHeaders(format) {
+  return format === LEAGUE_FORMAT_DOUBLES
+    ? LEAGUE_SHEET_HEADERS_DOUBLES
+    : LEAGUE_SHEET_HEADERS;
+}
+
+// ─── End spreadsheet routing ─────────────────────────────────────────────────
 
 // ─── Sheet-position helpers ─────────────────────────────────────────────────
 
@@ -197,6 +284,368 @@ function removeDefaultBlankSheet(spreadsheet) {
 
 // ─── End sheet-position helpers ─────────────────────────────────────────────
 
+// ─── Doubles provisioning ────────────────────────────────────────────────────
+
+/**
+ * Ensures the League sheet exists for the given format and, for doubles,
+ * records league_format. Idempotent.
+ *
+ * This helper only ensures existence and format metadata; it does not migrate
+ * the legacy 12-column singles schema, so the existing singles handlers keep
+ * their exact behavior. Migration is handled by handleCreateLeagueSheet.
+ *
+ * Returns { sheet, created }.
+ */
+function ensureLeagueSheetForFormat(spreadsheet, format) {
+  var headers = getLeagueSheetHeaders(format);
+  var existing = spreadsheet.getSheetByName('League');
+
+  if (!existing) {
+    var sheet = spreadsheet.insertSheet('League');
+    sheet.appendRow(headers);
+
+    var headerRange = sheet.getRange(1, 1, 1, headers.length);
+    headerRange.setFontWeight('bold');
+    sheet.setFrozenRows(1);
+
+    if (format === LEAGUE_FORMAT_DOUBLES) {
+      ensureLeagueFormatValue(sheet, format);
+    }
+
+    moveSheetToPosition(spreadsheet, 'League', 0);
+    return { sheet: sheet, created: true };
+  }
+
+  if (format === LEAGUE_FORMAT_DOUBLES) {
+    ensureLeagueFormatValue(existing, format);
+  }
+
+  if (existing.getIndex() !== 1) {
+    moveSheetToPosition(spreadsheet, 'League', 0);
+  }
+
+  return { sheet: existing, created: false };
+}
+
+/**
+ * Migrates the legacy 12-column singles League sheet to the current 15-column
+ * schema. Returns true when a migration happened. Only handleCreateLeagueSheet
+ * calls this, matching the original singles behavior.
+ */
+function migrateOldLeagueSheet(spreadsheet) {
+  var existing = spreadsheet.getSheetByName('League');
+  if (!existing) return false;
+
+  var OLD_LEAGUE_HEADERS = [
+    'league_name', 'description', 'location', 'schedule', 'contact_information',
+    'entry_fee', 'ace_pot_contribution', 'ace_pot_total',
+    'ctp_contribution', 'ctp_prize',
+    'created_at', 'updated_at'
+  ];
+
+  var currentHeaders = existing.getRange(1, 1, 1, existing.getLastColumn()).getValues()[0];
+  var isOldSchema = currentHeaders.length === OLD_LEAGUE_HEADERS.length &&
+    currentHeaders.every(function(h, i) { return h === OLD_LEAGUE_HEADERS[i]; });
+  if (!isOldSchema) return false;
+
+  var allData = existing.getDataRange().getValues();
+  var oldRow = allData.length >= 2 ? allData[1] : [];
+
+  var newRow = [];
+  for (var i = 0; i < LEAGUE_SHEET_HEADERS.length; i++) {
+    var header = LEAGUE_SHEET_HEADERS[i];
+    if (header === 'ace_pot_current_total') {
+      var oldIdx = OLD_LEAGUE_HEADERS.indexOf('ace_pot_total');
+      newRow.push(oldIdx !== -1 && oldRow[oldIdx] ? oldRow[oldIdx] : '');
+    } else if (header === 'ace_pot_calculated_total' || header === 'ace_pot_total' ||
+               header === 'ctp_calculated_total' || header === 'ctp_total') {
+      newRow.push('');
+    } else if (header === 'ctp_prize') {
+      continue;
+    } else {
+      var oldIdx2 = OLD_LEAGUE_HEADERS.indexOf(header);
+      newRow.push(oldIdx2 !== -1 && oldRow[oldIdx2] ? oldRow[oldIdx2] : '');
+    }
+  }
+
+  existing.clear();
+  existing.appendRow(LEAGUE_SHEET_HEADERS);
+  if (newRow.some(function(v) { return v !== ''; })) {
+    existing.appendRow(newRow);
+  }
+
+  var migratedHeaderRange = existing.getRange(1, 1, 1, LEAGUE_SHEET_HEADERS.length);
+  migratedHeaderRange.setFontWeight('bold');
+  existing.setFrozenRows(1);
+  return true;
+}
+
+/**
+ * Ensures the League sheet's settings row records league_format. Adds the
+ * league_format column when a pre-existing sheet lacks it. Idempotent.
+ * Returns the 0-based column index of league_format.
+ */
+function ensureLeagueFormatValue(sheet, format) {
+  var lastColumn = Math.max(sheet.getLastColumn(), 1);
+  var headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  var formatCol = headers.indexOf('league_format');
+
+  if (formatCol === -1) {
+    formatCol = headers.length;
+    sheet.getRange(1, formatCol + 1).setValue('league_format');
+    sheet.getRange(1, formatCol + 1).setFontWeight('bold');
+  }
+
+  if (sheet.getLastRow() < 2) {
+    var blankRow = new Array(formatCol + 1).fill('');
+    blankRow[formatCol] = format;
+    sheet.appendRow(blankRow);
+  } else {
+    sheet.getRange(2, formatCol + 1).setValue(format);
+  }
+
+  return formatCol;
+}
+
+/**
+ * Ensures the doubles weekly template tab exists with the format's weekly
+ * headers. The template is a non-dated sheet so it never appears as a league
+ * week. Idempotent. Returns { sheet, created }.
+ */
+function ensureWeekTemplateSheet(spreadsheet, format) {
+  var headers = getWeeklyRecordHeaders(format);
+  var result = ensureCanonicalSheet(spreadsheet, WEEK_TEMPLATE_SHEET_NAME, headers);
+  return { sheet: result.sheet, created: !result.alreadyExisted };
+}
+
+/**
+ * Creates (or returns) a dated weekly tab for the doubles spreadsheet using
+ * the doubles headers. Returns { sheet, created }.
+ */
+function ensureWeekSheet(spreadsheet, leagueDate, format) {
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    throw new Error('leagueDate must be YYYY-MM-DD.');
+  }
+
+  var tabName = 'Week ' + leagueDate;
+  var existing = spreadsheet.getSheetByName(tabName);
+  if (existing) {
+    return { sheet: existing, created: false };
+  }
+
+  var headers = getWeeklyRecordHeaders(format);
+  var sheet = spreadsheet.insertSheet(tabName);
+  sheet.appendRow(headers);
+
+  var headerRange = sheet.getRange(1, 1, 1, headers.length);
+  headerRange.setFontWeight('bold');
+  sheet.setFrozenRows(1);
+
+  organizeWeekSheetsChronologically(spreadsheet);
+  removeDefaultBlankSheet(spreadsheet);
+  return { sheet: sheet, created: true };
+}
+
+/**
+ * Seeds the doubles ClubMembers roster from the singles roster exactly once.
+ * Every copied row preserves its existing member_number; nothing is
+ * renumbered. Members already present in the doubles roster are skipped, so
+ * the seed is safe to run repeatedly.
+ *
+ * Returns { seeded, seeded_member_numbers, skipped_existing, error? }.
+ */
+function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
+  var doublesSheet = doublesSpreadsheet.getSheetByName('ClubMembers');
+  if (!doublesSheet) {
+    return { seeded: 0, seeded_member_numbers: [], skipped_existing: 0, error: 'ClubMembers tab not found in doubles spreadsheet.' };
+  }
+
+  var singlesSheet = singlesSpreadsheet.getSheetByName('ClubMembers');
+  if (!singlesSheet) {
+    return { seeded: 0, seeded_member_numbers: [], skipped_existing: 0, error: 'ClubMembers tab not found in singles spreadsheet.' };
+  }
+
+  var memberCol = CLUB_MEMBER_HEADERS.indexOf('member_number');
+  var singlesData = singlesSheet.getDataRange().getValues();
+  var doublesData = doublesSheet.getDataRange().getValues();
+
+  var existing = {};
+  for (var i = 1; i < doublesData.length; i++) {
+    var existingId = doublesData[i][memberCol];
+    if (existingId !== '' && existingId !== null && existingId !== undefined) {
+      existing[existingId] = true;
+    }
+  }
+
+  var seededMemberNumbers = [];
+  var skippedExisting = 0;
+
+  for (var r = 1; r < singlesData.length; r++) {
+    var sourceRow = singlesData[r];
+    var memberNumber = sourceRow[memberCol];
+
+    if (memberNumber === '' || memberNumber === null || memberNumber === undefined) {
+      continue;
+    }
+    if (existing[memberNumber]) {
+      skippedExisting++;
+      continue;
+    }
+
+    var newRow = new Array(CLUB_MEMBER_HEADERS.length).fill('');
+    for (var c = 0; c < CLUB_MEMBER_HEADERS.length && c < sourceRow.length; c++) {
+      newRow[c] = sourceRow[c];
+    }
+
+    doublesSheet.appendRow(newRow);
+    existing[memberNumber] = true;
+    seededMemberNumbers.push(memberNumber);
+  }
+
+  return {
+    seeded: seededMemberNumbers.length,
+    seeded_member_numbers: seededMemberNumbers,
+    skipped_existing: skippedExisting
+  };
+}
+
+/**
+ * Provisions the doubles workbook schema: League (league_format=doubles),
+ * ClubMembers, the Week template, and the singles roster seed.
+ * Idempotent and deterministic.
+ *
+ * Takes spreadsheet objects (not IDs) so it is unit-testable without Google
+ * credentials. Returns a summary.
+ */
+function provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet) {
+  var league = ensureLeagueSheetForFormat(doublesSpreadsheet, LEAGUE_FORMAT_DOUBLES);
+
+  var club = ensureCanonicalSheet(doublesSpreadsheet, 'ClubMembers', CLUB_MEMBER_HEADERS);
+  if (club.sheet.getIndex() !== 2) {
+    moveSheetToPosition(doublesSpreadsheet, 'ClubMembers', 1);
+  }
+
+  var template = ensureWeekTemplateSheet(doublesSpreadsheet, LEAGUE_FORMAT_DOUBLES);
+
+  organizeWeekSheetsChronologically(doublesSpreadsheet);
+  removeDefaultBlankSheet(doublesSpreadsheet);
+
+  var seed = singlesSpreadsheet
+    ? seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet)
+    : { seeded: 0, seeded_member_numbers: [], skipped_existing: 0, error: 'No singles spreadsheet supplied.' };
+
+  return {
+    league: { created: league.created, league_format: LEAGUE_FORMAT_DOUBLES },
+    club_members: { created: !club.alreadyExisted },
+    week_template: { created: template.created },
+    roster_seed: seed
+  };
+}
+
+/**
+ * Admin action: provisions the configured doubles spreadsheet (League with
+ * league_format=doubles, ClubMembers, Week template) and seeds its roster from
+ * the singles spreadsheet. Always targets the doubles spreadsheet ID, not the
+ * caller's currently selected spreadsheet.
+ */
+function handleProvisionDoubles(data) {
+  var doublesSpreadsheet = resolveSpreadsheet(SPREADSHEET_ID_DOUBLES);
+  var singlesSpreadsheet = resolveSpreadsheet(SPREADSHEET_ID);
+  var summary = provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet);
+  return respond('ok', 'Doubles spreadsheet provisioned.', summary);
+}
+
+/**
+ * Reads the header row of a sheet. Returns [] for a missing or empty sheet.
+ */
+function getSheetHeaders(sheet) {
+  if (!sheet || sheet.getLastRow() < 1 || sheet.getLastColumn() < 1) return [];
+  return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+}
+
+/**
+ * Returns true when two arrays have the same length and identical values.
+ */
+function arraysEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Reads the league_format stored on the League sheet, or null when absent.
+ */
+function readLeagueFormat(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  var headers = getSheetHeaders(sheet);
+  var formatCol = headers.indexOf('league_format');
+  if (formatCol === -1) return null;
+  var value = sheet.getRange(2, formatCol + 1).getValue();
+  return value === '' || value === null || value === undefined ? null : value;
+}
+
+/**
+ * Inspects a spreadsheet against the expected topology/headers for a format.
+ * Returns a plain report object suitable for logging or tests.
+ */
+function inspectSpreadsheetTopology(spreadsheet, format) {
+  var league = spreadsheet.getSheetByName('League');
+  var club = spreadsheet.getSheetByName('ClubMembers');
+  var template = spreadsheet.getSheetByName(WEEK_TEMPLATE_SHEET_NAME);
+
+  return {
+    sheet_names: spreadsheet.getSheets().map(function(s) { return s.getName(); }),
+    league: {
+      present: !!league,
+      headers_match: arraysEqual(getSheetHeaders(league), getLeagueSheetHeaders(format)),
+      league_format: readLeagueFormat(league)
+    },
+    club_members: {
+      present: !!club,
+      headers_match: arraysEqual(getSheetHeaders(club), CLUB_MEMBER_HEADERS)
+    },
+    week_template: {
+      present: !!template,
+      headers_match: arraysEqual(getSheetHeaders(template), getWeeklyRecordHeaders(format))
+    }
+  };
+}
+
+/**
+ * Counts the roster rows on a spreadsheet's ClubMembers tab. Returns
+ * { present, count, active_count, member_numbers }.
+ */
+function countRoster(spreadsheet) {
+  var sheet = spreadsheet.getSheetByName('ClubMembers');
+  if (!sheet) return { present: false, count: 0, active_count: 0, member_numbers: [] };
+
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) return { present: true, count: 0, active_count: 0, member_numbers: [] };
+
+  var headers = data[0];
+  var memberCol = headers.indexOf('member_number');
+  var activeCol = headers.indexOf('is_active');
+
+  var memberNumbers = [];
+  var activeCount = 0;
+
+  for (var i = 1; i < data.length; i++) {
+    var id = data[i][memberCol];
+    if (id === '' || id === null || id === undefined) continue;
+    memberNumbers.push(id);
+    var isActive = activeCol === -1
+      ? true
+      : (data[i][activeCol] === true || data[i][activeCol] === 'TRUE');
+    if (isActive) activeCount++;
+  }
+
+  return { present: true, count: memberNumbers.length, active_count: activeCount, member_numbers: memberNumbers };
+}
+
+// ─── End doubles provisioning ────────────────────────────────────────────────
+
 /**
  * Handles GET requests. Returns a test response.
  */
@@ -268,6 +717,9 @@ function doPost(e) {
     if (data.action === 'finalizeRound') {
       return handleFinalizeRound(data);
     }
+    if (data.action === 'provisionDoubles') {
+      return handleProvisionDoubles(data);
+    }
 
     return respond('error', 'Unknown action: ' + data.action);
 
@@ -281,7 +733,7 @@ function doPost(e) {
  * Used by the admin page to show the correct setup state.
  */
 function handleGetClubMembersStatus(data) {
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   const sheet = spreadsheet.getSheetByName('ClubMembers');
 
   if (!sheet) {
@@ -299,13 +751,11 @@ function handleGetClubMembersStatus(data) {
  * Cleans up default blank sheets after creation.
  */
 function handleCreateClubMembersTab(data) {
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const format = resolveLeagueFormat(data && data.spreadsheetId);
 
   // Ensure League exists first — prerequisite for canonical order
-  ensureCanonicalSheet(spreadsheet, 'League', LEAGUE_SHEET_HEADERS);
-  if (spreadsheet.getSheetByName('League').getIndex() !== 1) {
-    moveSheetToPosition(spreadsheet, 'League', 0);
-  }
+  ensureLeagueSheetForFormat(spreadsheet, format);
 
   const existing = spreadsheet.getSheetByName('ClubMembers');
 
@@ -368,13 +818,12 @@ function handleCreateWeeklyTab(data) {
   // Generate tab name from date
   const tabName = 'Week ' + leagueDate;
 
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const format = resolveLeagueFormat(data && data.spreadsheetId);
+  const weekHeaders = getWeeklyRecordHeaders(format);
 
   // Ensure canonical prerequisite sheets exist in correct order
-  ensureCanonicalSheet(spreadsheet, 'League', LEAGUE_SHEET_HEADERS);
-  if (spreadsheet.getSheetByName('League').getIndex() !== 1) {
-    moveSheetToPosition(spreadsheet, 'League', 0);
-  }
+  ensureLeagueSheetForFormat(spreadsheet, format);
 
   ensureCanonicalSheet(spreadsheet, 'ClubMembers', CLUB_MEMBER_HEADERS);
   if (spreadsheet.getSheetByName('ClubMembers').getIndex() !== 2) {
@@ -391,10 +840,10 @@ function handleCreateWeeklyTab(data) {
   const sheet = spreadsheet.insertSheet(tabName);
 
   // Write headers (row 1)
-  sheet.appendRow(WEEKLY_RECORD_HEADERS);
+  sheet.appendRow(weekHeaders);
 
   // Format headers: bold, freeze row 1
-  const headerRange = sheet.getRange(1, 1, 1, WEEKLY_RECORD_HEADERS.length);
+  const headerRange = sheet.getRange(1, 1, 1, weekHeaders.length);
   headerRange.setFontWeight('bold');
   sheet.setFrozenRows(1);
 
@@ -406,7 +855,7 @@ function handleCreateWeeklyTab(data) {
 
   return respond('ok', 'Tab "' + tabName + '" created successfully.', {
     tabName: tabName,
-    columns: WEEKLY_RECORD_HEADERS.length
+    columns: weekHeaders.length
   });
 }
 
@@ -423,7 +872,7 @@ function handleSearchClubMembers(data) {
     return respond('ok', 'Query too short.', { results: [] });
   }
 
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   const playersSheet = spreadsheet.getSheetByName('ClubMembers');
 
   if (!playersSheet) {
@@ -504,7 +953,7 @@ function handleSubmitCheckIn(data) {
     return respond('error', 'Please enter a valid tag number (1 or higher).');
   }
 
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
 
   // --- Step 1: Find or create club member ---
   const playersSheet = spreadsheet.getSheetByName('ClubMembers');
@@ -692,104 +1141,35 @@ function handleSubmitCheckIn(data) {
  * Ensures League is at position 1 (first tab).
  */
 function handleCreateLeagueSheet(data) {
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const existing = spreadsheet.getSheetByName('League');
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+  const format = resolveLeagueFormat(data && data.spreadsheetId);
 
-  if (existing) {
-    // Check if migration is needed (old 12-column schema)
-    const currentHeaders = existing.getRange(1, 1, 1, existing.getLastColumn()).getValues()[0];
-    const OLD_LEAGUE_HEADERS = [
-      'league_name', 'description', 'location', 'schedule', 'contact_information',
-      'entry_fee', 'ace_pot_contribution', 'ace_pot_total',
-      'ctp_contribution', 'ctp_prize',
-      'created_at', 'updated_at'
-    ];
+  let migrated = false;
+  if (format === LEAGUE_FORMAT_SINGLES) {
+    migrated = migrateOldLeagueSheet(spreadsheet);
+  }
 
-    const isOldSchema = currentHeaders.length === OLD_LEAGUE_HEADERS.length &&
-      currentHeaders.every(function(h, i) { return h === OLD_LEAGUE_HEADERS[i]; });
+  const result = ensureLeagueSheetForFormat(spreadsheet, format);
+  removeDefaultBlankSheet(spreadsheet);
 
-    if (isOldSchema) {
-      // Migrate: read existing data, build new row, write back
-      const allData = existing.getDataRange().getValues();
-      const oldRow = allData.length >= 2 ? allData[1] : [];
-
-      const newRow = [];
-      for (let i = 0; i < LEAGUE_SHEET_HEADERS.length; i++) {
-        const header = LEAGUE_SHEET_HEADERS[i];
-        if (header === 'ace_pot_current_total') {
-          // Old ace_pot_total value becomes ace_pot_current_total
-          const oldIdx = OLD_LEAGUE_HEADERS.indexOf('ace_pot_total');
-          newRow.push(oldIdx !== -1 && oldRow[oldIdx] ? oldRow[oldIdx] : '');
-        } else if (header === 'ace_pot_calculated_total' || header === 'ace_pot_total' ||
-                   header === 'ctp_calculated_total' || header === 'ctp_total') {
-          // New fields: no old data to map
-          newRow.push('');
-        } else if (header === 'ctp_prize') {
-          // Removed field: skip
-          continue;
-        } else {
-          // Map directly from old schema
-          const oldIdx = OLD_LEAGUE_HEADERS.indexOf(header);
-          newRow.push(oldIdx !== -1 && oldRow[oldIdx] ? oldRow[oldIdx] : '');
-        }
-      }
-
-      // Clear and rewrite
-      existing.clear();
-      existing.appendRow(LEAGUE_SHEET_HEADERS);
-      if (newRow.some(function(v) { return v !== ''; })) {
-        existing.appendRow(newRow);
-      }
-
-      const headerRange = existing.getRange(1, 1, 1, LEAGUE_SHEET_HEADERS.length);
-      headerRange.setFontWeight('bold');
-      existing.setFrozenRows(1);
-
-      // Ensure League is at position 1 (first tab)
-      if (existing.getIndex() !== 1) {
-        moveSheetToPosition(spreadsheet, 'League', 0);
-      }
-
-      // Clean up default blank sheet if present
-      removeDefaultBlankSheet(spreadsheet);
-
-      return respond('ok', 'League sheet migrated to new schema.', {
-        alreadyExisted: true,
-        migrated: true,
-        columns: LEAGUE_SHEET_HEADERS.length
-      });
-    }
-
-    // Already correct schema — ensure position
-    if (existing.getIndex() !== 1) {
-      moveSheetToPosition(spreadsheet, 'League', 0);
-    }
-
-    // Clean up default blank sheet if present
-    removeDefaultBlankSheet(spreadsheet);
-
-    return respond('ok', 'League sheet already exists.', {
+  if (migrated) {
+    return respond('ok', 'League sheet migrated to new schema.', {
       alreadyExisted: true,
-      migrated: false
+      migrated: true,
+      columns: getLeagueSheetHeaders(format).length
     });
   }
 
-  const sheet = spreadsheet.insertSheet('League');
-  sheet.appendRow(LEAGUE_SHEET_HEADERS);
+  if (result.created) {
+    return respond('ok', 'League sheet created successfully.', {
+      alreadyExisted: false,
+      columns: getLeagueSheetHeaders(format).length
+    });
+  }
 
-  const headerRange = sheet.getRange(1, 1, 1, LEAGUE_SHEET_HEADERS.length);
-  headerRange.setFontWeight('bold');
-  sheet.setFrozenRows(1);
-
-  // Ensure League is at position 1 (first tab)
-  moveSheetToPosition(spreadsheet, 'League', 0);
-
-  // Clean up default blank sheet if present
-  removeDefaultBlankSheet(spreadsheet);
-
-  return respond('ok', 'League sheet created successfully.', {
-    alreadyExisted: false,
-    columns: LEAGUE_SHEET_HEADERS.length
+  return respond('ok', 'League sheet already exists.', {
+    alreadyExisted: true,
+    migrated: false
   });
 }
 
@@ -801,7 +1181,7 @@ function handleCreateLeagueSheet(data) {
  *   - "ok" if the sheet exists and contains settings
  */
 function handleGetLeagueSettings(data) {
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   const sheet = spreadsheet.getSheetByName('League');
 
   if (!sheet) {
@@ -852,7 +1232,7 @@ function handleSaveLeagueSettings(data) {
     return respond('error', 'No settings provided.');
   }
 
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   const sheet = spreadsheet.getSheetByName('League');
 
   if (!sheet) {
@@ -931,7 +1311,7 @@ function handleSaveLeagueSettings(data) {
  * by date descending (most recent first).
  */
 function handleGetWeeklyTabs(data) {
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   const sheets = spreadsheet.getSheets();
   const weekTabs = [];
 
@@ -972,7 +1352,7 @@ function handleGetPreRoundReview(data) {
   }
 
   const tabName = 'Week ' + leagueDate;
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
 
   // Check if weekly sheet exists
   const weeklySheet = spreadsheet.getSheetByName(tabName);
@@ -1106,7 +1486,7 @@ function handleSavePreRoundReview(data) {
   }
 
   const tabName = 'Week ' + leagueDate;
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
 
   // Verify weekly sheet exists
   const weeklySheet = spreadsheet.getSheetByName(tabName);
@@ -1209,7 +1589,7 @@ function handlePreviewUdiscImport(data) {
   }
 
   const tabName = 'Week ' + leagueDate;
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
 
   const weeklySheet = spreadsheet.getSheetByName(tabName);
   if (!weeklySheet) {
@@ -1459,7 +1839,7 @@ function handleCommitUdiscImport(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
 
   var weeklySheet = spreadsheet.getSheetByName(tabName);
   if (!weeklySheet) {
@@ -1914,6 +2294,11 @@ function buildMatchEntry(udiscRow, weeklyRow, matchMethod) {
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
 function handleCalculateTags(data) {
+  var format = resolveLeagueFormat(data && data.spreadsheetId);
+  if (format === LEAGUE_FORMAT_DOUBLES) {
+    return respond('error', 'Tag operations are not available for the doubles league.');
+  }
+
   var leagueDate = data.league_date;
 
   if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
@@ -1921,7 +2306,7 @@ function handleCalculateTags(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   var weeklySheet = spreadsheet.getSheetByName(tabName);
 
   if (!weeklySheet) {
@@ -2051,6 +2436,11 @@ function handleCalculateTags(data) {
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
 function handleConfirmTags(data) {
+  var format = resolveLeagueFormat(data && data.spreadsheetId);
+  if (format === LEAGUE_FORMAT_DOUBLES) {
+    return respond('error', 'Tag operations are not available for the doubles league.');
+  }
+
   var leagueDate = data.league_date;
 
   if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
@@ -2058,7 +2448,7 @@ function handleConfirmTags(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   var weeklySheet = spreadsheet.getSheetByName(tabName);
 
   if (!weeklySheet) {
@@ -2176,6 +2566,11 @@ function handleConfirmTags(data) {
  * out_tag are skipped. Returns a summary of updated and skipped records.
  */
 function handleFinalizeRound(data) {
+  var format = resolveLeagueFormat(data && data.spreadsheetId);
+  if (format === LEAGUE_FORMAT_DOUBLES) {
+    return respond('error', 'Tag operations are not available for the doubles league.');
+  }
+
   var leagueDate = data.league_date;
 
   if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
@@ -2183,7 +2578,7 @@ function handleFinalizeRound(data) {
   }
 
   var tabName = 'Week ' + leagueDate;
-  var spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
   var weeklySheet = spreadsheet.getSheetByName(tabName);
 
   if (!weeklySheet) {
