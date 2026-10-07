@@ -79,10 +79,32 @@ action request carries the derived `spreadsheetId`. When a league whose format
 is `doubles` is selected, the **Doubles Provisioning** card calls the
 `provisionDoubles` web-app action, and the singles-only tag tooling is hidden.
 
+## Re-provisioning guard
+
+Once a doubles spreadsheet is fully provisioned, the provision action is no
+longer actionable. Doubles are considered **provisioned** only when all of the
+following are true, as reported by the single backend helper
+`getDoublesProvisioningState`:
+
+- the `ClubMembers` sheet is present;
+- the `League` sheet is present;
+- the `League` sheet records `league_format=doubles`;
+- the `Week template` sheet is present.
+
+When provisioned, the admin card disables the button and shows **"Doubles
+provisioned."**. The `provisionDoubles` action runs the same check before any
+write: if it reports provisioned, the request returns the `already_provisioned`
+status and creates no tabs, rows, or templates. This closes the race where a
+second admin clicks provision after another admin has already provisioned the
+spreadsheet. The UI and the mutation read the same check, so they can never
+disagree. Singles provisioning is unchanged; the doubles action targets the
+doubles spreadsheet only.
+
 ## Tests
 
 `npm test` runs the unit suite with Node's built-in test runner. The suite uses
 an in-memory SpreadsheetApp fake, so it needs no Google credentials and performs
 no live sheet writes. It covers spreadsheet routing/defaults, `league_format`
-gating, header constants, doubles provisioning, and roster-seed
-`member_number` preservation.
+gating, header constants, doubles provisioning, roster-seed `member_number`
+preservation, the doubles provisioning-state guard, and the disabled
+re-provisioning UI.

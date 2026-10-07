@@ -543,13 +543,75 @@ function provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet) {
 }
 
 /**
+ * Authoritative doubles provisioning-state check. Doubles are considered
+ * provisioned only when every required artifact is present and the League
+ * sheet records the doubles league_format:
+ *   - ClubMembers sheet is present.
+ *   - League sheet is present.
+ *   - League sheet records league_format=doubles.
+ *   - Week template sheet is present.
+ *
+ * The admin UI read path and the provisioning mutation both call this single
+ * helper, so they can never disagree about what "provisioned" means. Returns
+ * structured state so the UI can distinguish provisioned from not provisioned.
+ */
+function getDoublesProvisioningState(spreadsheet) {
+  var league = spreadsheet.getSheetByName('League');
+  var clubMembers = spreadsheet.getSheetByName('ClubMembers');
+  var weekTemplate = spreadsheet.getSheetByName(WEEK_TEMPLATE_SHEET_NAME);
+  var leagueFormat = readLeagueFormat(league);
+  var leagueFormatMatches = leagueFormat === LEAGUE_FORMAT_DOUBLES;
+
+  return {
+    provisioned: !!(league && clubMembers && weekTemplate && leagueFormatMatches),
+    league_present: !!league,
+    club_members_present: !!clubMembers,
+    week_template_present: !!weekTemplate,
+    league_format: leagueFormat,
+    league_format_matches: leagueFormatMatches
+  };
+}
+
+/**
+ * Admin action: reports the authoritative doubles provisioning state without
+ * writing anything. The UI uses this instead of inferring state locally.
+ */
+function handleGetDoublesProvisioningState(data) {
+  var doublesSpreadsheet = resolveSpreadsheet(SPREADSHEET_ID_DOUBLES);
+  var state = getDoublesProvisioningState(doublesSpreadsheet);
+  return respond(
+    'ok',
+    state.provisioned
+      ? 'Doubles spreadsheet is already provisioned.'
+      : 'Doubles spreadsheet is not provisioned.',
+    { state: state }
+  );
+}
+
+/**
  * Admin action: provisions the configured doubles spreadsheet (League with
  * league_format=doubles, ClubMembers, Week template) and seeds its roster from
  * the singles spreadsheet. Always targets the doubles spreadsheet ID, not the
  * caller's currently selected spreadsheet.
+ *
+ * Re-provisioning is refused before any write or template creation: when the
+ * authoritative provisioning check already reports provisioned, the request
+ * returns an already_provisioned response and performs no side effects. This
+ * closes the race where another admin provisions between the UI's state read
+ * and the click.
  */
 function handleProvisionDoubles(data) {
   var doublesSpreadsheet = resolveSpreadsheet(SPREADSHEET_ID_DOUBLES);
+  var state = getDoublesProvisioningState(doublesSpreadsheet);
+
+  if (state.provisioned) {
+    return respond(
+      'already_provisioned',
+      'Doubles spreadsheet is already provisioned. No changes were made.',
+      { state: state }
+    );
+  }
+
   var singlesSpreadsheet = resolveSpreadsheet(SPREADSHEET_ID);
   var summary = provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet);
   return respond('ok', 'Doubles spreadsheet provisioned.', summary);
@@ -722,6 +784,9 @@ function doPost(e) {
     }
     if (data.action === 'provisionDoubles') {
       return handleProvisionDoubles(data);
+    }
+    if (data.action === 'getDoublesProvisioningState') {
+      return handleGetDoublesProvisioningState(data);
     }
 
     return respond('error', 'Unknown action: ' + data.action);
