@@ -694,7 +694,9 @@
     }
 
     function showSignInQR() {
-      var url = window.location.origin + PLAYER_SIGN_IN_PATH;
+      // The QR carries only the opaque league id; the server maps it to the
+      // allow-listed spreadsheet. Never encode a spreadsheet id or tab.
+      var url = window.location.origin + PLAYER_SIGN_IN_PATH + '?league=' + encodeURIComponent(getLeagueId());
       var modal = document.getElementById('qrModal');
       var qrContainer = document.getElementById('qrCode');
       var urlDisplay = document.getElementById('qrUrl');

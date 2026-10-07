@@ -17,6 +17,16 @@
     }
     h1 { margin-bottom: 0.25rem; color: #1a1a1a; font-size: 1.5rem; }
     .subtitle { color: #666; margin-bottom: 1rem; font-size: 1rem; }
+    .league-indicator {
+      font-size: 0.8125rem;
+      color: #444;
+      background: #eef4fb;
+      border: 1px solid #cfe0f2;
+      border-radius: 4px;
+      padding: 0.375rem 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .league-indicator.warn { background: #fff3cd; border-color: #ffc107; color: #856404; }
     .card {
       background: white;
       border-radius: 8px;
@@ -128,6 +138,7 @@
 <body>
   <h1>Bag Tag League</h1>
   <p class="subtitle">Player Check-In</p>
+  <p id="leagueIndicator" class="league-indicator"></p>
 
   <!-- SEARCH VIEW -->
   <div id="searchView" class="card">
@@ -247,6 +258,7 @@
     <div class="status ok">
       <strong>You're checked in!</strong>
       <div class="success-details">
+        <p id="successLeagueName"></p>
         <p id="successPlayerName"></p>
         <p id="successTabName"></p>
         <p id="successTagInfo"></p>
@@ -254,12 +266,54 @@
     </div>
   </div>
 
+  <script src="../../shared/league-format.js"></script>
   <script>
     var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
     var searchTimeout = null;
     var activeSearchQuery = null;
     var currentMode = 'search'; // 'search', 'checkIn', 'register', 'success'
     var selectedMemberNumber = null;
+
+    // --- League routing ---
+    // The QR encodes the opaque league id as ?league=<id>. Parse it, validate
+    // it against the shared registry, and fall back to the singles default
+    // when it is absent or unknown. The resolved id is attached to every POST
+    // so a GET -> POST transition cannot silently revert to singles.
+    var resolvedLeague = resolveLeagueFromUrl();
+
+    function resolveLeagueFromUrl() {
+      var requested = null;
+      try {
+        requested = new URLSearchParams(window.location.search).get('league');
+      } catch (e) {
+        requested = null;
+      }
+
+      var registry = window.LeagueFormat;
+      if (!registry) {
+        return { id: '', name: 'Unknown league', unknownParam: false };
+      }
+
+      var league = requested ? registry.leagueById(requested) : null;
+      if (league) {
+        return { id: league.id, name: league.name, unknownParam: false };
+      }
+
+      var fallback = registry.leagueById(registry.DEFAULT_LEAGUE_ID);
+      return { id: fallback.id, name: fallback.name, unknownParam: !!requested };
+    }
+
+    function renderLeagueIndicator() {
+      var el = document.getElementById('leagueIndicator');
+      if (!el) return;
+      if (resolvedLeague.unknownParam) {
+        el.className = 'league-indicator warn';
+        el.textContent = resolvedLeague.name + ' (default) \u2014 QR league not recognized';
+      } else {
+        el.className = 'league-indicator';
+        el.textContent = resolvedLeague.name;
+      }
+    }
 
     // --- View helpers ---
 
@@ -315,6 +369,7 @@
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({
             action: 'searchClubMembers',
+            league: resolvedLeague.id,
             query: query
           })
         });
@@ -436,6 +491,7 @@
       try {
         var payload = {
           action: 'submitCheckIn',
+          league: resolvedLeague.id,
           name: name,
           udisc_username: udiscUsername || '',
           pdga_number: pdgaNumber || '',
@@ -457,6 +513,8 @@
         var data = await response.json();
 
         if (data.status === 'ok') {
+          var leagueInfo = window.LeagueFormat ? window.LeagueFormat.leagueById(data.league || resolvedLeague.id) : null;
+          document.getElementById('successLeagueName').textContent = 'League: ' + (leagueInfo ? leagueInfo.name : resolvedLeague.name);
           document.getElementById('successPlayerName').textContent = 'Player: ' + data.player_name;
           document.getElementById('successTabName').textContent = 'Week: ' + data.weekly_tab;
           document.getElementById('successTagInfo').textContent = 'Current Tag: ' + data.in_tag;
@@ -483,6 +541,7 @@
 
     // --- Init ---
 
+    renderLeagueIndicator();
     document.getElementById('searchInput').addEventListener('input', onSearchInput);
   </script>
 </body>
