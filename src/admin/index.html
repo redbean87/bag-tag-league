@@ -208,21 +208,19 @@
   <h1>Bag Tag League</h1>
   <p class="subtitle">League Admin</p>
 
-  <!-- 0. League Format Selector -->
-  <div class="card" id="leagueFormatCard">
-    <h2>League Format</h2>
+  <!-- 0. League Picker -->
+  <div class="card" id="leaguePickerCard">
+    <h2>League</h2>
     <p class="help-text">
-      Choose which league you are managing. The selection is saved in this
-      browser; Singles remains the default.
+      Choose which league you are managing. The picker lists the real leagues
+      and each one carries its own format; the selection is saved in this
+      browser and the first league remains the default.
     </p>
     <div class="field-group">
-      <label for="leagueFormat">Format</label>
-      <select id="leagueFormat" onchange="onLeagueFormatChange()">
-        <option value="singles">Singles</option>
-        <option value="doubles">Doubles</option>
-      </select>
+      <label for="leaguePicker">League</label>
+      <select id="leaguePicker" onchange="onLeagueChange()"></select>
     </div>
-    <p class="help-text" id="leagueFormatStatus" style="margin:0;"></p>
+    <p class="help-text" id="leagueStatus" style="margin:0;"></p>
   </div>
 
   <!-- 0b. Doubles Provisioning (doubles mode only) -->
@@ -503,48 +501,83 @@
 
     var cachedWeeklyTabs = [];
 
-    // ─── League format selection ──────────────────────────────────────────
-    // Persisted in localStorage by src/shared/league-format.js. Singles is the
-    // default; the derived spreadsheetId is attached to every action request.
-    function getLeagueFormat() {
+    // ─── League selection ─────────────────────────────────────────────────
+    // The selected league id is persisted in localStorage by
+    // src/shared/league-format.js. Its format is read from the league's own
+    // record (never from a separate switch); the derived spreadsheetId is
+    // attached to every action request.
+    function getLeagueId() {
       return window.LeagueFormat
-        ? window.LeagueFormat.readStoredFormat(window.localStorage)
-        : 'singles';
-    }
-
-    function getSpreadsheetId() {
-      return window.LeagueFormat
-        ? window.LeagueFormat.spreadsheetIdForFormat(getLeagueFormat())
+        ? window.LeagueFormat.readStoredLeagueId(window.localStorage)
         : '';
     }
 
-    function onLeagueFormatChange() {
-      var format = document.getElementById('leagueFormat').value;
+    function getSelectedLeague() {
+      return window.LeagueFormat
+        ? window.LeagueFormat.leagueById(getLeagueId())
+        : null;
+    }
+
+    function getLeagueFormat() {
+      var league = getSelectedLeague();
+      return league ? league.format : 'singles';
+    }
+
+    function getSpreadsheetId() {
+      var league = getSelectedLeague();
+      return league ? league.spreadsheetId : '';
+    }
+
+    // Builds the picker from the shared league registry so the options list
+    // real league names rather than hardcoded Singles/Doubles labels.
+    function populateLeaguePicker() {
+      var selector = document.getElementById('leaguePicker');
+      if (!selector || !window.LeagueFormat) return;
+
+      var selected = getLeagueId();
+      selector.innerHTML = '';
+      window.LeagueFormat.leagues().forEach(function(league) {
+        var option = document.createElement('option');
+        option.value = league.id;
+        option.textContent = league.name;
+        selector.appendChild(option);
+      });
+      selector.value = selected;
+    }
+
+    function onLeagueChange() {
+      var leagueId = document.getElementById('leaguePicker').value;
       if (window.LeagueFormat) {
-        window.LeagueFormat.persistFormat(window.localStorage, format);
+        window.LeagueFormat.persistLeagueId(window.localStorage, leagueId);
       }
-      applyLeagueFormat(format);
+      applyLeague(leagueId);
       clearStaleSectionData();
       loadLeagueSettings();
       loadClubMembersStatus();
       loadWeeklyTabs();
-      log('Switched league format to ' + format);
+      log('Switched to league ' + leagueId);
     }
 
-    function applyLeagueFormat(format) {
+    // Applies the selected league. Every gating decision reads league.format
+    // from the league record, so routing cannot follow a stale format value.
+    function applyLeague(leagueId) {
+      var league = window.LeagueFormat
+        ? window.LeagueFormat.leagueById(leagueId)
+        : null;
+      var format = league ? league.format : 'singles';
       var isDoubles = format === 'doubles';
 
-      var selector = document.getElementById('leagueFormat');
-      if (selector) selector.value = format;
+      var selector = document.getElementById('leaguePicker');
+      if (selector && league) selector.value = league.id;
 
-      var statusEl = document.getElementById('leagueFormatStatus');
+      var statusEl = document.getElementById('leagueStatus');
       if (statusEl) {
-        statusEl.textContent = isDoubles
-          ? 'Managing the Doubles league.'
+        statusEl.textContent = league
+          ? 'Managing ' + league.name + '.'
           : 'Managing the Singles league.';
       }
 
-      // Tags are singles-only; hide tag tooling while managing doubles.
+      // Tags are singles-only; hide tag tooling for any non-singles format.
       var tagCard = document.getElementById('tagCalcCard');
       if (tagCard) tagCard.style.display = isDoubles ? 'none' : '';
       var finalizeCard = document.getElementById('finalizeRoundCard');
@@ -2019,7 +2052,8 @@
       var mm = String(today.getMonth() + 1).padStart(2, '0');
       var dd = String(today.getDate()).padStart(2, '0');
       document.getElementById('activeLeagueDate').value = yyyy + '-' + mm + '-' + dd;
-      applyLeagueFormat(getLeagueFormat());
+      populateLeaguePicker();
+      applyLeague(getLeagueId());
       log('Admin page loaded');
       loadLeagueSettings();
       loadClubMembersStatus();

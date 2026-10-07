@@ -71,11 +71,13 @@ sits beside `Code.gs` in the Apps Script project root.
 
 ## Admin UI
 
-The admin page has a **League Format** selector (Singles | Doubles) persisted in
-`localStorage` (`bagTagLeague.leagueFormat`); Singles remains the default. Every
-action request carries the derived `spreadsheetId`. In Doubles mode the
-**Doubles Provisioning** card calls the `provisionDoubles` web-app action, and
-the singles-only tag tooling is hidden.
+The admin page has a **League** picker populated from the shared league
+registry (`src/shared/league-format.js`). Each league carries its own format as
+data, and the selected league id is persisted in `localStorage`
+(`bagTagLeague.leagueId`); the first league (Singles) remains the default. Every
+action request carries the derived `spreadsheetId`. When a league whose format
+is `doubles` is selected, the **Doubles Provisioning** card calls the
+`provisionDoubles` web-app action, and the singles-only tag tooling is hidden.
 
 ## Tests
 
