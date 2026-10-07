@@ -1617,12 +1617,22 @@
       if (validation.errors && validation.errors.length > 0) return 'blocked';
 
       var partnerList = entry.partners || [];
+      var selectedMembers = {};
       for (var i = 0; i < partnerList.length; i++) {
         var partner = partnerList[i];
         var override = partner.override_member_number;
-        if (override !== undefined && override !== null && override !== '') continue;
+        if (override !== undefined && override !== null && override !== '') {
+          if (selectedMembers[override]) return 'review';
+          selectedMembers[override] = true;
+          continue;
+        }
         var status = partner.match ? partner.match.status : 'unmatched';
         if (status === 'ambiguous' || status === 'unmatched') return 'review';
+        var matchedMember = partner.match ? partner.match.member_number : null;
+        if (matchedMember !== null && matchedMember !== undefined && matchedMember !== '') {
+          if (selectedMembers[matchedMember]) return 'review';
+          selectedMembers[matchedMember] = true;
+        }
       }
 
       if (validation.warnings && validation.warnings.length > 0) return 'review';
@@ -1694,6 +1704,7 @@
       var previewEl = document.getElementById('udiscImportPreview');
       var roster = data.roster || [];
       var summary = data.summary || {};
+      var readyCount = 0;
       var html = '';
 
       html += '<div style="background:#e8f0fe; border:1px solid #c6dafc; border-radius:6px; padding:0.6rem; margin-bottom:0.75rem;">';
@@ -1714,6 +1725,7 @@
         var pair = pairs[i];
         var verdict = computeDoublesVerdictClient(pair);
         pair.verdict = verdict;
+        if (verdict === 'ready') readyCount++;
         var meta = doublesVerdictMeta(verdict);
 
         html += '<div class="doubles-pair-card" data-row="' + pair.row_index + '" style="border:1px solid #ddd; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">';
@@ -1742,7 +1754,123 @@
         html += '</div>';
       }
 
+      if (readyCount > 0) {
+        html += '<button type="button" id="btnCommitDoublesImport" onclick="commitUdiscImportDoubles()" style="background:#34a853;">Approve &amp; Commit Import</button> ';
+      }
       html += '<button type="button" onclick="resetImportUI()">Cancel</button>';
+
+      previewEl.innerHTML = html;
+      previewEl.style.display = '';
+    }
+
+    /**
+     * Commits the approved doubles import. Posts the raw UDisc rows plus the
+     * admin's per-partner overrides only — never a client-authoritative match
+     * or verdict. The server recomputes every verdict.
+     */
+    async function commitUdiscImportDoubles() {
+      if (!parsedUdiscRows || !doublesPreviewData) {
+        setUdiscImportStatus('error', '<strong>No parsed data to commit.</strong>');
+        return;
+      }
+
+      var leagueDate = getActiveLeagueDate();
+      if (!leagueDate) {
+        setUdiscImportStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var overrides = {};
+      for (var i = 0; i < doublesPreviewData.pairs.length; i++) {
+        var pair = doublesPreviewData.pairs[i];
+        var rowOverrides = {};
+        for (var p = 0; p < pair.partners.length; p++) {
+          var value = pair.partners[p].override_member_number;
+          if (value !== undefined && value !== null && value !== '') {
+            rowOverrides[p] = value;
+          }
+        }
+        overrides[pair.row_index] = rowOverrides;
+      }
+
+      var btn = document.getElementById('btnCommitDoublesImport');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Committing...';
+      }
+      setUdiscImportStatus('pending', 'Committing doubles import...');
+      log('Committing doubles UDisc import for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'commitUdiscImportDoubles', spreadsheetId: getSpreadsheetId(),
+            league_date: leagueDate,
+            rows: parsedUdiscRows,
+            overrides: overrides,
+            approved: true
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setUdiscImportStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          return;
+        }
+
+        renderDoublesCommitResult(data);
+        log('Doubles import committed for ' + leagueDate);
+      } catch (err) {
+        setUdiscImportStatus('error', '<strong>Commit failed:</strong> ' + err.message);
+        log('FAILED to commit doubles import: ' + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Approve & Commit Import';
+        }
+      }
+    }
+
+    /** Renders the per-pair/solo outcomes returned by a doubles commit. */
+    function renderDoublesCommitResult(data) {
+      var previewEl = document.getElementById('udiscImportPreview');
+      var summary = data.summary || {};
+      var results = data.results || [];
+      var html = '';
+
+      html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; color:#555;">Doubles Commit Results</h3>';
+      html += '<div class="field-group">';
+      html += '<p>Committed: <strong>' + (summary.committed || 0) + '</strong> · ';
+      html += 'Repaired: <strong>' + (summary.repaired || 0) + '</strong> · ';
+      html += 'Already committed: <strong>' + (summary.already_committed || 0) + '</strong></p>';
+      html += '<p>Needs review: <strong style="color:#b06000;">' + (summary.review || 0) + '</strong> · ';
+      html += 'Blocked: <strong style="color:#a50e0e;">' + (summary.blocked || 0) + '</strong> · ';
+      html += 'Failed: <strong style="color:#a50e0e;">' + (summary.failed || 0) + '</strong></p>';
+      html += '</div>';
+
+      html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+      html += '<tr style="background:#f0f0f0;"><th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Row</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Pair</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Status</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Reason</th></tr>';
+      for (var i = 0; i < results.length; i++) {
+        var result = results[i];
+        var meta = doublesVerdictMeta(result.status === 'committed' || result.status === 'repaired' ? 'ready' : (result.status === 'blocked' || result.status === 'failed' ? 'blocked' : 'review'));
+        var partnerText = (result.partners || []).map(function (partner) {
+          return escHtml(partner.name || partner.username || '?') + (partner.member_number ? ' (#' + partner.member_number + ')' : '');
+        }).join(' & ');
+        html += '<tr>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + result.row_index + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + partnerText + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;"><span style="background:' + meta.bg + '; color:' + meta.color + '; padding:0.1rem 0.4rem; border-radius:8px; font-size:0.75rem; font-weight:bold;">' + escHtml(result.status) + '</span></td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(result.reason || '') + '</td>';
+        html += '</tr>';
+      }
+      html += '</table>';
+      html += '<button type="button" onclick="resetImportUI()">Done</button>';
 
       previewEl.innerHTML = html;
       previewEl.style.display = '';

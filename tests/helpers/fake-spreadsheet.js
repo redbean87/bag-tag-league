@@ -102,7 +102,14 @@ class FakeSheet {
   }
 
   appendRow(row) {
+    if (this.appendError) throw new Error(this.appendError);
     this.rows.push(row.slice());
+    return this;
+  }
+
+  deleteRow(rowPosition) {
+    if (rowPosition < 1 || rowPosition > this.rows.length) return this;
+    this.rows.splice(rowPosition - 1, 1);
     return this;
   }
 

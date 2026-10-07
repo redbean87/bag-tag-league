@@ -36,6 +36,7 @@ function loadCode(codeFiles) {
   const loggerLines = [];
   const scriptProperties = {};
   const spreadsheets = new Map();
+  let lockWaitLock = function () { return true; };
 
   function makeSpreadsheet(id) {
     if (!spreadsheets.has(id)) {
@@ -72,7 +73,7 @@ function loadCode(codeFiles) {
     getScriptLock() {
       return {
         waitLock() {
-          return true;
+          return lockWaitLock();
         },
         releaseLock() {}
       };
@@ -139,6 +140,9 @@ function loadCode(codeFiles) {
     makeSpreadsheet,
     setScriptProperty(name, value) {
       scriptProperties[name] = String(value);
+    },
+    setLockWaitLock(fn) {
+      lockWaitLock = fn;
     },
     fn(name) {
       return sandbox[name];
