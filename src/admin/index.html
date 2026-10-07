@@ -585,6 +585,12 @@
 
       var provisionCard = document.getElementById('doublesProvisionCard');
       if (provisionCard) provisionCard.style.display = isDoubles ? '' : 'none';
+
+      // Doubles provisioning state is authoritative on the server; load it
+      // whenever the doubles league is selected rather than caching a local flag.
+      if (isDoubles) {
+        loadDoublesProvisioningState();
+      }
     }
 
     function setDoublesProvisionStatus(type, html) {
@@ -592,6 +598,50 @@
       if (!el) return;
       el.className = 'status ' + type;
       el.innerHTML = html;
+    }
+
+    // Reflects the backend provisioning state on the provision control. A
+    // provisioned doubles spreadsheet disables the action and states the state
+    // explicitly, so re-provisioning is not actionable.
+    function applyDoublesProvisioningState(state) {
+      var btn = document.getElementById('btnProvisionDoubles');
+      if (!btn || !state) return;
+      var provisioned = !!state.provisioned;
+      btn.dataset.provisioned = provisioned ? 'true' : 'false';
+      btn.disabled = provisioned;
+      if (provisioned) {
+        btn.textContent = 'Doubles Provisioned';
+        setDoublesProvisionStatus('ok', '<strong>Doubles provisioned.</strong> Re-provisioning is disabled.');
+      } else {
+        btn.textContent = 'Provision Doubles Spreadsheet';
+        setDoublesProvisionStatus('hidden', '');
+      }
+    }
+
+    async function loadDoublesProvisioningState() {
+      var btn = document.getElementById('btnProvisionDoubles');
+      if (!btn) return;
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getDoublesProvisioningState', spreadsheetId: getSpreadsheetId() })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setDoublesProvisionStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          return;
+        }
+        applyDoublesProvisioningState(data.state);
+        log(data.state && data.state.provisioned
+          ? 'Doubles spreadsheet is already provisioned'
+          : 'Doubles spreadsheet is not provisioned');
+      } catch (err) {
+        setDoublesProvisionStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED to load doubles provisioning state: ' + err.message);
+      }
     }
 
     async function provisionDoublesSpreadsheet() {
@@ -603,6 +653,8 @@
       setDoublesProvisionStatus('pending', 'Provisioning doubles spreadsheet...');
       log('Provisioning doubles spreadsheet');
 
+      var provisioned = false;
+
       try {
         var response = await fetch(API_URL, {
           method: 'POST',
@@ -612,6 +664,8 @@
         var data = await response.json();
 
         if (data.status === 'ok') {
+          provisioned = true;
+          applyDoublesProvisioningState({ provisioned: true });
           var seed = data.roster_seed || {};
           setDoublesProvisionStatus('ok',
             '<strong>Doubles spreadsheet provisioned.</strong> Roster seeded: ' +
@@ -619,6 +673,11 @@
           log('SUCCESS: Doubles provisioned; seeded ' + (seed.seeded || 0) + ' member(s)');
           await loadLeagueSettings();
           await loadClubMembersStatus();
+        } else if (data.status === 'already_provisioned') {
+          // Another admin provisioned it between the state read and the click.
+          provisioned = true;
+          applyDoublesProvisioningState(data.state || { provisioned: true });
+          log('Doubles already provisioned; no action taken');
         } else {
           setDoublesProvisionStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
@@ -627,7 +686,7 @@
         setDoublesProvisionStatus('error', '<strong>Request failed:</strong> ' + err.message);
         log('FAILED: ' + err.message);
       } finally {
-        if (btn) {
+        if (btn && !provisioned) {
           btn.disabled = false;
           btn.textContent = 'Provision Doubles Spreadsheet';
         }
