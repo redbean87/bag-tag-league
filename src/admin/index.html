@@ -1134,6 +1134,7 @@
 
     // UDisc Import functions
     var parsedUdiscRows = null;
+    var doublesPreviewData = null;
 
     function setUdiscImportStatus(type, html) {
       var el = document.getElementById('udiscImportResult');
@@ -1217,6 +1218,14 @@
         }
 
         log('Parsed ' + rows.length + ' rows from "' + sheetName + '"');
+
+        if (getLeagueFormat() === 'doubles') {
+          parsedUdiscRows = rows;
+          setUdiscImportStatus('pending', 'Matching doubles pairs against the weekly sheet...');
+          await requestDoublesImportPreview(rows, leagueDate);
+          return;
+        }
+
         setUdiscImportStatus('pending', 'Matching against weekly sheet...');
 
         var response = await fetch(API_URL, {
@@ -1452,10 +1461,219 @@
 
     function resetImportUI() {
       parsedUdiscRows = null;
+      doublesPreviewData = null;
       var previewEl = document.getElementById('udiscImportPreview');
       previewEl.style.display = 'none';
       previewEl.innerHTML = '';
       clearUdiscImportStatus();
+    }
+
+    // ─── Doubles import split-preview (read-only) ────────────────────────
+    // The server parses the pair row and matches each partner independently.
+    // This renderer shows the two partner chips, their independent match
+    // paths, the pair verdict, and a per-partner override. Nothing here
+    // commits: the doubles preview never writes to the live sheet.
+
+    async function requestDoublesImportPreview(rows, leagueDate) {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'previewUdiscImportDoubles', spreadsheetId: getSpreadsheetId(),
+            league_date: leagueDate,
+            rows: rows
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setUdiscImportStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          return;
+        }
+
+        doublesPreviewData = data;
+        renderDoublesImportPreview(data);
+        log('Doubles import preview generated for ' + leagueDate);
+      } catch (err) {
+        setUdiscImportStatus('error', '<strong>Preview failed:</strong> ' + err.message);
+        log('FAILED to preview doubles import: ' + err.message);
+      }
+    }
+
+    function doublesVerdictMeta(verdict) {
+      if (verdict === 'ready') return { label: 'Ready', color: '#137333', bg: '#e6f4ea' };
+      if (verdict === 'review') return { label: 'Needs review', color: '#b06000', bg: '#fef7e0' };
+      return { label: 'Blocked', color: '#a50e0e', bg: '#fce8e6' };
+    }
+
+    function doublesMatchStatusLabel(match) {
+      if (!match) return 'unmatched';
+      if (match.status === 'matched') return 'matched via ' + (match.source || 'unknown');
+      if (match.status === 'new') return 'new member (no roster match)';
+      if (match.status === 'ambiguous') return 'ambiguous — manual pick required';
+      return 'unmatched';
+    }
+
+    // Recomputes the pair verdict client-side so a per-partner override is
+    // reflected immediately. Mirrors scripts/Code.gs computeDoublesPairVerdict.
+    function computeDoublesVerdictClient(entry) {
+      var validation = entry.validation || {};
+      if (validation.errors && validation.errors.length > 0) return 'blocked';
+
+      var partnerList = entry.partners || [];
+      for (var i = 0; i < partnerList.length; i++) {
+        var partner = partnerList[i];
+        var override = partner.override_member_number;
+        if (override !== undefined && override !== null && override !== '') continue;
+        var status = partner.match ? partner.match.status : 'unmatched';
+        if (status === 'ambiguous' || status === 'unmatched') return 'review';
+      }
+
+      if (validation.warnings && validation.warnings.length > 0) return 'review';
+      return 'ready';
+    }
+
+    function doublesMemberOptions(roster, selected) {
+      var html = '<option value=""' + (selected ? '' : ' selected') + '>— no match (create new) —</option>';
+      var found = false;
+      for (var i = 0; i < roster.length; i++) {
+        var member = roster[i];
+        var isSelected = String(member.member_number) === String(selected);
+        if (isSelected) found = true;
+        html += '<option value="' + member.member_number + '"' + (isSelected ? ' selected' : '') + '>' +
+          escHtml(member.name) + ' (#' + member.member_number + ')</option>';
+      }
+      if (selected && !found) {
+        html += '<option value="' + selected + '" selected>#' + selected + ' (current match)</option>';
+      }
+      return html;
+    }
+
+    function doublesRosterMember(roster, memberNumber) {
+      for (var i = 0; i < roster.length; i++) {
+        if (String(roster[i].member_number) === String(memberNumber)) return roster[i];
+      }
+      return null;
+    }
+
+    function renderDoublesPartnerChip(pair, partner, roster) {
+      var match = partner.match || {};
+      var override = partner.override_member_number;
+      var hasOverride = override !== undefined && override !== null && override !== '';
+      var selected = hasOverride ? override : (match.member_number || '');
+
+      var html = '<div class="doubles-partner-chip" style="flex:1; border:1px solid #e0e0e0; border-radius:6px; padding:0.6rem; background:#fafafa;">';
+      html += '<div style="font-weight:bold;">' + escHtml(partner.name || '(no display name)') + '</div>';
+      html += '<div style="color:#666; font-size:0.8rem;">@' + escHtml(partner.username || '(no username)') + '</div>';
+      var statusLabel = hasOverride ? 'matched via admin override' : doublesMatchStatusLabel(match);
+      html += '<div class="doubles-partner-status" style="font-size:0.8rem; margin-top:0.35rem;">' +
+        escHtml(statusLabel) + '</div>';
+
+      if (hasOverride) {
+        var overrideMember = doublesRosterMember(roster, override);
+        html += '<div style="font-size:0.8rem; color:#0066cc;">Overridden to: <strong>' +
+          escHtml(overrideMember ? overrideMember.name : ('#' + override)) + '</strong> (#' + override + ')</div>';
+      } else if (match.status === 'matched') {
+        html += '<div style="font-size:0.8rem;">Matched: <strong>' + escHtml(match.matched_name || '(unnamed)') + '</strong>' +
+          (match.member_number ? ' (#' + match.member_number + ')' : '') + '</div>';
+        html += '<div style="font-size:0.75rem; color:#888;">confidence: ' + escHtml(match.confidence || 'unknown') + '</div>';
+      } else if (match.status === 'ambiguous' && match.candidates && match.candidates.length > 0) {
+        var names = match.candidates.map(function (c) {
+          return escHtml(c.name) + ' (#' + c.member_number + ')';
+        }).join(', ');
+        html += '<div style="font-size:0.8rem; color:#b06000;">Candidates: ' + names + '</div>';
+      } else if (match.status === 'new') {
+        html += '<div style="font-size:0.8rem; color:#137333;">Would create a new member record.</div>';
+      }
+
+      html += '<div style="margin-top:0.4rem;"><label style="font-size:0.75rem; color:#555;">Override match</label><br>';
+      html += '<select class="doubles-partner-override" data-row="' + pair.row_index + '" data-partner="' + partner.partner_index + '" ' +
+        'onchange="applyDoublesOverride(' + pair.row_index + ', ' + partner.partner_index + ', this.value)" style="max-width:100%;">' +
+        doublesMemberOptions(roster, selected) + '</select></div>';
+      html += '</div>';
+      return html;
+    }
+
+    function renderDoublesImportPreview(data) {
+      var previewEl = document.getElementById('udiscImportPreview');
+      var roster = data.roster || [];
+      var summary = data.summary || {};
+      var html = '';
+
+      html += '<div style="background:#e8f0fe; border:1px solid #c6dafc; border-radius:6px; padding:0.6rem; margin-bottom:0.75rem;">';
+      html += '<strong>Preview only.</strong> This splits each doubles row into two partners and matches each one independently. ';
+      html += 'Nothing is written to the live sheet until a separate, approved commit.</div>';
+
+      html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; color:#555;">Doubles Preview Summary</h3>';
+      html += '<div class="field-group">';
+      html += '<p>UDisc rows: <strong>' + (summary.total_udisc_rows || 0) + '</strong> · ';
+      html += 'pairs: <strong>' + (summary.pairs || 0) + '</strong> · solos: <strong>' + (summary.solos || 0) + '</strong></p>';
+      html += '<p>Ready: <strong style="color:#137333;">' + (summary.ready || 0) + '</strong> · ';
+      html += 'Needs review: <strong style="color:#b06000;">' + (summary.review || 0) + '</strong> · ';
+      html += 'Blocked: <strong style="color:#a50e0e;">' + (summary.blocked || 0) + '</strong></p>';
+      html += '</div>';
+
+      var pairs = data.pairs || [];
+      for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i];
+        var verdict = computeDoublesVerdictClient(pair);
+        pair.verdict = verdict;
+        var meta = doublesVerdictMeta(verdict);
+
+        html += '<div class="doubles-pair-card" data-row="' + pair.row_index + '" style="border:1px solid #ddd; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">';
+        html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">';
+        html += '<strong>' + escHtml(pair.raw_name || '(no name)') + '</strong>';
+        html += '<span class="doubles-pair-verdict" style="background:' + meta.bg + '; color:' + meta.color + '; padding:0.15rem 0.5rem; border-radius:10px; font-size:0.75rem; font-weight:bold;">' +
+          meta.label + '</span>';
+        html += '</div>';
+        html += '<div style="color:#888; font-size:0.8rem; margin-bottom:0.5rem;">@' +
+          escHtml(pair.raw_usernames || '(no usernames)') + (pair.is_solo ? ' · solo' : '') + '</div>';
+
+        var errors = (pair.validation && pair.validation.errors) || [];
+        if (errors.length > 0) {
+          html += '<div style="color:#a50e0e; font-size:0.8rem; margin-bottom:0.4rem;">Errors: ' + escHtml(errors.join(', ')) + '</div>';
+        }
+        var warnings = (pair.validation && pair.validation.warnings) || [];
+        if (warnings.length > 0) {
+          html += '<div style="color:#b06000; font-size:0.8rem; margin-bottom:0.4rem;">Warnings: ' + escHtml(warnings.join(', ')) + '</div>';
+        }
+
+        html += '<div style="display:flex; gap:0.6rem; align-items:stretch;">';
+        for (var p = 0; p < pair.partners.length; p++) {
+          html += renderDoublesPartnerChip(pair, pair.partners[p], roster);
+        }
+        html += '</div>';
+        html += '</div>';
+      }
+
+      html += '<button type="button" onclick="resetImportUI()">Cancel</button>';
+
+      previewEl.innerHTML = html;
+      previewEl.style.display = '';
+    }
+
+    function applyDoublesOverride(rowIndex, partnerIndex, value) {
+      if (!doublesPreviewData) return;
+      var pair = null;
+      for (var i = 0; i < doublesPreviewData.pairs.length; i++) {
+        if (doublesPreviewData.pairs[i].row_index === rowIndex) {
+          pair = doublesPreviewData.pairs[i];
+          break;
+        }
+      }
+      if (!pair || !pair.partners[partnerIndex]) return;
+
+      var partner = pair.partners[partnerIndex];
+      if (value === '') {
+        delete partner.override_member_number;
+      } else {
+        partner.override_member_number = parseInt(value, 10);
+      }
+      pair.verdict = computeDoublesVerdictClient(pair);
+      renderDoublesImportPreview(doublesPreviewData);
+      log('Doubles override set for row ' + rowIndex + ', partner ' + partnerIndex);
     }
 
     // Tag Calculation functions

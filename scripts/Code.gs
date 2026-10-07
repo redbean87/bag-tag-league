@@ -705,6 +705,9 @@ function doPost(e) {
     if (data.action === 'previewUdiscImport') {
       return handlePreviewUdiscImport(data);
     }
+    if (data.action === 'previewUdiscImportDoubles') {
+      return handlePreviewUdiscImportDoubles(data);
+    }
     if (data.action === 'commitUdiscImport') {
       return handleCommitUdiscImport(data);
     }
@@ -1812,6 +1815,488 @@ function handlePreviewUdiscImport(data) {
     missing_from_udisc: missingFromUdisc,
     ambiguous: ambiguous,
     errors: errors
+  });
+}
+
+// ─── Doubles import preview (read-only) ─────────────────────────────────────
+//
+// A UDisc doubles export is one row per team: `name` is "A & B" and
+// `usernames` is the comma-joined pair. The functions below split a row into
+// independent partners, match each partner on its own (never letting one
+// partner's match decide the other's), and compute a pair-level verdict. The
+// whole path is read-only: it never appends or writes a sheet row.
+
+/**
+ * Splits the UDisc doubles handle cell into individual handles.
+ *
+ * Accepts the plural `usernames` cell (comma-joined, e.g. "damon31,donjoses")
+ * and the singular `username` cell (solo/back-compat). Malformed input is
+ * reported as validation codes; the caller decides the pair verdict.
+ *
+ * Returns { handles, warnings, errors }.
+ */
+function parseDoublesHandles(rawValue) {
+  var text = (rawValue === null || rawValue === undefined) ? '' : rawValue.toString().trim();
+  if (!text) {
+    return { handles: [], warnings: [], errors: [] };
+  }
+
+  var parts = text.split(',');
+  var handles = [];
+  var warnings = [];
+
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    if (!part) {
+      warnings.push('blank_handle');
+      continue;
+    }
+    handles.push(part);
+  }
+
+  if (handles.length > 2) {
+    warnings.push('too_many_handles');
+  }
+
+  if (handles.length === 2 && handles[0].toLowerCase() === handles[1].toLowerCase()) {
+    // Same handle twice — treat as a solo participant and flag for review.
+    warnings.push('duplicate_handle');
+    handles = [handles[0]];
+  }
+
+  return { handles: handles, warnings: warnings, errors: [] };
+}
+
+/**
+ * Splits a UDisc doubles `name` cell into partner display names.
+ *
+ * Splits on the LAST ampersand so names containing earlier ampersands stay
+ * intact. No ampersand means a solo participant. An ampersand with an empty
+ * side is malformed; an ampersand that is not space-padded (e.g. "AT&T") is
+ * ambiguous and is flagged for admin review rather than silently trusted.
+ *
+ * Returns { partnerNames, warnings, errors }.
+ */
+function parseDoublesPairName(rawValue) {
+  var text = (rawValue === null || rawValue === undefined) ? '' : rawValue.toString().trim();
+  if (!text) {
+    return { partnerNames: [], warnings: [], errors: ['missing_name'] };
+  }
+
+  var idx = text.lastIndexOf('&');
+  if (idx === -1) {
+    return { partnerNames: [text], warnings: [], errors: [] };
+  }
+
+  var left = text.slice(0, idx).trim();
+  var right = text.slice(idx + 1).trim();
+  var warnings = [];
+  var errors = [];
+
+  if (!left || !right) {
+    errors.push('malformed_ampersand');
+  } else {
+    var before = text.charAt(idx - 1);
+    var after = text.charAt(idx + 1);
+    if (before !== ' ' || after !== ' ') {
+      warnings.push('ambiguous_ampersand');
+    }
+  }
+
+  return { partnerNames: [left, right], warnings: warnings, errors: errors };
+}
+
+/**
+ * Parses one UDisc doubles row into independent partner identity objects.
+ * Parsing is deliberately separate from matching so both are testable alone.
+ *
+ * Returns { source_name, source_usernames, is_solo, partners, warnings, errors }.
+ */
+function parseDoublesRow(udiscRow) {
+  var row = udiscRow || {};
+
+  var hasPlural = row.usernames !== undefined && row.usernames !== null && row.usernames.toString().trim() !== '';
+  var handleCell = hasPlural ? row.usernames : (row.username !== undefined ? row.username : '');
+
+  var handleResult = parseDoublesHandles(handleCell);
+  var nameResult = parseDoublesPairName(row.name);
+
+  var handles = handleResult.handles;
+  var names = nameResult.partnerNames;
+  var warnings = handleResult.warnings.concat(nameResult.warnings);
+  var errors = handleResult.errors.concat(nameResult.errors);
+
+  if (handles.length > 0 && names.length > 0 && handles.length !== names.length) {
+    warnings.push('partner_count_mismatch');
+  }
+
+  var count = Math.max(handles.length, names.length);
+  if (count === 0) count = 1;
+  var isSolo = count === 1;
+
+  var partners = [];
+  for (var i = 0; i < count; i++) {
+    var name = names[i] !== undefined ? names[i] : '';
+    var username = handles[i] !== undefined ? handles[i] : '';
+    if (!name && !username) {
+      errors.push('blank_partner');
+    }
+    partners.push({
+      partner_index: i,
+      name: name,
+      username: username,
+      // The doubles export has no per-player PDGA. Only a solo row can safely
+      // carry the row-level PDGA number; a pair member must never inherit it.
+      pdga_number: (isSolo && row.pdga_number) ? row.pdga_number.toString().trim() : '',
+      match: null
+    });
+  }
+
+  return {
+    source_name: (row.name || '').toString(),
+    source_usernames: handleCell === undefined || handleCell === null ? '' : handleCell.toString(),
+    is_solo: isSolo,
+    partners: partners,
+    warnings: uniqueStrings(warnings),
+    errors: uniqueStrings(errors)
+  };
+}
+
+/** Returns the input list with duplicates removed, preserving first-seen order. */
+function uniqueStrings(list) {
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < list.length; i++) {
+    var value = list[i];
+    if (!seen[value]) {
+      seen[value] = true;
+      out.push(value);
+    }
+  }
+  return out;
+}
+
+/** Builds the match-result skeleton shared by every matching path. */
+function emptyDoublesMatch() {
+  return {
+    status: 'unmatched',
+    source: null,
+    confidence: 'none',
+    member_number: null,
+    matched_name: '',
+    matched_username: '',
+    club_member: false,
+    candidates: []
+  };
+}
+
+function weeklyDoublesMatch(entry, source, indexes) {
+  var result = emptyDoublesMatch();
+  result.status = 'matched';
+  result.source = source;
+  result.confidence = source === 'weekly_name' ? 'medium' : 'high';
+  result.member_number = entry.row[indexes.wMemberCol];
+  result.matched_name = entry.row[indexes.wNameCol] || '';
+  result.matched_username = entry.row[indexes.wUdiscCol] || '';
+  result.club_member = true;
+  return result;
+}
+
+function clubDoublesMatch(memberNumber, source, indexes) {
+  var result = emptyDoublesMatch();
+  var record = indexes.clubByMember[memberNumber] || null;
+  result.status = 'matched';
+  result.source = source;
+  result.confidence = source === 'club_name' ? 'medium' : 'high';
+  result.member_number = memberNumber;
+  result.matched_name = record ? record.name : '';
+  result.matched_username = record ? record.udisc_username : '';
+  result.club_member = true;
+  return result;
+}
+
+/**
+ * Matches a single doubles partner through the existing identity chain:
+ * weekly username -> weekly PDGA -> weekly name (unique) -> ClubMembers
+ * username -> ClubMembers PDGA -> ClubMembers name (unique).
+ *
+ * A partner is matched independently; nothing here reads another partner's
+ * result. Ambiguous name matches are returned as `ambiguous` with candidates
+ * and are never auto-created. An identity with a username/PDGA that exists
+ * nowhere is `new`; a name-only partner with no match is `unmatched`.
+ */
+function matchDoublesPartner(partner, indexes) {
+  var username = (partner.username || '').toString().trim().toLowerCase();
+  var pdga = (partner.pdga_number || '').toString().trim();
+  var name = (partner.name || '').toString().trim().toLowerCase();
+
+  if (username && indexes.weeklyByUsername[username]) {
+    return weeklyDoublesMatch(indexes.weeklyByUsername[username], 'weekly_username', indexes);
+  }
+  if (pdga && indexes.weeklyByPdga[pdga]) {
+    return weeklyDoublesMatch(indexes.weeklyByPdga[pdga], 'weekly_pdga', indexes);
+  }
+  if (name && indexes.weeklyByName[name]) {
+    var weeklyNameMatches = indexes.weeklyByName[name];
+    if (weeklyNameMatches.length === 1) {
+      return weeklyDoublesMatch(weeklyNameMatches[0], 'weekly_name', indexes);
+    }
+    var weeklyAmbiguous = emptyDoublesMatch();
+    weeklyAmbiguous.status = 'ambiguous';
+    weeklyAmbiguous.source = 'weekly_name';
+    weeklyAmbiguous.confidence = 'low';
+    weeklyAmbiguous.candidates = weeklyNameMatches.map(function (entry) {
+      return {
+        member_number: entry.row[indexes.wMemberCol],
+        name: entry.row[indexes.wNameCol] || '',
+        udisc_username: entry.row[indexes.wUdiscCol] || ''
+      };
+    });
+    return weeklyAmbiguous;
+  }
+
+  if (username && indexes.clubByUsername[username]) {
+    return clubDoublesMatch(indexes.clubByUsername[username], 'club_username', indexes);
+  }
+  if (pdga && indexes.clubByPdga[pdga]) {
+    return clubDoublesMatch(indexes.clubByPdga[pdga], 'club_pdga', indexes);
+  }
+  if (name && indexes.clubByName[name]) {
+    var clubNameMatches = indexes.clubByName[name];
+    if (clubNameMatches.length === 1) {
+      return clubDoublesMatch(clubNameMatches[0].member_number, 'club_name', indexes);
+    }
+    var clubAmbiguous = emptyDoublesMatch();
+    clubAmbiguous.status = 'ambiguous';
+    clubAmbiguous.source = 'club_name';
+    clubAmbiguous.confidence = 'low';
+    clubAmbiguous.candidates = clubNameMatches.slice();
+    return clubAmbiguous;
+  }
+
+  var result = emptyDoublesMatch();
+  if (username || pdga) {
+    // Known identity, not on the roster yet — eligible for auto-creation.
+    result.status = 'new';
+    result.source = 'new';
+    result.confidence = 'medium';
+  } else if (name) {
+    result.status = 'unmatched';
+    result.source = 'name_only';
+    result.confidence = 'none';
+  }
+  return result;
+}
+
+/**
+ * Computes the pair-level verdict from the parsed row plus each partner's
+ * independent match. Malformed rows are blocked; ambiguous or unmatched
+ * partners force manual review; only a fully resolved pair is `ready`.
+ * An ambiguous partner is never hidden by the other partner's match.
+ */
+function computeDoublesPairVerdict(parsed, partners) {
+  if (parsed.errors && parsed.errors.length > 0) {
+    return { verdict: 'blocked', reason: parsed.errors[0] };
+  }
+  for (var i = 0; i < partners.length; i++) {
+    if (partners[i].match.status === 'ambiguous') {
+      return { verdict: 'review', reason: 'ambiguous_match' };
+    }
+    if (partners[i].match.status === 'unmatched') {
+      return { verdict: 'review', reason: 'unmatched_partner' };
+    }
+  }
+  if (parsed.warnings && parsed.warnings.length > 0) {
+    return { verdict: 'review', reason: parsed.warnings[0] };
+  }
+  return { verdict: 'ready', reason: 'all_partners_resolved' };
+}
+
+/** Builds the active-roster override list returned to the admin UI. */
+function buildDoublesRoster(clubData, headers) {
+  var memberCol = headers.indexOf('member_number');
+  var nameCol = headers.indexOf('name');
+  var udiscCol = headers.indexOf('udisc_username');
+  var pdgaCol = headers.indexOf('pdga_number');
+  var activeCol = headers.indexOf('is_active');
+
+  var roster = [];
+  for (var i = 1; i < clubData.length; i++) {
+    var row = clubData[i];
+    var active = row[activeCol];
+    if (active !== true && active !== 'TRUE') continue;
+    roster.push({
+      member_number: row[memberCol],
+      name: row[nameCol] || '',
+      udisc_username: row[udiscCol] || '',
+      pdga_number: (row[pdgaCol] || '').toString()
+    });
+  }
+  return roster;
+}
+
+/**
+ * Previews a UDisc doubles export against the selected weekly sheet.
+ *
+ * Read-only: the only sheet access is getDataRange().getValues(). No row is
+ * appended, updated, or created, and no ClubMembers record is touched. The
+ * response carries the parsed pairs, each partner's independent match, the
+ * pair verdict, and the active roster for admin overrides.
+ *
+ * Inputs: league_date (required), rows (required), spreadsheetId (doubles).
+ */
+function handlePreviewUdiscImportDoubles(data) {
+  if (resolveLeagueFormat(data && data.spreadsheetId) !== LEAGUE_FORMAT_DOUBLES) {
+    return respond('error', 'Doubles import preview is only available for the doubles spreadsheet.');
+  }
+
+  var leagueDate = data.league_date;
+  var rows = data.rows;
+
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date. Expected YYYY-MM-DD.');
+  }
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    return respond('error', 'No UDisc rows provided.');
+  }
+
+  var tabName = 'Week ' + leagueDate;
+  var spreadsheet = resolveSpreadsheet(data && data.spreadsheetId);
+
+  var weeklySheet = spreadsheet.getSheetByName(tabName);
+  if (!weeklySheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  if (!clubSheet) {
+    return respond('error', 'ClubMembers tab not found.');
+  }
+
+  // ── Weekly identity indexes ──
+  var weeklyData = weeklySheet.getDataRange().getValues();
+  var weeklyHeaders = weeklyData[0];
+  var wMemberCol = weeklyHeaders.indexOf('member_number');
+  var wNameCol = weeklyHeaders.indexOf('player_name_snapshot');
+  var wUdiscCol = weeklyHeaders.indexOf('udisc_username_snapshot');
+  var wPdgaCol = weeklyHeaders.indexOf('pdga_number_snapshot');
+
+  var weeklyByUsername = {};
+  var weeklyByPdga = {};
+  var weeklyByName = {};
+
+  for (var i = 1; i < weeklyData.length; i++) {
+    var wrow = weeklyData[i];
+    var wUsername = (wrow[wUdiscCol] || '').toString().trim().toLowerCase();
+    var wPdga = (wrow[wPdgaCol] || '').toString().trim();
+    var wName = (wrow[wNameCol] || '').toString().trim().toLowerCase();
+    var entry = { row: wrow, index: i };
+
+    if (wUsername) weeklyByUsername[wUsername] = entry;
+    if (wPdga) weeklyByPdga[wPdga] = entry;
+    if (wName) {
+      if (!weeklyByName[wName]) weeklyByName[wName] = [];
+      weeklyByName[wName].push(entry);
+    }
+  }
+
+  // ── Active ClubMembers indexes (roster) ──
+  var clubData = clubSheet.getDataRange().getValues();
+  var clubHeaders = clubData[0];
+  var cMemberCol = clubHeaders.indexOf('member_number');
+  var cNameCol = clubHeaders.indexOf('name');
+  var cUdiscCol = clubHeaders.indexOf('udisc_username');
+  var cPdgaCol = clubHeaders.indexOf('pdga_number');
+  var cActiveCol = clubHeaders.indexOf('is_active');
+
+  var clubByUsername = {};
+  var clubByPdga = {};
+  var clubByName = {};
+  var clubByMember = {};
+
+  for (var j = 1; j < clubData.length; j++) {
+    var crow = clubData[j];
+    var cActive = crow[cActiveCol];
+    if (cActive !== true && cActive !== 'TRUE') continue;
+
+    var cUsername = (crow[cUdiscCol] || '').toString().trim().toLowerCase();
+    var cPdga = (crow[cPdgaCol] || '').toString().trim();
+    var cName = (crow[cNameCol] || '').toString().trim().toLowerCase();
+    var memberNumber = crow[cMemberCol];
+
+    if (cUsername) clubByUsername[cUsername] = memberNumber;
+    if (cPdga) clubByPdga[cPdga] = memberNumber;
+    if (cName) {
+      if (!clubByName[cName]) clubByName[cName] = [];
+      clubByName[cName].push({
+        member_number: memberNumber,
+        name: crow[cNameCol] || '',
+        udisc_username: crow[cUdiscCol] || ''
+      });
+    }
+    clubByMember[memberNumber] = {
+      member_number: memberNumber,
+      name: crow[cNameCol] || '',
+      udisc_username: crow[cUdiscCol] || ''
+    };
+  }
+
+  var indexes = {
+    wMemberCol: wMemberCol,
+    wNameCol: wNameCol,
+    wUdiscCol: wUdiscCol,
+    weeklyByUsername: weeklyByUsername,
+    weeklyByPdga: weeklyByPdga,
+    weeklyByName: weeklyByName,
+    clubByUsername: clubByUsername,
+    clubByPdga: clubByPdga,
+    clubByName: clubByName,
+    clubByMember: clubByMember
+  };
+
+  // ── Parse + match each row, independently per partner ──
+  var pairs = [];
+  var summary = {
+    total_udisc_rows: rows.length,
+    pairs: 0,
+    solos: 0,
+    partners: 0,
+    ready: 0,
+    review: 0,
+    blocked: 0
+  };
+
+  for (var r = 0; r < rows.length; r++) {
+    var parsed = parseDoublesRow(rows[r] || {});
+    for (var p = 0; p < parsed.partners.length; p++) {
+      parsed.partners[p].match = matchDoublesPartner(parsed.partners[p], indexes);
+    }
+    var verdict = computeDoublesPairVerdict(parsed, parsed.partners);
+
+    pairs.push({
+      row_index: r,
+      raw_name: parsed.source_name,
+      raw_usernames: parsed.source_usernames,
+      is_solo: parsed.is_solo,
+      partners: parsed.partners,
+      validation: { errors: parsed.errors, warnings: parsed.warnings },
+      verdict: verdict.verdict,
+      verdict_reason: verdict.reason
+    });
+
+    summary.partners += parsed.partners.length;
+    if (parsed.is_solo) summary.solos++; else summary.pairs++;
+    summary[verdict.verdict] = (summary[verdict.verdict] || 0) + 1;
+  }
+
+  return respond('ok', 'Doubles import preview generated.', {
+    league_date: leagueDate,
+    weekly_tab: tabName,
+    format: LEAGUE_FORMAT_DOUBLES,
+    preview_only: true,
+    live_sheet_writes: 0,
+    summary: summary,
+    roster: buildDoublesRoster(clubData, clubHeaders),
+    pairs: pairs
   });
 }
 
