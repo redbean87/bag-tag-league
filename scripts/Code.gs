@@ -2654,7 +2654,11 @@ function buildDoublesMatchIndexes(scoped, clubIndexes, weeklyIndexes) {
 function doublesSameScope(existingPairKey, pairKey, isSolo) {
   var key = (existingPairKey || '').toString().trim();
   if (isSolo) return key === '';
-  return key === pairKey;
+  var wanted = (pairKey || '').toString().trim();
+  // A keyless row is an unassigned check-in (or a solo) and can be claimed by
+  // any pair; two present keys must match exactly. This mirrors
+  // scopeWeeklyIndexes and the ratified keyless-or-same-key scope rule.
+  return wanted === '' || key === '' || key === wanted;
 }
 
 /**

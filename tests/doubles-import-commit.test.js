@@ -130,6 +130,42 @@ test('pair key is keyless for solos, duplicate identities, and non-pairs', () =>
   assert.equal(h.fn('computeDoublesPairKey')(blankName, WEEK_DATE), null);
 });
 
+// ─── doublesSameScope matrix ─────────────────────────────────────────────────
+
+// Ratified rule: two keys match when either is absent (keyless-or-same-key) or
+// when both present keys are identical. Solos keep their existing behavior.
+test('doublesSameScope implements keyless-or-same-key for pairs', () => {
+  const h = loadCode();
+  const sameScope = h.fn('doublesSameScope');
+  const KEY = 'dubs:2026-10-05:u:damon31+u:donjoses';
+  const OTHER = 'dubs:2026-10-05:u:alice+u:samj';
+
+  // keyless vs keyless → same scope
+  assert.equal(sameScope('', '', false), true);
+  // keyless vs keyed → same scope
+  assert.equal(sameScope('', KEY, false), true);
+  // keyed vs keyless → same scope
+  assert.equal(sameScope(KEY, '', false), true);
+  assert.equal(sameScope(KEY, null, false), true);
+  // same keyed value vs same keyed value → same scope
+  assert.equal(sameScope(KEY, KEY, false), true);
+  // different keyed values → different scope
+  assert.equal(sameScope(KEY, OTHER, false), false);
+  assert.equal(sameScope(OTHER, KEY, false), false);
+});
+
+test('doublesSameScope solo behavior is unchanged', () => {
+  const h = loadCode();
+  const sameScope = h.fn('doublesSameScope');
+  const KEY = 'dubs:2026-10-05:u:damon31+u:donjoses';
+
+  // A solo may only claim a keyless row; a keyed pair row is a conflict.
+  // (The pairKey argument is ignored for solos, as before.)
+  assert.equal(sameScope('', null, true), true);
+  assert.equal(sameScope(KEY, null, true), false);
+  assert.equal(sameScope(KEY, KEY, true), false);
+});
+
 // ─── All-valid doubles ───────────────────────────────────────────────────────
 
 test('commits a pair as two linked weekly rows sharing one pair key', () => {
@@ -376,6 +412,54 @@ test('a member already committed under a different pair key is a conflict', () =
       player_name_snapshot: 'Damon Forsythe',
       udisc_username_snapshot: 'damon31',
       pair_key: 'dubs:2026-10-05:u:damon31+u:someone'
+    })
+  ]);
+
+  const result = commit(h, [PAIR_ROW]);
+  assert.equal(result.results[0].status, 'review');
+  assert.equal(result.results[0].reason, 'member_conflict');
+  assert.equal(dataRows(week).length, 1);
+});
+
+// Regression from data/bag-upload-test-c1/report.md section 6: players check in
+// before the UDisc import, creating keyless weekly rows. Those rows must not
+// hold the pair as member_conflict; the pair claims them in place.
+test('keyless check-in rows do not block a pair commit', () => {
+  const h = loadCode();
+  const { week } = buildDoubles(h, [
+    makeWeeklyRow(h, {
+      member_number: 3,
+      player_name_snapshot: 'Damon Forsythe',
+      udisc_username_snapshot: 'damon31',
+      pair_key: ''
+    }),
+    makeWeeklyRow(h, {
+      member_number: 7,
+      player_name_snapshot: 'Brad Stevenson',
+      udisc_username_snapshot: 'donjoses',
+      pair_key: ''
+    })
+  ]);
+
+  const result = commit(h, [PAIR_ROW]);
+  assert.equal(result.results[0].status, 'committed');
+  assert.equal(result.results[0].reason, '');
+  assert.deepEqual(result.results[0].partners.map((p) => p.path), ['update', 'update']);
+  assert.equal(dataRows(week).length, 2);
+  assert.deepEqual(column(week, 'pair_key'), [
+    'dubs:2026-10-05:u:damon31+u:donjoses',
+    'dubs:2026-10-05:u:damon31+u:donjoses'
+  ]);
+});
+
+test('a pair still conflicts with a member already keyed to another pair', () => {
+  const h = loadCode();
+  const { week } = buildDoubles(h, [
+    makeWeeklyRow(h, {
+      member_number: 7,
+      player_name_snapshot: 'Brad Stevenson',
+      udisc_username_snapshot: 'donjoses',
+      pair_key: 'dubs:2026-10-05:u:donjoses+u:someone'
     })
   ]);
 
