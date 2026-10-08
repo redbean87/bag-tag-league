@@ -996,6 +996,8 @@ function handleCreateWeeklyTab(data) {
 function handleSearchClubMembers(data) {
   const query = (data.query || '').trim();
   const leagueId = resolveLeagueId(leagueSelectorFrom(data));
+  const format = resolveLeagueFormat(leagueSelectorFrom(data));
+  const isDoubles = format === LEAGUE_FORMAT_DOUBLES;
 
   if (query.length < 2) {
     return respond('ok', 'Query too short.', { results: [], league: leagueId });
@@ -1037,13 +1039,15 @@ function handleSearchClubMembers(data) {
     const pdgaMatch = pdga.toLowerCase().indexOf(lowerQuery) !== -1;
 
     if (nameMatch || udiscMatch || pdgaMatch) {
-      results.push({
+      const result = {
         member_number: row[memberNumberCol],
         name: name,
         udisc_username: udisc,
-        pdga_number: pdga,
-        current_tag: row[currentTagCol]
-      });
+        pdga_number: pdga
+      };
+      // Tag data is singles-only; the doubles search response stays tag-free.
+      if (!isDoubles) result.current_tag = row[currentTagCol];
+      results.push(result);
     }
   }
 
@@ -1058,7 +1062,8 @@ function handleSearchClubMembers(data) {
  * 4. Writes the weekly check-in record with identity snapshots
  *
  * Inputs: name (required), udisc_username (optional), pdga_number (optional),
- *         in_tag (required, positive integer), paid (boolean), ctp (boolean), ace_pot (boolean)
+ *         in_tag (singles only; required positive integer), paid (boolean),
+ *         ctp (boolean), ace_pot (boolean)
  *         member_number (optional) - existing member's internal ID for returning players
  */
 function handleSubmitCheckIn(data) {
@@ -1073,16 +1078,24 @@ function handleSubmitCheckIn(data) {
   const trimmedUdisc = (udisc_username || '').trim();
   const trimmedPdga = (pdga_number || '').trim();
 
-  if (in_tag === undefined || in_tag === null || in_tag === '') {
-    return respond('error', 'in_tag is required.');
-  }
-
-  const inTagNum = parseInt(in_tag, 10);
-  if (isNaN(inTagNum) || inTagNum < 1) {
-    return respond('error', 'Please enter a valid tag number (1 or higher).');
-  }
-
   const leagueId = resolveLeagueId(leagueSelectorFrom(data));
+  const format = resolveLeagueFormat(leagueSelectorFrom(data));
+  // Tag collection is singles-only. Doubles ignores any client-supplied tag
+  // and never requires, validates, or persists one.
+  const isDoubles = format === LEAGUE_FORMAT_DOUBLES;
+
+  let inTagNum = null;
+  if (!isDoubles) {
+    if (in_tag === undefined || in_tag === null || in_tag === '') {
+      return respond('error', 'in_tag is required.');
+    }
+
+    inTagNum = parseInt(in_tag, 10);
+    if (isNaN(inTagNum) || inTagNum < 1) {
+      return respond('error', 'Please enter a valid tag number (1 or higher).');
+    }
+  }
+
   const spreadsheet = resolveSpreadsheet(leagueId);
 
   // --- Step 1: Find or create club member ---
@@ -1131,7 +1144,7 @@ function handleSubmitCheckIn(data) {
     if (playerNameCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerNameCol + 1).setValue(trimmedName);
     if (playerUdiscCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerUdiscCol + 1).setValue(trimmedUdisc);
     if (playerPdgaCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerPdgaCol + 1).setValue(trimmedPdga);
-    if (playerCurrentTagCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerCurrentTagCol + 1).setValue(inTagNum);
+    if (!isDoubles && playerCurrentTagCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerCurrentTagCol + 1).setValue(inTagNum);
     // Always update updated_at
     const updatedAtCol = playersHeaders.indexOf('updated_at');
     if (updatedAtCol !== -1) playersSheet.getRange(memberRowIndex + 1, updatedAtCol + 1).setValue(now);
@@ -1187,7 +1200,7 @@ function handleSubmitCheckIn(data) {
         newPlayer[CLUB_MEMBER_HEADERS.indexOf('name')] = trimmedName;
         newPlayer[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
         newPlayer[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = inTagNum;
+        if (!isDoubles) newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = inTagNum;
         newPlayer[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
         newPlayer[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
         newPlayer[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
@@ -1202,8 +1215,9 @@ function handleSubmitCheckIn(data) {
       }
     }
 
-    // Update ClubMembers.current_tag with the tag they are checking in with
-    if (!isNewMember) {
+    // Update ClubMembers.current_tag with the tag they are checking in with.
+    // Singles only: doubles has no tag collection.
+    if (!isDoubles && !isNewMember) {
       const memberRowIndexForTag = playersData.indexOf(memberRow) + 1;
       playersSheet.getRange(memberRowIndexForTag, playerCurrentTagCol + 1).setValue(inTagNum);
     }
@@ -1239,29 +1253,40 @@ function handleSubmitCheckIn(data) {
   // --- Step 4: Write the check-in record ---
   var recordTimestamp = new Date().toISOString();
 
-  const newRecord = new Array(WEEKLY_RECORD_HEADERS.length).fill('');
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('member_number')] = memberId;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('player_name_snapshot')] = memberRow[playerNameCol] || trimmedName;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('udisc_username_snapshot')] = memberRow[playerUdiscCol] || trimmedUdisc;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('pdga_number_snapshot')] = memberRow[playerPdgaCol] || trimmedPdga;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('in_tag')] = inTagNum;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('checked_in')] = true;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('signed_in_at')] = recordTimestamp;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('paid')] = paid === true || paid === 'TRUE';
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('ctp')] = ctp === true || ctp === 'TRUE';
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('ace_pot')] = ace_pot === true || ace_pot === 'TRUE';
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('created_at')] = recordTimestamp;
-  newRecord[WEEKLY_RECORD_HEADERS.indexOf('updated_at')] = recordTimestamp;
+  const weeklyHeaders = getWeeklyRecordHeaders(format);
+  const newRecord = new Array(weeklyHeaders.length).fill('');
+  newRecord[weeklyHeaders.indexOf('member_number')] = memberId;
+  newRecord[weeklyHeaders.indexOf('player_name_snapshot')] = memberRow[playerNameCol] || trimmedName;
+  newRecord[weeklyHeaders.indexOf('udisc_username_snapshot')] = memberRow[playerUdiscCol] || trimmedUdisc;
+  newRecord[weeklyHeaders.indexOf('pdga_number_snapshot')] = memberRow[playerPdgaCol] || trimmedPdga;
+  if (!isDoubles) newRecord[weeklyHeaders.indexOf('in_tag')] = inTagNum;
+  newRecord[weeklyHeaders.indexOf('checked_in')] = true;
+  newRecord[weeklyHeaders.indexOf('signed_in_at')] = recordTimestamp;
+  newRecord[weeklyHeaders.indexOf('paid')] = paid === true || paid === 'TRUE';
+  newRecord[weeklyHeaders.indexOf('ctp')] = ctp === true || ctp === 'TRUE';
+  newRecord[weeklyHeaders.indexOf('ace_pot')] = ace_pot === true || ace_pot === 'TRUE';
+  newRecord[weeklyHeaders.indexOf('created_at')] = recordTimestamp;
+  newRecord[weeklyHeaders.indexOf('updated_at')] = recordTimestamp;
 
   recordsSheet.appendRow(newRecord);
 
-  return respond('ok', 'Check-in successful.', {
-    member_number: memberId,
-    player_name: trimmedName,
-    in_tag: inTagNum,
-    weekly_tab: mostRecentTabName,
-    league: leagueId
-  });
+  // Singles echoes the collected tag; doubles returns a tag-free payload.
+  const success = isDoubles
+    ? {
+        member_number: memberId,
+        player_name: trimmedName,
+        weekly_tab: mostRecentTabName,
+        league: leagueId
+      }
+    : {
+        member_number: memberId,
+        player_name: trimmedName,
+        in_tag: inTagNum,
+        weekly_tab: mostRecentTabName,
+        league: leagueId
+      };
+
+  return respond('ok', 'Check-in successful.', success);
 }
 
 /**
@@ -1709,6 +1734,10 @@ function handleSavePreRoundReview(data) {
  * Inputs: league_date (required, YYYY-MM-DD), rows (required, array of parsed UDisc row objects)
  */
 function handlePreviewUdiscImport(data) {
+  if (resolveLeagueFormat(leagueSelectorFrom(data)) === LEAGUE_FORMAT_DOUBLES) {
+    return respond('error', 'Singles import preview is not available for the doubles spreadsheet.');
+  }
+
   const leagueDate = data.league_date;
   const rows = data.rows;
 

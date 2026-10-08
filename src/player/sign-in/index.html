@@ -183,7 +183,7 @@
         <label for="checkInPdga">PDGA Number</label>
         <input type="text" id="checkInPdga" placeholder="Optional">
       </div>
-      <div class="form-group">
+      <div class="form-group" id="checkInTagGroup">
         <label for="checkInTag">Current Tag Number *</label>
         <input type="number" id="checkInTag" min="1" required placeholder="Enter your current tag number">
       </div>
@@ -229,7 +229,7 @@
         <label for="registerPdga">PDGA Number</label>
         <input type="text" id="registerPdga" placeholder="Optional">
       </div>
-      <div class="form-group">
+      <div class="form-group" id="registerTagGroup">
         <label for="registerTag">Current Tag Number *</label>
         <input type="number" id="registerTag" min="1" required placeholder="Enter your current tag number">
       </div>
@@ -281,6 +281,10 @@
     // so a GET -> POST transition cannot silently revert to singles.
     var resolvedLeague = resolveLeagueFromUrl();
 
+    // Tag collection is singles-only. `isDoubles` gates every tag surface so
+    // the doubles league never prompts for, renders, or submits a tag.
+    var isDoubles = resolvedLeague.format === 'doubles';
+
     function resolveLeagueFromUrl() {
       var requested = null;
       try {
@@ -291,16 +295,36 @@
 
       var registry = window.LeagueFormat;
       if (!registry) {
-        return { id: '', name: 'Unknown league', unknownParam: false };
+        return { id: '', name: 'Unknown league', format: 'singles', unknownParam: false };
       }
 
       var league = requested ? registry.leagueById(requested) : null;
       if (league) {
-        return { id: league.id, name: league.name, unknownParam: false };
+        return { id: league.id, name: league.name, format: league.format, unknownParam: false };
       }
 
       var fallback = registry.leagueById(registry.DEFAULT_LEAGUE_ID);
-      return { id: fallback.id, name: fallback.name, unknownParam: !!requested };
+      return { id: fallback.id, name: fallback.name, format: fallback.format, unknownParam: !!requested };
+    }
+
+    // Applies the singles-only tag gate to the check-in/registration forms:
+    // hides the tag field, drops its required flag, and hides the success
+    // tag line for doubles. The server independently refuses doubles tags.
+    function applyTagVisibility() {
+      var groups = ['checkInTagGroup', 'registerTagGroup'];
+      for (var g = 0; g < groups.length; g++) {
+        var group = document.getElementById(groups[g]);
+        if (group) group.style.display = isDoubles ? 'none' : '';
+      }
+
+      var inputs = ['checkInTag', 'registerTag'];
+      for (var i = 0; i < inputs.length; i++) {
+        var input = document.getElementById(inputs[i]);
+        if (input) input.required = !isDoubles;
+      }
+
+      var successTag = document.getElementById('successTagInfo');
+      if (successTag) successTag.style.display = isDoubles ? 'none' : '';
     }
 
     function renderLeagueIndicator() {
@@ -404,7 +428,7 @@
         var detailParts = [];
         if (member.udisc_username) detailParts.push('UDisc: ' + member.udisc_username);
         if (member.pdga_number) detailParts.push('PDGA: ' + member.pdga_number);
-        if (member.current_tag) detailParts.push('Tag: ' + member.current_tag);
+        if (!isDoubles && member.current_tag) detailParts.push('Tag: ' + member.current_tag);
 
         item.innerHTML =
           '<div class="search-result-name">' + escapeHtml(member.name) + '</div>' +
@@ -430,7 +454,7 @@
       document.getElementById('checkInName').value = member.name;
       document.getElementById('checkInUdisc').value = member.udisc_username || '';
       document.getElementById('checkInPdga').value = member.pdga_number || '';
-      document.getElementById('checkInTag').value = member.current_tag || '';
+      document.getElementById('checkInTag').value = isDoubles ? '' : (member.current_tag || '');
       clearStatus('checkInStatus');
       showView('checkIn');
     }
@@ -478,7 +502,7 @@
         return;
       }
 
-      if (!inTag || parseInt(inTag, 10) < 1) {
+      if (!isDoubles && (!inTag || parseInt(inTag, 10) < 1)) {
         setStatus(prefix + 'Status', 'error', 'Please enter a valid tag number (1 or higher).');
         return;
       }
@@ -495,11 +519,13 @@
           name: name,
           udisc_username: udiscUsername || '',
           pdga_number: pdgaNumber || '',
-          in_tag: parseInt(inTag, 10),
           paid: paid,
           ctp: ctp,
           ace_pot: acePot
         };
+
+        // Tag collection is singles-only; doubles never sends in_tag.
+        if (!isDoubles) payload.in_tag = parseInt(inTag, 10);
 
         if (selectedMemberNumber) {
           payload.member_number = selectedMemberNumber;
@@ -517,7 +543,7 @@
           document.getElementById('successLeagueName').textContent = 'League: ' + (leagueInfo ? leagueInfo.name : resolvedLeague.name);
           document.getElementById('successPlayerName').textContent = 'Player: ' + data.player_name;
           document.getElementById('successTabName').textContent = 'Week: ' + data.weekly_tab;
-          document.getElementById('successTagInfo').textContent = 'Current Tag: ' + data.in_tag;
+          document.getElementById('successTagInfo').textContent = isDoubles ? '' : ('Current Tag: ' + data.in_tag);
           showView('success');
         } else {
           setStatus(prefix + 'Status', 'error', data.message);
@@ -542,6 +568,7 @@
     // --- Init ---
 
     renderLeagueIndicator();
+    applyTagVisibility();
     document.getElementById('searchInput').addEventListener('input', onSearchInput);
   </script>
 </body>
