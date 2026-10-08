@@ -32,13 +32,13 @@ function buildDoubles(h, weeklyRows) {
   const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
 
   const club = doubles.insertSheet('ClubMembers');
-  club.appendRow(h.bound.CLUB_MEMBER_HEADERS);
-  club.appendRow([3, 'Damon Forsythe', 'damon31', '151236', '', true, '', '']);
-  club.appendRow([7, 'Brad Stevenson', 'donjoses', '85170', '', true, '', '']);
-  club.appendRow([21, 'Alice Smith', 'alice', '', '', true, '', '']);
-  club.appendRow([30, 'Sam Jones', 'samj', '', '', true, '', '']);
-  club.appendRow([31, 'Sam Jones', 'samj2', '', '', true, '', '']);
-  club.appendRow([40, 'Retired Player', 'retired', '', '', false, '', '']);
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  club.appendRow([3, 'Damon Forsythe', 'damon31', '151236', true, '', '', 0]);
+  club.appendRow([7, 'Brad Stevenson', 'donjoses', '85170', true, '', '', 0]);
+  club.appendRow([21, 'Alice Smith', 'alice', '', true, '', '', 0]);
+  club.appendRow([30, 'Sam Jones', 'samj', '', true, '', '', 0]);
+  club.appendRow([31, 'Sam Jones', 'samj2', '', true, '', '', 0]);
+  club.appendRow([40, 'Retired Player', 'retired', '', false, '', '', 0]);
 
   const week = doubles.insertSheet('Week ' + WEEK_DATE);
   week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
@@ -749,8 +749,6 @@ test('re-import preserves protected weekly fields', () => {
       player_name_snapshot: 'Damon Forsythe',
       udisc_username_snapshot: 'damon31',
       pair_key: pairKey,
-      in_tag: 12,
-      out_tag: 9,
       checked_in: true,
       signed_in_at: '2026-10-05T18:00:00Z',
       paid: true,
@@ -764,8 +762,6 @@ test('re-import preserves protected weekly fields', () => {
   assert.equal(result.results[0].status, 'repaired');
 
   const row = rowByMember(week, 3);
-  assert.equal(row[h_index(week, 'in_tag')], 12);
-  assert.equal(row[h_index(week, 'out_tag')], 9);
   assert.equal(row[h_index(week, 'checked_in')], true);
   assert.equal(row[h_index(week, 'signed_in_at')], '2026-10-05T18:00:00Z');
   assert.equal(row[h_index(week, 'paid')], true);

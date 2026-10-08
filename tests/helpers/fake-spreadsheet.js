@@ -134,6 +134,15 @@ class FakeSheet {
     return this;
   }
 
+  deleteColumn(columnPosition) {
+    if (columnPosition < 1) return this;
+    const index = columnPosition - 1;
+    for (const row of this.rows) {
+      if (index < row.length) row.splice(index, 1);
+    }
+    return this;
+  }
+
   clear() {
     this.rows = [];
     return this;

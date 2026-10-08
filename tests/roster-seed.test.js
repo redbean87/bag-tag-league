@@ -94,3 +94,30 @@ test('countRoster reports total and active member counts', () => {
   assert.equal(report.active_count, 2);
   assert.deepEqual(report.member_numbers, [3, 7, 12]);
 });
+
+test('roster seed copies by header name and never copies current_tag', () => {
+  const h = loadCode();
+  const singles = buildSingles(h);
+  const doubles = h.makeSpreadsheet('doubles-roster');
+  const club = doubles.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+
+  const result = h.fn('seedRosterFromSingles')(singles, doubles);
+  assert.equal(result.seeded, 3);
+
+  const headers = club.rows[0];
+  assert.equal(headers.indexOf('current_tag'), -1);
+  assert.equal(headers.indexOf('season_points') !== -1, true);
+
+  const alice = club.rows[1];
+  assert.equal(alice[headers.indexOf('member_number')], 3);
+  assert.equal(alice[headers.indexOf('name')], 'Alice');
+  assert.equal(alice[headers.indexOf('udisc_username')], 'alice');
+  assert.equal(alice[headers.indexOf('pdga_number')], '111');
+  // A positional copy would shift is_active into the pdga_number slot after
+  // current_tag is dropped; the by-name copy lands it correctly.
+  assert.equal(alice[headers.indexOf('is_active')], true);
+  assert.equal(alice[headers.indexOf('created_at')], 't1');
+  assert.equal(alice[headers.indexOf('updated_at')], 't1');
+  assert.equal(alice[headers.indexOf('season_points')], '');
+});

@@ -30,18 +30,18 @@ function makeWeekRow(h, fields) {
  * Builds a doubles spreadsheet with a roster and one or more week tabs.
  * `weeks` is { 'YYYY-MM-DD': [raw weekly rows] }.
  */
-function buildDoubles(h, weeks, clubRows) {
+function buildDoubles(h, weeks, clubRows, options) {
   const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
 
   const club = doubles.insertSheet('ClubMembers');
-  club.appendRow(h.bound.CLUB_MEMBER_HEADERS);
+  club.appendRow((options && options.clubHeaders) || h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
   (clubRows || [
-    [1, 'Ann', 'ann', '', '', true, '', ''],
-    [2, 'Bob', 'bob', '', '', true, '', ''],
-    [3, 'Damon Forsythe', 'damon31', '151236', '', true, '', ''],
-    [7, 'Brad Stevenson', 'donjoses', '85170', '', true, '', ''],
-    [10, 'Jon', 'jon', '', '', true, '', ''],
-    [21, 'Alice Smith', 'alice', '', '', true, '', '']
+    [1, 'Ann', 'ann', '', true, '', '', 0],
+    [2, 'Bob', 'bob', '', true, '', '', 0],
+    [3, 'Damon Forsythe', 'damon31', '151236', true, '', '', 0],
+    [7, 'Brad Stevenson', 'donjoses', '85170', true, '', '', 0],
+    [10, 'Jon', 'jon', '', true, '', '', 0],
+    [21, 'Alice Smith', 'alice', '', true, '', '', 0]
   ]).forEach((row) => club.appendRow(row));
 
   const weekSheets = {};
@@ -250,24 +250,20 @@ test('points handlers refuse the singles format before opening a sheet', () => {
 
 test('the points path never touches tag state', () => {
   const h = loadCode();
-  const clubRows = [
-    [1, 'Ann', 'ann', '', 5, true, '', ''],
-    [2, 'Bob', 'bob', '', 9, true, '', '']
-  ];
   const week = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, in_tag: '', out_tag: '', weekly_points: 2 }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '1', team_position_raw: 1, in_tag: '', out_tag: '', weekly_points: 2 })
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2 }),
+    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2 })
   ];
-  const { club, weekSheets } = buildDoubles(h, { [WEEK_DATE]: week }, clubRows);
+  const { weekSheets } = buildDoubles(h, { [WEEK_DATE]: week });
   const sheet = weekSheets[WEEK_DATE];
 
   call(h, 'handleCalculatePoints');
   commit(h, [PAIR_ROW]);
 
-  assert.ok(column(sheet, 'in_tag').every((value) => value === ''));
-  assert.ok(column(sheet, 'out_tag').every((value) => value === ''));
-  assert.equal(club.rows.find((r) => r[0] === 1)[4], 5);
-  assert.equal(club.rows.find((r) => r[0] === 2)[4], 9);
+  // The doubles schema carries no tag columns for the points path to touch.
+  assert.equal(sheet.rows[0].indexOf('in_tag'), -1);
+  assert.equal(sheet.rows[0].indexOf('out_tag'), -1);
+  assert.equal(sheet.rows[0].indexOf('udisc_ending_tag'), -1);
 });
 
 // ─── Live summation (standings + member totals) ──────────────────────────────
@@ -338,7 +334,10 @@ test('listings compute season totals live and never create the cache column them
       makeWeekRow(h, { member_number: 1, weekly_points: 2 }),
       makeWeekRow(h, { member_number: 2, weekly_points: 0.5 })
     ]
-  });
+  }, [
+    [1, 'Ann', 'ann', '', true, '', ''],
+    [2, 'Bob', 'bob', '', true, '', '']
+  ], { clubHeaders: h.bound.CLUB_MEMBER_HEADERS_DETAG });
 
   // The roster has no season_points column at all.
   assert.equal(club.rows[0].indexOf('season_points'), -1);
@@ -365,7 +364,14 @@ function storedSeasonPoints(club) {
 
 test('the import commit mirrors the live season sum into ClubMembers.season_points', () => {
   const h = loadCode();
-  const { club } = buildDoubles(h, { [WEEK_DATE]: [] });
+  const { club } = buildDoubles(h, { [WEEK_DATE]: [] }, [
+    [1, 'Ann', 'ann', '', true, '', ''],
+    [2, 'Bob', 'bob', '', true, '', ''],
+    [3, 'Damon Forsythe', 'damon31', '151236', true, '', ''],
+    [7, 'Brad Stevenson', 'donjoses', '85170', true, '', ''],
+    [10, 'Jon', 'jon', '', true, '', ''],
+    [21, 'Alice Smith', 'alice', '', true, '', '']
+  ], { clubHeaders: h.bound.CLUB_MEMBER_HEADERS_DETAG });
 
   // A bare roster has no cache column until the first points write.
   assert.equal(club.rows[0].indexOf('season_points'), -1);
@@ -444,10 +450,14 @@ test('the stored cache and the live member listing agree after a commit', () => 
 
 test('a roster that already carries the season_points cache column is accepted', () => {
   const h = loadCode();
-  const { club } = buildDoubles(h, { [WEEK_DATE]: [] });
-  club.rows[0].push('season_points');
 
   assert.equal(h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS_DOUBLES, 'doubles'), true);
+  // Legacy layouts remain accepted as known-but-un-migrated: the tag-carrying
+  // singles roster, and that roster plus the season_points cache.
   assert.equal(h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS, 'doubles'), true);
+  assert.equal(
+    h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS.concat(['season_points']), 'doubles'),
+    true
+  );
   assert.equal(h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS_DOUBLES, 'singles'), false);
 });

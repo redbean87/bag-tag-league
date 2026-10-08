@@ -17,8 +17,22 @@ function idx(headers, name) {
   return headers.indexOf(name);
 }
 
-/** Builds a doubles spreadsheet with a roster and one week tab. */
+/** Builds a doubles spreadsheet with a tag-free roster and one week tab. */
 function buildDoubles(h, clubRows) {
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+
+  const club = doubles.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  (clubRows || []).forEach((row) => club.appendRow(row));
+
+  const week = doubles.insertSheet('Week ' + WEEK_DATE);
+  week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+
+  return { doubles, club, week };
+}
+
+/** Builds a pre-detag doubles roster that still carries current_tag. */
+function buildLegacyDoubles(h, clubRows) {
   const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
 
   const club = doubles.insertSheet('ClubMembers');
@@ -52,10 +66,10 @@ function value(sheet, header, rowIndex) {
 
 // ─── Doubles: no tag collection ──────────────────────────────────────────────
 
-test('doubles check-in collects no tag and leaves stored tags untouched', () => {
+test('doubles check-in leaves a legacy stored tag untouched and writes no tag', () => {
   const h = loadCode();
-  // Existing member currently carrying tag 5.
-  const { club, week } = buildDoubles(h, [[1, 'Existing', 'ex', '', 5, true, '', '']]);
+  // Existing member carrying a legacy tag 5 in a pre-detag roster.
+  const { club, week } = buildLegacyDoubles(h, [[1, 'Existing', 'ex', '', 5, true, '', '']]);
 
   const result = h.parse(h.fn('handleSubmitCheckIn')({
     league: h.bound.LEAGUE_ID_DOUBLES,
@@ -67,16 +81,18 @@ test('doubles check-in collects no tag and leaves stored tags untouched', () => 
   assert.equal(result.status, 'ok');
   assert.equal('in_tag' in result, false, 'doubles response must not echo a tag');
 
-  // ClubMembers.current_tag is not rewritten.
+  // A legacy current_tag value is never rewritten by a doubles check-in.
   assert.equal(value(club, 'current_tag', 1), 5);
-  // The weekly record was written without an in_tag.
-  assert.equal(value(week, 'in_tag', 1), '');
+  // The doubles weekly schema carries no tag columns at all.
+  ['in_tag', 'out_tag', 'udisc_ending_tag'].forEach((header) => {
+    assert.equal(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES.indexOf(header), -1);
+  });
   assert.equal(value(week, 'checked_in', 1), true);
 });
 
 test('doubles check-in ignores a client-supplied tag (hard gating)', () => {
   const h = loadCode();
-  const { club, week } = buildDoubles(h, [[1, 'Existing', 'ex', '', 5, true, '', '']]);
+  const { club, week } = buildLegacyDoubles(h, [[1, 'Existing', 'ex', '', 5, true, '', '']]);
 
   const result = h.parse(h.fn('handleSubmitCheckIn')({
     league: h.bound.LEAGUE_ID_DOUBLES,
@@ -87,12 +103,12 @@ test('doubles check-in ignores a client-supplied tag (hard gating)', () => {
 
   assert.equal(result.status, 'ok');
   assert.equal(value(club, 'current_tag', 1), 5, 'a posted tag must not persist to ClubMembers');
-  assert.equal(value(week, 'in_tag', 1), '', 'a posted tag must not persist to the weekly row');
+  assert.equal(value(week, 'checked_in', 1), true);
 });
 
 test('doubles registration of a new member stores no current_tag', () => {
   const h = loadCode();
-  const { club, week } = buildDoubles(h, []);
+  const { club } = buildDoubles(h, []);
 
   const result = h.parse(h.fn('handleSubmitCheckIn')({
     league: h.bound.LEAGUE_ID_DOUBLES,
@@ -102,13 +118,14 @@ test('doubles registration of a new member stores no current_tag', () => {
 
   assert.equal(result.status, 'ok');
   assert.equal('in_tag' in result, false);
-  assert.equal(value(club, 'current_tag', 1), '');
-  assert.equal(value(week, 'in_tag', 1), '');
+  // The tag-free roster has no current_tag column and gains no row value.
+  assert.equal(h.bound.CLUB_MEMBER_HEADERS_DOUBLES.indexOf('current_tag'), -1);
+  assert.equal(club.getLastRow(), 2, 'the new member was appended');
 });
 
 test('doubles search results carry no current_tag', () => {
   const h = loadCode();
-  buildDoubles(h, [[1, 'Alice Smith', 'alice', '', 42, true, '', '']]);
+  buildDoubles(h, [[1, 'Alice Smith', 'alice', '', true, '', '', 0]]);
 
   const result = h.parse(h.fn('handleSearchClubMembers')({
     league: h.bound.LEAGUE_ID_DOUBLES,
@@ -125,7 +142,7 @@ test('doubles search results carry no current_tag', () => {
 
 test('all three tag lifecycle handlers refuse doubles before opening a sheet', () => {
   const h = loadCode();
-  const { club, week } = buildDoubles(h, [[1, 'Existing', 'ex', '', 5, true, '', '']]);
+  const { club, week } = buildDoubles(h, [[1, 'Existing', 'ex', '', true, '', '', 0]]);
 
   const actions = ['handleCalculateTags', 'handleConfirmTags', 'handleFinalizeRound'];
   for (const action of actions) {
@@ -150,7 +167,7 @@ test('all three tag lifecycle handlers refuse doubles before opening a sheet', (
 
 test('the tag-based import preview refuses a points-scoring league instead of exposing tags', () => {
   const h = loadCode();
-  buildDoubles(h, [[1, 'Alice Smith', 'alice', '', 5, true, '', '']]);
+  buildDoubles(h, [[1, 'Alice Smith', 'alice', '', true, '', '', 0]]);
 
   const result = h.parse(h.fn('handlePreviewUdiscImport')({
     league: h.bound.LEAGUE_ID_DOUBLES,
@@ -165,7 +182,7 @@ test('the tag-based import preview refuses a points-scoring league instead of ex
 
 test('doubles import preview exposes no tag fields', () => {
   const h = loadCode();
-  buildDoubles(h, [[3, 'Damon Forsythe', 'damon31', '151236', 7, true, '', '']]);
+  buildDoubles(h, [[3, 'Damon Forsythe', 'damon31', '151236', true, '', '', 0]]);
 
   const result = h.parse(h.fn('handlePreviewUdiscImportDoubles')({
     league: h.bound.LEAGUE_ID_DOUBLES,
@@ -210,11 +227,11 @@ test('buildDoublesImportFields keeps udisc_ending_tag for a tag-scoring league',
   assert.equal(fields.udisc_ending_tag, 99);
 });
 
-test('a doubles import commit stores no udisc_ending_tag value', () => {
+test('a doubles import commit stores no tag value and the schema has no tag columns', () => {
   const h = loadCode();
-  const { doubles, week } = buildDoubles(h, [
-    [3, 'Damon Forsythe', 'damon31', '151236', 7, true, '', ''],
-    [7, 'Brad Stevenson', 'donjoses', '85170', 5, true, '', '']
+  const { week } = buildDoubles(h, [
+    [3, 'Damon Forsythe', 'damon31', '151236', true, '', '', 0],
+    [7, 'Brad Stevenson', 'donjoses', '85170', true, '', '', 0]
   ]);
 
   const result = h.parse(h.fn('handleCommitUdiscImportDoubles')({
@@ -235,23 +252,26 @@ test('a doubles import commit stores no udisc_ending_tag value', () => {
   assert.equal(result.results[0].status, 'committed');
 
   const headers = week.rows[0];
-  const endTagCol = headers.indexOf('udisc_ending_tag');
-  const dataRows = week.rows.slice(1);
-  assert.ok(dataRows.length >= 2, 'both partners get a weekly row');
-  dataRows.forEach((row) => {
-    assert.equal(row[endTagCol], '', 'the doubles commit must not write udisc_ending_tag');
+  ['in_tag', 'out_tag', 'udisc_ending_tag'].forEach((header) => {
+    assert.equal(headers.indexOf(header), -1, 'the doubles schema must not carry ' + header);
   });
-  assert.equal(doubles.getSheetByName('Week ' + WEEK_DATE).rows[0][endTagCol], 'udisc_ending_tag');
+  assert.ok(week.rows.slice(1).length >= 2, 'both partners get a weekly row');
 });
 
-test('a re-import leaves any stored udisc_ending_tag value untouched', () => {
+test('a re-import leaves a legacy stored udisc_ending_tag value untouched', () => {
   const h = loadCode();
-  const { week } = buildDoubles(h, [
-    [3, 'Damon Forsythe', 'damon31', '151236', 7, true, '', ''],
-    [7, 'Brad Stevenson', 'donjoses', '85170', 5, true, '', '']
-  ]);
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const club = doubles.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  club.appendRow([3, 'Damon Forsythe', 'damon31', '151236', true, '', '', 0]);
+  club.appendRow([7, 'Brad Stevenson', 'donjoses', '85170', true, '', '', 0]);
 
-  const headers = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
+  // A pre-detag week tab still carries the tag columns. The commit reads the
+  // sheet's own headers, so a stored value there is preserved, never rewritten.
+  const headers = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED;
+  const week = doubles.insertSheet('Week ' + WEEK_DATE);
+  week.appendRow(headers);
+
   const pairKey = 'dubs:' + WEEK_DATE + ':u:damon31+u:donjoses';
   const existing = new Array(headers.length).fill('');
   existing[headers.indexOf('member_number')] = 3;

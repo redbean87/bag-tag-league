@@ -93,3 +93,55 @@ test('reportRosterCounts reports singles and doubles roster sizes', () => {
   assert.equal(report.singles.count, 2);
   assert.equal(report.doubles.count, 2);
 });
+
+// ─── Detag column-drop operator entry points ─────────────────────────────────
+
+const DETAG_APPROVAL_PROPERTY = 'DETAG_COLUMN_DROPS_APPROVAL';
+const DETAG_APPROVAL_TOKEN = 'bag-detag-drops-c1';
+
+function buildTaggedDoubles(h) {
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const week = doubles.insertSheet('Week 2026-10-05');
+  week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
+  doubles.insertSheet('ClubMembers').appendRow(
+    h.bound.CLUB_MEMBER_HEADERS.concat(['season_points'])
+  );
+  return { doubles, week };
+}
+
+test('previewDetagColumnDrops lists the doubles tag columns and writes nothing', () => {
+  const h = loadOperator();
+  const { week } = buildTaggedDoubles(h);
+
+  const report = h.fn('previewDetagColumnDrops')();
+
+  assert.equal(report.applied, false);
+  assert.equal(report.results.filter((result) => result.status === 'would-drop').length, 2);
+  assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
+});
+
+test('applyDetagColumnDrops is refused without the captain property', () => {
+  const h = loadOperator();
+  const { week } = buildTaggedDoubles(h);
+
+  const report = h.fn('applyDetagColumnDrops')();
+
+  assert.equal(report.applied, false);
+  assert.equal(report.authorized, false);
+  assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
+});
+
+test('applyDetagColumnDrops drops the tag columns under the captain property', () => {
+  const h = loadOperator();
+  h.setScriptProperty(DETAG_APPROVAL_PROPERTY, DETAG_APPROVAL_TOKEN);
+  const { doubles, week } = buildTaggedDoubles(h);
+
+  const report = h.fn('applyDetagColumnDrops')();
+
+  assert.equal(report.applied, true);
+  assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  assert.deepEqual(
+    h.fn('getSheetHeaders')(doubles.getSheetByName('ClubMembers')),
+    h.bound.CLUB_MEMBER_HEADERS_DOUBLES
+  );
+});

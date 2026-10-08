@@ -16,13 +16,18 @@ topology. It is deterministic and safe to run repeatedly:
 | Tab | Headers | Notes |
 |-----|---------|-------|
 | `League` | 15 base columns + `league_format` + `scoring` | Settings row records `league_format=doubles` and `scoring=points` |
-| `ClubMembers` | The 8 singles columns + `season_points` | One row per member, `member_number` preserved; `season_points` caches the live season total |
-| `Week template` | The 54 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
-| `Week YYYY-MM-DD` | The 54 human-first weekly columns | Created on demand for a league date |
+| `ClubMembers` | The 8 tag-free roster columns | One row per member, `member_number` preserved; `season_points` caches the live season total |
+| `Week template` | The 51 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
+| `Week YYYY-MM-DD` | The 51 human-first weekly columns | Created on demand for a league date |
 
-The doubles weekly schema carries the 48 singles columns plus six doubles-only
+The doubles weekly schema is the tag-free singles base plus six doubles-only
 columns: `pair_key`, `partner_member_number`, `team_position`,
-`team_position_raw`, `weekly_points`, and `weekly_points_status`. `weekly_points`
+`team_position_raw`, `weekly_points`, and `weekly_points_status` (48 singles
+columns minus the three tag columns `in_tag`, `out_tag`, and `udisc_ending_tag`,
+plus six = **51 columns**). The doubles `ClubMembers` roster is the singles
+roster minus `current_tag` plus the `season_points` cache (**8 columns**). Both
+schemas derive from the `format x scoring` capability model: the doubles league
+is `doubles x points`, so it carries no tag columns. `weekly_points`
 is computed from each committed placement when the UDisc import is committed;
 `weekly_points_status` is a retired column kept only for schema compatibility
 and is no longer read or written. Season totals are the live sum of the
@@ -30,11 +35,11 @@ committed `weekly_points` values; the sum is mirrored into each `ClubMembers`
 row's `season_points` column at the end of every import commit, so the roster
 tab itself always holds current totals while the live sum stays the source of
 truth. There is no confirm/finalize step. Both the singles and doubles weekly
-headers are ordered
-human-first: names, then pair linkage and score/points where they apply, then
-the remaining columns in their historical relative order. Header names and
-counts are unchanged, so every reader that resolves a column by name keeps
-working; only the physical order changed. The 15 base `LEAGUE_SHEET_HEADERS`
+headers are ordered human-first: names, then pair linkage and score/points
+where they apply, then the remaining columns in their historical relative
+order. The singles header names and counts are unchanged; the doubles schema
+drops the singles tag columns entirely. Every reader resolves a column by name,
+so only the physical layout changed. The 15 base `LEAGUE_SHEET_HEADERS`
 columns are unchanged; both leagues append the same two metadata columns
 (`league_format` and `scoring`), so a League sheet is 17 columns. The registry
 is authoritative for routing and the sheet records the same values as
@@ -44,8 +49,12 @@ per-spreadsheet confirmation; a mismatch is reported, never auto-corrected.
 
 `seedRosterFromSingles` copies every Singles `ClubMembers` row into the Doubles
 `ClubMembers` tab, preserving each `member_number` exactly (members are never
-renumbered). Members already present in the doubles roster are skipped, so the
-seed can run more than once without duplicating rows.
+renumbered). Values are copied **by header name**, not by position, and
+`current_tag` is never copied: the doubles roster is tag-free, so a positional
+copy would shift every column after `pdga_number`. `season_points` has no
+singles source, so it lands blank until the first points write. Members already
+present in the doubles roster are skipped, so the seed can run more than once
+without duplicating rows.
 
 ## Operator scripts (`scripts/ProvisionDoubles.gs`)
 
@@ -60,6 +69,8 @@ authorization. No credentials or secrets are stored in the repository.
 | `verifySpreadsheetTopology()` | Verify tabs and headers for both spreadsheets |
 | `previewWeeklyColumnOrderMigration()` | Dry-run the human-first weekly column migration for both spreadsheets |
 | `applyWeeklyColumnOrderMigration()` | Apply the weekly column migration; refused unless the captain sets the approval Script Property |
+| `previewDetagColumnDrops()` | Dry-run the destructive detag column-drop migration for the doubles spreadsheet (writes nothing) |
+| `applyDetagColumnDrops()` | Drop `in_tag`/`out_tag`/`udisc_ending_tag` from doubles weeks and `current_tag` from the doubles roster; refused unless the captain sets the approval Script Property |
 | `reportRosterCounts()` | Report Singles and Doubles roster counts |
 
 Each returns a plain report object and logs it with `Logger.log`, so the result
@@ -95,6 +106,25 @@ data, and the selected league id is persisted in `localStorage`
 action request carries the derived `spreadsheetId`. When a league whose format
 is `doubles` is selected, the **Doubles Provisioning** card calls the
 `provisionDoubles` web-app action, and the singles-only tag tooling is hidden.
+
+## Detag column-drop migration
+
+The doubles league no longer collects, stores, or renders tag data, so the
+remaining physical tag columns are removed by a gated, destructive migration.
+`migrateDetagColumnDrops` discovers weekly sheets by header name (so the
+`Week template` and every dated `Week YYYY-MM-DD` tab are covered) and also
+plans the `ClubMembers` roster. It is a dry run by default; applying it deletes
+`in_tag`/`out_tag`/`udisc_ending_tag` from each weekly sheet and `current_tag`
+from the roster, taking the stored values with them. A tag-scoring league (the
+singles spreadsheet) has an empty drop set, so running it there is a no-op and
+can never delete tag data.
+
+The apply path is refused unless the Apps Script project has
+`DETAG_COLUMN_DROPS_APPROVAL = bag-detag-drops-c1`; nothing in deployment,
+startup, tests, or ordinary sheet operations sets it. During the transition the
+code accepts the pre-detag layouts as known-but-un-migrated, so the column-order
+dry run and the topology check keep working on a sheet that still carries the
+tag columns.
 
 ## Re-provisioning guard
 
