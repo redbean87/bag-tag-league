@@ -214,7 +214,7 @@ test('commits multiple independent pairs with distinct keys', () => {
 
 // ─── Solos ───────────────────────────────────────────────────────────────────
 
-test('commits a solo as one keyless weekly row with solo points default', () => {
+test('commits a solo as one keyless weekly row with pending points default', () => {
   const h = loadCode();
   const { week } = buildDoubles(h, []);
 
@@ -228,7 +228,7 @@ test('commits a solo as one keyless weekly row with solo points default', () => 
   const rows = dataRows(week);
   assert.equal(rows.length, 1);
   assert.equal(rows[0][h_index(week, 'pair_key')], '');
-  assert.equal(rows[0][h_index(week, 'weekly_points_status')], 'not_applicable');
+  assert.equal(rows[0][h_index(week, 'weekly_points_status')], 'pending');
   assert.equal(rows[0][h_index(week, 'member_number')], 21);
 });
 

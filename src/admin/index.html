@@ -474,6 +474,23 @@
       <div id="finalizeRoundResult" class="status hidden"></div>
     </div>
 
+    <!-- 9b. Points (doubles mode only) -->
+    <div class="card" id="pointsCalcCard" style="display:none;">
+      <h2>Points</h2>
+      <p class="help-text">
+        Doubles weekly points: 1st=2, 2nd=1.5, 3rd=1, every other
+        participant=0.5. Both partners receive the same value and a solo
+        receives the full value. Preview is write-free. Confirm writes
+        <code>weekly_points</code> (re-runnable before finalization). Finalize
+        locks the week and updates the season cache. Tag data is never touched.
+      </p>
+      <button type="button" id="btnPreviewPoints" onclick="previewPoints()">Preview Points</button>
+      <button type="button" id="btnConfirmPoints" onclick="confirmPoints()" style="background:#34a853;">Confirm Points</button>
+      <button type="button" id="btnFinalizePoints" onclick="finalizePoints()" style="background:#6a1b9a;">Finalize Points</button>
+      <div id="pointsPreview" style="display:none;"></div>
+      <div id="pointsResult" class="status hidden"></div>
+    </div>
+
   </div>
 
   <!-- 10. Activity Log -->
@@ -585,6 +602,10 @@
 
       var provisionCard = document.getElementById('doublesProvisionCard');
       if (provisionCard) provisionCard.style.display = isDoubles ? '' : 'none';
+
+      // Points are doubles-only; hide the points tooling for singles.
+      var pointsCard = document.getElementById('pointsCalcCard');
+      if (pointsCard) pointsCard.style.display = isDoubles ? '' : 'none';
 
       // Doubles provisioning state is authoritative on the server; load it
       // whenever the doubles league is selected rather than caching a local flag.
@@ -815,6 +836,10 @@
 
       document.getElementById('finalizeRoundPreview').style.display = 'none';
       clearFinalizeRoundStatus();
+
+      var pointsPreview = document.getElementById('pointsPreview');
+      if (pointsPreview) pointsPreview.style.display = 'none';
+      clearPointsStatus();
     }
 
     async function createWeeklyTab(e) {
@@ -2231,6 +2256,198 @@
           btn.disabled = false;
           btn.textContent = 'Confirm & Finalize';
         }
+      }
+    }
+
+    // ─── Doubles Points (Preview / Confirm / Finalize) ────────────────────
+    function setPointsStatus(type, html) {
+      var el = document.getElementById('pointsResult');
+      if (!el) return;
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearPointsStatus() {
+      var el = document.getElementById('pointsResult');
+      if (!el) return;
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
+    function pointsStatusLabel(status) {
+      if (status === 'finalized') return 'finalized';
+      if (status === 'confirmed') return 'confirmed';
+      return 'pending';
+    }
+
+    async function previewPoints() {
+      var leagueDate = getActiveLeagueDate();
+      if (!leagueDate) {
+        setPointsStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnPreviewPoints');
+      if (btn) { btn.disabled = true; btn.textContent = 'Calculating...'; }
+      clearPointsStatus();
+      document.getElementById('pointsPreview').style.display = 'none';
+      log('Calculating doubles points for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'calculatePoints', spreadsheetId: getSpreadsheetId(),
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          return;
+        }
+
+        renderPointsPreview(data);
+        log('Points preview generated for ' + leagueDate + ': ' + data.summary.total_rows + ' rows, ' + data.summary.warnings + ' warning(s). No writes made.');
+      } catch (err) {
+        setPointsStatus('error', '<strong>Preview failed:</strong> ' + err.message);
+        log('FAILED to preview points: ' + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Preview Points'; }
+      }
+    }
+
+    function renderPointsPreview(data) {
+      var previewEl = document.getElementById('pointsPreview');
+      var html = '';
+
+      html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
+      html += '<div class="field-group">';
+      html += '<p>Weekly tab: <strong>' + escHtml(data.tab_name) + '</strong></p>';
+      html += '<p>Participants: <strong>' + data.summary.total_rows + '</strong></p>';
+      html += '<p>Blank-position warnings: <strong>' + data.summary.warnings + '</strong></p>';
+      html += '<p style="color:#888; font-style:italic;">Preview only. No writes were made.</p>';
+      html += '</div>';
+
+      if (data.warnings.length > 0) {
+        html += '<div class="status error" style="margin-top:0.5rem;">';
+        for (var w = 0; w < data.warnings.length; w++) {
+          html += escHtml(data.warnings[w].message) + (w < data.warnings.length - 1 ? '\n' : '');
+        }
+        html += '</div>';
+      }
+
+      html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Calculated Points</h3>';
+      html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+      html += '<tr style="background:#f0f0f0;">';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Place</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Points</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Status</th>';
+      html += '</tr>';
+
+      for (var i = 0; i < data.players.length; i++) {
+        var pl = data.players[i];
+        var place = pl.has_position
+          ? escHtml(String(pl.team_position !== '' ? pl.team_position : pl.team_position_raw))
+          : '<span style="color:#ea4335;">blank</span>';
+        var warningMark = pl.warning ? ' <span style="color:#ea4335;" title="' + escHtml(pl.warning) + '">⚠</span>' : '';
+        html += '<tr>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(pl.player_name) + ' <span style="color:#888;">(#' + pl.member_number + ')</span></td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + place + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + pl.points + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + pointsStatusLabel(pl.stored_status) + warningMark + '</td>';
+        html += '</tr>';
+      }
+      html += '</table>';
+
+      previewEl.innerHTML = html;
+      previewEl.style.display = '';
+    }
+
+    async function confirmPoints() {
+      var leagueDate = getActiveLeagueDate();
+      if (!leagueDate) {
+        setPointsStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnConfirmPoints');
+      if (btn) { btn.disabled = true; btn.textContent = 'Writing...'; }
+      setPointsStatus('pending', 'Writing weekly points...');
+      log('Confirming doubles points for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'confirmPoints', spreadsheetId: getSpreadsheetId(),
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          setPointsStatus('ok',
+            '<strong>Points confirmed.</strong> ' + data.players_updated +
+            ' rows updated in ' + escHtml(data.tab_name) + '.');
+          log('SUCCESS: Points confirmed. ' + data.players_updated + ' rows updated.');
+          document.getElementById('pointsPreview').style.display = 'none';
+        } else {
+          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setPointsStatus('error', '<strong>Write failed:</strong> ' + err.message);
+        log('FAILED to confirm points: ' + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Confirm Points'; }
+      }
+    }
+
+    async function finalizePoints() {
+      var leagueDate = getActiveLeagueDate();
+      if (!leagueDate) {
+        setPointsStatus('error', '<strong>Please select a league date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnFinalizePoints');
+      if (btn) { btn.disabled = true; btn.textContent = 'Finalizing...'; }
+      setPointsStatus('pending', 'Finalizing points and updating the season cache...');
+      log('Finalizing doubles points for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'finalizePoints', spreadsheetId: getSpreadsheetId(),
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status === 'ok') {
+          setPointsStatus('ok',
+            '<strong>Points finalized.</strong> ' + data.players_finalized +
+            ' rows locked in ' + escHtml(data.tab_name) + '; season cache updated for ' +
+            data.season_points_updated + ' member(s).');
+          log('SUCCESS: Points finalized. ' + data.players_finalized + ' rows locked; season cache updated for ' + data.season_points_updated + ' member(s).');
+          document.getElementById('pointsPreview').style.display = 'none';
+        } else {
+          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+        }
+      } catch (err) {
+        setPointsStatus('error', '<strong>Finalize failed:</strong> ' + err.message);
+        log('FAILED to finalize points: ' + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Finalize Points'; }
       }
     }
 
