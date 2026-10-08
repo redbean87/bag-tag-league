@@ -84,6 +84,56 @@ function createDoublesWeekTab(leagueDate) {
 }
 
 /**
+ * Operator entry point: dry-run the human-first weekly column-order migration
+ * for both leagues. Writes nothing, so it is safe to run at any time.
+ *
+ * Usage (Apps Script editor): run `previewWeeklyColumnOrderMigration`.
+ */
+function previewWeeklyColumnOrderMigration() {
+  var report = {
+    singles: migrateWeeklyColumnOrder(
+      SpreadsheetApp.openById(getConfiguredSinglesSpreadsheetId()),
+      LEAGUE_FORMAT_SINGLES,
+      { apply: false }
+    ),
+    doubles: migrateWeeklyColumnOrder(
+      SpreadsheetApp.openById(getConfiguredDoublesSpreadsheetId()),
+      LEAGUE_FORMAT_DOUBLES,
+      { apply: false }
+    )
+  };
+
+  Logger.log('Weekly column-order migration preview:\n' + JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
+ * Operator entry point: apply the human-first weekly column-order migration to
+ * both leagues. Refuses unless the captain has set the
+ * WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL Script Property. Run the preview
+ * first to inspect the exact column order for every placed sheet.
+ *
+ * Usage (Apps Script editor): run `applyWeeklyColumnOrderMigration`.
+ */
+function applyWeeklyColumnOrderMigration() {
+  var report = {
+    singles: migrateWeeklyColumnOrder(
+      SpreadsheetApp.openById(getConfiguredSinglesSpreadsheetId()),
+      LEAGUE_FORMAT_SINGLES,
+      { apply: true }
+    ),
+    doubles: migrateWeeklyColumnOrder(
+      SpreadsheetApp.openById(getConfiguredDoublesSpreadsheetId()),
+      LEAGUE_FORMAT_DOUBLES,
+      { apply: true }
+    )
+  };
+
+  Logger.log('Weekly column-order migration applied:\n' + JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
  * Verifies the topology and headers of both spreadsheets against the schema
  * expected for their format. Returns a report and logs it.
  *

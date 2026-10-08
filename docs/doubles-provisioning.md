@@ -17,13 +17,17 @@ topology. It is deterministic and safe to run repeatedly:
 |-----|---------|-------|
 | `League` | 15 singles columns + `league_format` | Settings row records `league_format=doubles` |
 | `ClubMembers` | The standard 8 columns | One row per member, `member_number` preserved |
-| `Week template` | The 48 singles columns + 6 doubles columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
-| `Week YYYY-MM-DD` | The 48 + 6 doubles columns | Created on demand for a league date |
+| `Week template` | The 54 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
+| `Week YYYY-MM-DD` | The 54 human-first weekly columns | Created on demand for a league date |
 
-The six doubles columns are `pair_key`, `partner_member_number`,
-`team_position`, `team_position_raw`, `weekly_points`, and
-`weekly_points_status`. The singles `WEEKLY_RECORD_HEADERS` (48) and
-`LEAGUE_SHEET_HEADERS` (15) are unchanged.
+The doubles weekly schema carries the 48 singles columns plus six doubles-only
+columns: `pair_key`, `partner_member_number`, `team_position`,
+`team_position_raw`, `weekly_points`, and `weekly_points_status`. Both the
+singles and doubles weekly headers are ordered human-first: names, then pair
+linkage and score/points where they apply, then the remaining columns in their
+historical relative order. Header names and counts are unchanged, so every
+reader that resolves a column by name keeps working; only the physical order
+changed. The singles `LEAGUE_SHEET_HEADERS` (15) are unchanged.
 
 ## Roster seeding
 
@@ -43,6 +47,8 @@ authorization. No credentials or secrets are stored in the repository.
 | `provisionDoublesSpreadsheet()` | Provision tabs + seed roster, then log the summary |
 | `createDoublesWeekTab('YYYY-MM-DD')` | Create/return a doubles week tab |
 | `verifySpreadsheetTopology()` | Verify tabs and headers for both spreadsheets |
+| `previewWeeklyColumnOrderMigration()` | Dry-run the human-first weekly column migration for both spreadsheets |
+| `applyWeeklyColumnOrderMigration()` | Apply the weekly column migration; refused unless the captain sets the approval Script Property |
 | `reportRosterCounts()` | Report Singles and Doubles roster counts |
 
 Each returns a plain report object and logs it with `Logger.log`, so the result
