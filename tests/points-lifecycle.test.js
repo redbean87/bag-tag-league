@@ -244,7 +244,7 @@ test('points handlers refuse the singles format before opening a sheet', () => {
   }));
 
   assert.equal(result.status, 'error');
-  assert.match(result.message, /doubles/i);
+  assert.match(result.message, /scoring method/i);
   assert.deepEqual(h.openByIdCalls, [], 'must not open the singles spreadsheet');
 });
 

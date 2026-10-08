@@ -20,7 +20,7 @@ function functionBody(name) {
 }
 
 test('the import screen routes doubles rows to the doubles preview action', () => {
-  assert.match(html, /getLeagueFormat\(\) === 'doubles'/);
+  assert.match(html, /getLeagueRules\(\)\.hasPairs/);
   assert.match(html, /requestDoublesImportPreview\(rows, leagueDate\)/);
 
   const actionIndex = html.indexOf("action: 'previewUdiscImportDoubles'");

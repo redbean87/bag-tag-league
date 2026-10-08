@@ -32,9 +32,21 @@
     DOUBLES: 'doubles'
   };
 
+  // Scoring is an independent axis from format: `format` says how a score is
+  // made up (singles/doubles), `scoring` says what is settled (tags/points).
+  // The capability flags below derive from these two enums, never from a
+  // league id, so a future format x scoring league routes without code edits.
+  var SCORING = {
+    TAGS: 'tags',
+    POINTS: 'points'
+  };
+
+  var SCORINGS = [SCORING.TAGS, SCORING.POINTS];
+
   // The leagues this app manages. Each record is the single source of truth
-  // for its id, display name, format, and spreadsheet. Every league carries
-  // its own format as data; routing and gating read league.format.
+  // for its id, display name, format, scoring, and spreadsheet. Every league
+  // carries its own format and scoring as data; routing and gating read the
+  // derived capability rules, never a hardcoded switch.
   // Spreadsheet ids are kept in sync with scripts/Code.gs
   // (SPREADSHEET_ID / SPREADSHEET_ID_DOUBLES).
   var LEAGUES = [
@@ -42,12 +54,14 @@
       id: 'b-rads-league',
       name: "B Rad's League",
       format: FORMATS.SINGLES,
+      scoring: SCORING.TAGS,
       spreadsheetId: '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik'
     },
     {
       id: 'nightfliers-random-dubs',
       name: 'Nightfliers Random Dubs',
       format: FORMATS.DOUBLES,
+      scoring: SCORING.POINTS,
       spreadsheetId: '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8'
     }
   ];
@@ -65,8 +79,37 @@
     return null;
   }
 
-  function normalize(format) {
+  // Normalizes an unknown format to the registry default (singles) instead of
+  // coercing it into the other value. Callers that read a stored value can
+  // therefore degrade loudly rather than silently mis-route.
+  function normalizeFormat(format) {
     return format === FORMATS.DOUBLES ? FORMATS.DOUBLES : FORMATS.SINGLES;
+  }
+
+  // Normalizes an unknown scoring method to the registry default (tags).
+  function normalizeScoring(scoring) {
+    return scoring === SCORING.POINTS ? SCORING.POINTS : SCORING.TAGS;
+  }
+
+  // Kept as the format normalizer for existing callers.
+  function normalize(format) {
+    return normalizeFormat(format);
+  }
+
+  // The one capability resolver every gate reads. Derived only from the two
+  // enums, never from a league id, so a future league works without touching
+  // the handlers that branch on it.
+  function rulesForLeague(id) {
+    var league = leagueById(normalizeLeagueId(id));
+    var format = normalizeFormat(league ? league.format : null);
+    var scoring = normalizeScoring(league ? league.scoring : null);
+    return {
+      format: format,
+      scoring: scoring,
+      usesTags: scoring === SCORING.TAGS,
+      usesPoints: scoring === SCORING.POINTS,
+      hasPairs: format === FORMATS.DOUBLES
+    };
   }
 
   function leagueIdForFormat(format) {
@@ -107,6 +150,10 @@
     return leagueById(normalizeLeagueId(id)).format;
   }
 
+  function scoringForLeague(id) {
+    return rulesForLeague(id).scoring;
+  }
+
   function spreadsheetIdForLeague(id) {
     return leagueById(normalizeLeagueId(id)).spreadsheetId;
   }
@@ -132,6 +179,8 @@
     STORAGE_KEY: STORAGE_KEY,
     LEGACY_STORAGE_KEY: LEGACY_STORAGE_KEY,
     FORMATS: FORMATS,
+    SCORING: SCORING,
+    SCORINGS: SCORINGS,
     LEAGUES: LEAGUES,
     DEFAULT_LEAGUE_ID: DEFAULT_LEAGUE_ID,
     leagues: leagues,
@@ -141,8 +190,12 @@
     readStoredLeagueId: readStoredLeagueId,
     persistLeagueId: persistLeagueId,
     formatForLeague: formatForLeague,
+    scoringForLeague: scoringForLeague,
+    rulesForLeague: rulesForLeague,
     spreadsheetIdForLeague: spreadsheetIdForLeague,
     normalize: normalize,
+    normalizeFormat: normalizeFormat,
+    normalizeScoring: normalizeScoring,
     readStoredFormat: readStoredFormat,
     persistFormat: persistFormat,
     spreadsheetIdForFormat: spreadsheetIdForFormat

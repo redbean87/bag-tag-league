@@ -688,7 +688,7 @@ test('the doubles commit is routed from doPost for the doubles action', () => {
   assert.equal(result.format, 'doubles');
 });
 
-test('the doubles commit refuses the singles spreadsheet', () => {
+test('the pair-based commit refuses a singles-format league', () => {
   const h = loadCode();
   h.makeSpreadsheet(h.bound.SPREADSHEET_ID);
 
@@ -700,10 +700,10 @@ test('the doubles commit refuses the singles spreadsheet', () => {
   }));
 
   assert.equal(result.status, 'error');
-  assert.match(result.message, /doubles spreadsheet/i);
+  assert.match(result.message, /pair-based/i);
 });
 
-test('the singles commit refuses the doubles spreadsheet', () => {
+test('the tag-based commit refuses a points-scoring league', () => {
   const h = loadCode();
   buildDoubles(h, []);
 
@@ -715,7 +715,7 @@ test('the singles commit refuses the doubles spreadsheet', () => {
   }));
 
   assert.equal(result.status, 'error');
-  assert.match(result.message, /doubles/i);
+  assert.match(result.message, /scoring method/i);
 });
 
 test('the doubles commit requires approval and a valid date', () => {

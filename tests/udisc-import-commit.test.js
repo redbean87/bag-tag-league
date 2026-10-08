@@ -129,7 +129,7 @@ test('singles commit dedups a repeated new identity within one batch', () => {
   assert.equal(dataRows(week).length, 1);
 });
 
-test('singles commit refuses a doubles spreadsheet selector', () => {
+test('the tag-based commit refuses a points-scoring league selector', () => {
   const h = loadCode();
   const result = h.parse(h.fn('handleCommitUdiscImport')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
@@ -139,5 +139,5 @@ test('singles commit refuses a doubles spreadsheet selector', () => {
   }));
 
   assert.equal(result.status, 'error');
-  assert.match(result.message, /doubles/i);
+  assert.match(result.message, /scoring method/i);
 });

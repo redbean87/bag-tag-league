@@ -29,7 +29,7 @@ test('the Members panel is present and labelled Season Total', () => {
 
 test('the Members panel is doubles-only and posts to listClubMembers', () => {
   const apply = functionBody(adminHtml, 'applyLeague');
-  assert.match(apply, /membersCard\.style\.display = isDoubles \? '' : 'none'/);
+  assert.match(apply, /membersCard\.style\.display = rules\.usesPoints \? '' : 'none'/);
 
   const load = functionBody(adminHtml, 'loadMembers');
   assert.match(load, /action: 'listClubMembers'/);
@@ -52,7 +52,7 @@ test('committing a doubles import refreshes the members listing', () => {
 test('the player sign-in listing shows the doubles season total only', () => {
   const render = functionBody(playerHtml, 'renderSearchResults');
   assert.match(render, /Season Total: /);
-  assert.match(render, /if \(isDoubles\)/);
-  // The singles tag detail line is untouched.
-  assert.match(render, /!isDoubles && member\.current_tag/);
+  assert.match(render, /if \(rules\.usesPoints\)/);
+  // The tag-scoring tag detail line is untouched.
+  assert.match(render, /rules\.usesTags && member\.current_tag/);
 });

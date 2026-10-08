@@ -135,8 +135,8 @@ test('all three tag lifecycle handlers refuse doubles before opening a sheet', (
       league_date: WEEK_DATE
     }));
 
-    assert.equal(result.status, 'error', action + ' must refuse doubles');
-    assert.match(result.message, /doubles/i, action + ' must name the doubles format');
+    assert.equal(result.status, 'error', action + ' must refuse a points-scoring league');
+    assert.match(result.message, /scoring method/i, action + ' must name the scoring method');
     assert.equal(
       JSON.stringify({ club: club.rows, week: week.rows }),
       before,
@@ -148,7 +148,7 @@ test('all three tag lifecycle handlers refuse doubles before opening a sheet', (
   assert.deepEqual(h.openByIdCalls, []);
 });
 
-test('the singles import preview refuses doubles instead of exposing tags', () => {
+test('the tag-based import preview refuses a points-scoring league instead of exposing tags', () => {
   const h = loadCode();
   buildDoubles(h, [[1, 'Alice Smith', 'alice', '', 5, true, '', '']]);
 
@@ -159,7 +159,7 @@ test('the singles import preview refuses doubles instead of exposing tags', () =
   }));
 
   assert.equal(result.status, 'error');
-  assert.match(result.message, /doubles/i);
+  assert.match(result.message, /scoring method/i);
   assert.doesNotMatch(JSON.stringify(result), /in_tag|out_tag|current_tag/);
 });
 
@@ -245,32 +245,32 @@ function functionBody(html, name) {
   return html.slice(start, next === -1 ? undefined : next);
 }
 
-test('the sign-in page gates tag fields on the singles format', () => {
+test('the sign-in page gates tag fields on the scoring method', () => {
   const html = readHtml('src/player/sign-in/index.html');
 
   assert.match(html, /id="checkInTagGroup"/);
   assert.match(html, /id="registerTagGroup"/);
-  assert.match(html, /var isDoubles = resolvedLeague\.format === 'doubles'/);
+  assert.match(html, /window\.LeagueFormat\.rulesForLeague\(resolvedLeague\.id\)/);
 
   const apply = functionBody(html, 'applyTagVisibility');
   assert.match(apply, /checkInTagGroup/);
   assert.match(apply, /registerTagGroup/);
-  assert.match(apply, /input\.required = !isDoubles/);
-  assert.match(apply, /isDoubles \? 'none' : ''/);
+  assert.match(apply, /input\.required = rules\.usesTags/);
+  assert.match(apply, /rules\.usesTags \? '' : 'none'/);
   // The gate runs on page init.
   assert.match(html, /applyTagVisibility\(\);/);
 
-  // The tag value is required and submitted only for singles.
-  assert.match(html, /if \(!isDoubles && \(!inTag \|\| parseInt\(inTag, 10\) < 1\)\)/);
-  assert.match(html, /if \(!isDoubles\) payload\.in_tag = parseInt\(inTag, 10\)/);
-  // Tag chips in search results are singles-only.
-  assert.match(html, /if \(!isDoubles && member\.current_tag\) detailParts\.push\('Tag: ' \+ member\.current_tag\)/);
+  // The tag value is required and submitted only for a tag-scoring league.
+  assert.match(html, /if \(rules\.usesTags && \(!inTag \|\| parseInt\(inTag, 10\) < 1\)\)/);
+  assert.match(html, /if \(rules\.usesTags\) payload\.in_tag = parseInt\(inTag, 10\)/);
+  // Tag chips in search results are tag-scoring-only.
+  assert.match(html, /if \(rules\.usesTags && member\.current_tag\) detailParts\.push\('Tag: ' \+ member\.current_tag\)/);
 });
 
-test('the admin page hides tag tooling for doubles and keeps it for singles', () => {
+test('the admin page hides tag tooling for a points-scoring league and keeps it for tags', () => {
   const html = readHtml('src/admin/index.html');
   const apply = functionBody(html, 'applyLeague');
 
-  assert.match(apply, /tagCard\.style\.display = isDoubles \? 'none' : ''/);
-  assert.match(apply, /finalizeCard\.style\.display = isDoubles \? 'none' : ''/);
+  assert.match(apply, /tagCard\.style\.display = rules\.usesTags \? '' : 'none'/);
+  assert.match(apply, /finalizeCard\.style\.display = rules\.usesTags \? '' : 'none'/);
 });

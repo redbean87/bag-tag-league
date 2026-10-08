@@ -281,9 +281,12 @@
     // so a GET -> POST transition cannot silently revert to singles.
     var resolvedLeague = resolveLeagueFromUrl();
 
-    // Tag collection is singles-only. `isDoubles` gates every tag surface so
-    // the doubles league never prompts for, renders, or submits a tag.
-    var isDoubles = resolvedLeague.format === 'doubles';
+    // Tag collection follows the scoring method. `rules` gates every tag
+    // surface so a points-scoring league never prompts for, renders, or
+    // submits a tag.
+    var rules = (window.LeagueFormat && window.LeagueFormat.rulesForLeague)
+      ? window.LeagueFormat.rulesForLeague(resolvedLeague.id)
+      : { usesTags: true, usesPoints: false, hasPairs: false };
 
     function resolveLeagueFromUrl() {
       var requested = null;
@@ -307,24 +310,25 @@
       return { id: fallback.id, name: fallback.name, format: fallback.format, unknownParam: !!requested };
     }
 
-    // Applies the singles-only tag gate to the check-in/registration forms:
-    // hides the tag field, drops its required flag, and hides the success
-    // tag line for doubles. The server independently refuses doubles tags.
+    // Applies the tag-scoring gate to the check-in/registration forms: hides
+    // the tag field, drops its required flag, and hides the success tag line
+    // for a league that does not settle with tags. The server independently
+    // refuses tags for a points-scoring league.
     function applyTagVisibility() {
       var groups = ['checkInTagGroup', 'registerTagGroup'];
       for (var g = 0; g < groups.length; g++) {
         var group = document.getElementById(groups[g]);
-        if (group) group.style.display = isDoubles ? 'none' : '';
+        if (group) group.style.display = rules.usesTags ? '' : 'none';
       }
 
       var inputs = ['checkInTag', 'registerTag'];
       for (var i = 0; i < inputs.length; i++) {
         var input = document.getElementById(inputs[i]);
-        if (input) input.required = !isDoubles;
+        if (input) input.required = rules.usesTags;
       }
 
       var successTag = document.getElementById('successTagInfo');
-      if (successTag) successTag.style.display = isDoubles ? 'none' : '';
+      if (successTag) successTag.style.display = rules.usesTags ? '' : 'none';
     }
 
     function renderLeagueIndicator() {
@@ -428,10 +432,10 @@
         var detailParts = [];
         if (member.udisc_username) detailParts.push('UDisc: ' + member.udisc_username);
         if (member.pdga_number) detailParts.push('PDGA: ' + member.pdga_number);
-        if (!isDoubles && member.current_tag) detailParts.push('Tag: ' + member.current_tag);
-        // Doubles member listings show the all-weeks season total; singles
-        // keeps its tag-only detail line.
-        if (isDoubles) {
+        if (rules.usesTags && member.current_tag) detailParts.push('Tag: ' + member.current_tag);
+        // Points-scoring member listings show the all-weeks season total;
+        // tag-scoring keeps its tag-only detail line.
+        if (rules.usesPoints) {
           var seasonTotal = (member.season_points === undefined || member.season_points === null)
             ? 0
             : member.season_points;
@@ -462,7 +466,7 @@
       document.getElementById('checkInName').value = member.name;
       document.getElementById('checkInUdisc').value = member.udisc_username || '';
       document.getElementById('checkInPdga').value = member.pdga_number || '';
-      document.getElementById('checkInTag').value = isDoubles ? '' : (member.current_tag || '');
+      document.getElementById('checkInTag').value = rules.usesTags ? (member.current_tag || '') : '';
       clearStatus('checkInStatus');
       showView('checkIn');
     }
@@ -510,7 +514,7 @@
         return;
       }
 
-      if (!isDoubles && (!inTag || parseInt(inTag, 10) < 1)) {
+      if (rules.usesTags && (!inTag || parseInt(inTag, 10) < 1)) {
         setStatus(prefix + 'Status', 'error', 'Please enter a valid tag number (1 or higher).');
         return;
       }
@@ -532,8 +536,9 @@
           ace_pot: acePot
         };
 
-        // Tag collection is singles-only; doubles never sends in_tag.
-        if (!isDoubles) payload.in_tag = parseInt(inTag, 10);
+        // Tag collection belongs to tag-scoring leagues; points-scoring
+        // leagues never send in_tag.
+        if (rules.usesTags) payload.in_tag = parseInt(inTag, 10);
 
         if (selectedMemberNumber) {
           payload.member_number = selectedMemberNumber;
@@ -551,7 +556,7 @@
           document.getElementById('successLeagueName').textContent = 'League: ' + (leagueInfo ? leagueInfo.name : resolvedLeague.name);
           document.getElementById('successPlayerName').textContent = 'Player: ' + data.player_name;
           document.getElementById('successTabName').textContent = 'Week: ' + data.weekly_tab;
-          document.getElementById('successTagInfo').textContent = isDoubles ? '' : ('Current Tag: ' + data.in_tag);
+          document.getElementById('successTagInfo').textContent = rules.usesTags ? ('Current Tag: ' + data.in_tag) : '';
           showView('success');
         } else {
           setStatus(prefix + 'Status', 'error', data.message);

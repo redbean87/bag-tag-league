@@ -276,7 +276,7 @@ test('a malformed row is blocked', () => {
 
 // ─── Format routing and read-only safety ─────────────────────────────────────
 
-test('the doubles preview refuses the singles spreadsheet', () => {
+test('the pair-based preview refuses a singles-format league', () => {
   const h = loadCode();
   h.makeSpreadsheet(h.bound.SPREADSHEET_ID);
 
@@ -287,7 +287,7 @@ test('the doubles preview refuses the singles spreadsheet', () => {
   }));
 
   assert.equal(result.status, 'error');
-  assert.match(result.message, /doubles spreadsheet/i);
+  assert.match(result.message, /pair-based/i);
 });
 
 test('the preview is routed from doPost for the doubles action', () => {
