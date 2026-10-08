@@ -1242,6 +1242,9 @@ function doPost(e) {
     if (data.action === 'searchClubMembers') {
       return handleSearchClubMembers(data);
     }
+    if (data.action === 'listClubMembers') {
+      return handleListClubMembers(data);
+    }
     if (data.action === 'submitCheckIn') {
       return handleSubmitCheckIn(data);
     }
@@ -1480,6 +1483,10 @@ function handleSearchClubMembers(data) {
   const lowerQuery = query.toLowerCase();
   const results = [];
 
+  // Doubles members carry their season total (the sum of finalized weekly
+  // points) in every search result. Singles keeps its tag-only payload.
+  const seasonTotals = isDoubles ? sumFinalizedPointsByMember(spreadsheet) : null;
+
   for (let i = 1; i < playersData.length && results.length < 10; i++) {
     const row = playersData[i];
 
@@ -1503,12 +1510,84 @@ function handleSearchClubMembers(data) {
         pdga_number: pdga
       };
       // Tag data is singles-only; the doubles search response stays tag-free.
-      if (!isDoubles) result.current_tag = row[currentTagCol];
+      if (!isDoubles) {
+        result.current_tag = row[currentTagCol];
+      } else {
+        // Missing totals render as 0 rather than null/NaN so the member
+        // listing never shows an empty calculation.
+        result.season_points = seasonTotals[row[memberNumberCol]] !== undefined
+          ? seasonTotals[row[memberNumberCol]]
+          : 0;
+      }
       results.push(result);
     }
   }
 
   return respond('ok', 'Search complete.', { results: results, league: leagueId });
+}
+
+/**
+ * Lists club members for the selected league.
+ *
+ * Doubles member records include `season_points`, the sum of that member's
+ * finalized weekly points. A member with no finalized weeks reports 0 and is
+ * never omitted. Singles records omit season_points entirely so the singles
+ * payload and views stay exactly as they were.
+ *
+ * Inputs: league (optional routing selector)
+ */
+function handleListClubMembers(data) {
+  const leagueId = resolveLeagueId(leagueSelectorFrom(data));
+  const format = resolveLeagueFormat(leagueSelectorFrom(data));
+  const isDoubles = format === LEAGUE_FORMAT_DOUBLES;
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  const playersSheet = spreadsheet.getSheetByName('ClubMembers');
+
+  if (!playersSheet) {
+    return respond('ok', 'No members found.', { league: leagueId, format: format, members: [] });
+  }
+
+  const playersData = playersSheet.getDataRange().getValues();
+  const playersHeaders = playersData[0] || [];
+
+  const memberNumberCol = playersHeaders.indexOf('member_number');
+  const nameCol = playersHeaders.indexOf('name');
+  const udiscCol = playersHeaders.indexOf('udisc_username');
+  const pdgaCol = playersHeaders.indexOf('pdga_number');
+  const currentTagCol = playersHeaders.indexOf('current_tag');
+  const isActiveCol = playersHeaders.indexOf('is_active');
+
+  // One aggregation shared by every doubles member listing; it sums only
+  // finalized weekly rows, so draft/cancelled weeks never leak into a total.
+  const seasonTotals = isDoubles ? sumFinalizedPointsByMember(spreadsheet) : null;
+
+  const members = [];
+  for (let i = 1; i < playersData.length; i++) {
+    const row = playersData[i];
+    const memberNumber = row[memberNumberCol];
+    if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+
+    const isActive = row[isActiveCol] === true || row[isActiveCol] === 'TRUE';
+    const member = {
+      member_number: memberNumber,
+      name: (row[nameCol] || '').toString(),
+      udisc_username: (row[udiscCol] || '').toString(),
+      pdga_number: (row[pdgaCol] || '').toString(),
+      is_active: isActive
+    };
+
+    if (isDoubles) {
+      member.season_points = seasonTotals[memberNumber] !== undefined
+        ? seasonTotals[memberNumber]
+        : 0;
+    } else {
+      member.current_tag = row[currentTagCol];
+    }
+
+    members.push(member);
+  }
+
+  return respond('ok', 'Members loaded.', { league: leagueId, format: format, members: members });
 }
 
 /**
@@ -4780,17 +4859,13 @@ function ensureSeasonPointsColumn(clubSheet) {
 }
 
 /**
- * Recomputes the doubles season_points cache from every finalized weekly row
- * across all Week tabs and writes the absolute total per member. Recomputing
- * from source (rather than incrementing) keeps it idempotent: finalizing the
- * same week twice writes the same total.
+ * Sums finalized weekly points per member_number across every Week tab.
+ * Returns a plain object keyed by member_number; a member with no finalized
+ * rows is absent (callers default to 0). This is the single aggregation the
+ * season cache and every member listing share, so draft/unfinalized weeks can
+ * never leak into a total.
  */
-function recomputeSeasonPoints(spreadsheet, clubSheet) {
-  var seasonCol = ensureSeasonPointsColumn(clubSheet);
-  var clubData = clubSheet.getDataRange().getValues();
-  var clubHeaders = clubData[0] || [];
-  var memberCol = clubHeaders.indexOf('member_number');
-
+function sumFinalizedPointsByMember(spreadsheet) {
   var totals = {};
   var weekSheets = getWeekSheets(spreadsheet);
   for (var s = 0; s < weekSheets.length; s++) {
@@ -4810,6 +4885,22 @@ function recomputeSeasonPoints(spreadsheet, clubSheet) {
       totals[memberNumber] = (totals[memberNumber] || 0) + points;
     }
   }
+  return totals;
+}
+
+/**
+ * Recomputes the doubles season_points cache from every finalized weekly row
+ * across all Week tabs and writes the absolute total per member. Recomputing
+ * from source (rather than incrementing) keeps it idempotent: finalizing the
+ * same week twice writes the same total.
+ */
+function recomputeSeasonPoints(spreadsheet, clubSheet) {
+  var seasonCol = ensureSeasonPointsColumn(clubSheet);
+  var clubData = clubSheet.getDataRange().getValues();
+  var clubHeaders = clubData[0] || [];
+  var memberCol = clubHeaders.indexOf('member_number');
+
+  var totals = sumFinalizedPointsByMember(spreadsheet);
 
   var updated = 0;
   for (var j = 1; j < clubData.length; j++) {
