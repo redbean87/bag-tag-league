@@ -297,6 +297,53 @@ test('re-finalizing is idempotent and does not corrupt cached totals', () => {
   assert.deepEqual(column(week, 'weekly_points_status'), new Array(10).fill('finalized'));
 });
 
+test('confirming a week refreshes the season cache before finalization', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
+
+  const confirm = call(h, 'handleConfirmPoints');
+  assert.equal(confirm.status, 'ok');
+  assert.equal(confirm.season_points_updated, 10);
+
+  // The cache already carries the confirmed week, so an unfinalized week is
+  // no longer missing from the stored season total.
+  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2);
+  assert.equal(rowByMember(club, 7)[club.rows[0].indexOf('season_points')], 0.5);
+});
+
+test('season cache sums calculated, confirmed, and finalized weeks', () => {
+  const h = loadCode();
+  const weekOne = [
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2, weekly_points_status: 'calculated' }),
+    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '2', team_position_raw: 2, weekly_points: 1.5, weekly_points_status: 'calculated' })
+  ];
+  const weekTwo = [
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p2', team_position: '1', team_position_raw: 1, weekly_points: 2, weekly_points_status: 'confirmed' }),
+    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p2', team_position: '3', team_position_raw: 3, weekly_points: 1, weekly_points_status: 'confirmed' })
+  ];
+  const weekThree = [
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p3', team_position: '2', team_position_raw: 2, weekly_points: 1.5, weekly_points_status: 'finalized' }),
+    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p3', team_position: '4', team_position_raw: 4, weekly_points: 0.5, weekly_points_status: 'finalized' })
+  ];
+  const { club } = buildDoubles(h, {
+    [WEEK_DATE]: weekOne,
+    [WEEK_TWO]: weekTwo,
+    ['2026-10-19']: weekThree
+  });
+
+  // Confirm and finalize two real lifecycle weeks; the calculated week stays
+  // as-is and must still be included.
+  call(h, 'handleConfirmPoints', { league_date: WEEK_TWO });
+  call(h, 'handleFinalizePoints', { league_date: WEEK_TWO });
+  call(h, 'handleConfirmPoints', { league_date: '2026-10-19' });
+  call(h, 'handleFinalizePoints', { league_date: '2026-10-19' });
+
+  // Ann: calculated 2 + confirmed 2 + finalized 1.5; Bob: calculated 1.5 +
+  // confirmed 1 + finalized 0.5.
+  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 5.5);
+  assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 3);
+});
+
 test('season cache sums finalized weeks across the season', () => {
   const h = loadCode();
   const weekOne = [
@@ -315,10 +362,40 @@ test('season cache sums finalized weeks across the season', () => {
   assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 2);
 
   call(h, 'handleConfirmPoints', { league_date: WEEK_TWO });
+  // A confirmed-but-unfinalized week already counts in the stored cache.
+  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2 + 1.5);
+  assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 2 + 1);
+
   call(h, 'handleFinalizePoints', { league_date: WEEK_TWO });
 
   assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2 + 1.5);
   assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 2 + 1);
+});
+
+// Regression for the cache path: a cache left behind by the old finalized-only
+// aggregation must be overwritten with the all-weeks total, never served stale.
+test('a stale finalized-only cache is rebuilt to include confirmed weeks', () => {
+  const h = loadCode();
+  const weekOne = [
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2, weekly_points_status: 'finalized' })
+  ];
+  const weekTwo = [
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p2', team_position: '1', team_position_raw: 1, weekly_points: '', weekly_points_status: 'pending' })
+  ];
+  const { club } = buildDoubles(h, { [WEEK_DATE]: weekOne, [WEEK_TWO]: weekTwo });
+
+  // Materialize the cache column, then seed it with a value produced before the
+  // all-weeks change: it only saw the finalized week (2) and ignored week two.
+  h.fn('ensureSeasonPointsColumn')(club);
+  const seasonCol = club.rows[0].indexOf('season_points');
+  const memberCol = club.rows[0].indexOf('member_number');
+  const annRow = club.rows.find((row) => row[memberCol] === 1);
+  annRow[seasonCol] = 2;
+
+  call(h, 'handleConfirmPoints', { league_date: WEEK_TWO });
+
+  // Week two now confirms for 2, so the cache is 4 rather than the stale 2.
+  assert.equal(rowByMember(club, 1)[seasonCol], 4);
 });
 
 // ─── Tag isolation ───────────────────────────────────────────────────────────
