@@ -66,6 +66,20 @@
     .status strong { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     code { background: #f0f0f0; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.9em; }
     .help-text { font-size: 0.875rem; color: #666; margin-bottom: 0.75rem; }
+    .badge-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: lowercase;
+      background: #eef2f7;
+      color: #33475b;
+      border: 1px solid #d5dee8;
+    }
+    .badge.scoring { background: #e8f0fe; color: #1a3a6b; border-color: #c6d8f5; }
     .field-group { margin-bottom: 1rem; }
     details { margin-bottom: 1.5rem; }
     summary {
@@ -220,6 +234,7 @@
       <label for="leaguePicker">League</label>
       <select id="leaguePicker" onchange="onLeagueChange()"></select>
     </div>
+    <div class="badge-row" id="leagueBadges"></div>
     <p class="help-text" id="leagueStatus" style="margin:0;"></p>
   </div>
 
@@ -255,7 +270,20 @@
       </div>
       <div id="leagueForm" style="display:none;">
         <form onsubmit="saveLeagueSettings(event)">
+          <div id="leagueMismatch" class="status error hidden"></div>
           <h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">League Information</h3>
+          <div class="field-group">
+            <label>Format</label>
+            <div class="badge-row" id="settingsFormat"></div>
+          </div>
+          <div class="field-group">
+            <label>Scoring</label>
+            <div class="badge-row" id="settingsScoring"></div>
+          </div>
+          <p class="help-text">
+            Format and scoring are set when a league is provisioned and are
+            shown here read-only; the registry is authoritative for routing.
+          </p>
           <div class="field-group">
             <label for="league_name">League Name</label>
             <input type="text" id="league_name" placeholder="">
@@ -564,6 +592,82 @@
       return league ? league.spreadsheetId : '';
     }
 
+    // ─── Format / scoring badges and read-only display ────────────────────
+    // The registry is the routing authority, so the picker and the settings
+    // form show the selected league's format and scoring as read-only badges.
+    // The settings form never writes them; provisioning and the gated
+    // migration do.
+    function badgeElement(text, extraClass) {
+      var span = document.createElement('span');
+      span.className = extraClass ? 'badge ' + extraClass : 'badge';
+      span.textContent = text;
+      return span;
+    }
+
+    function renderLeagueBadges(league, rules) {
+      var badges = document.getElementById('leagueBadges');
+      if (badges) {
+        badges.innerHTML = '';
+        if (league) {
+          badges.appendChild(badgeElement(league.format));
+          badges.appendChild(badgeElement(league.scoring, 'scoring'));
+        }
+      }
+      renderReadonlySettings(rules);
+    }
+
+    function renderReadonlySettings(rules) {
+      var formatEl = document.getElementById('settingsFormat');
+      if (formatEl) {
+        formatEl.innerHTML = '';
+        if (rules) formatEl.appendChild(badgeElement(rules.format));
+      }
+      var scoringEl = document.getElementById('settingsScoring');
+      if (scoringEl) {
+        scoringEl.innerHTML = '';
+        if (rules) scoringEl.appendChild(badgeElement(rules.scoring, 'scoring'));
+      }
+    }
+
+    // Shows or clears the League-sheet-vs-registry mismatch banner. The
+    // registry is authoritative; a stored value that disagrees is drift the
+    // operator resolves with the gated migration, never an auto-write.
+    function setLeagueMismatch(html) {
+      var el = document.getElementById('leagueMismatch');
+      if (!el) return;
+      if (html) {
+        el.className = 'status error';
+        el.innerHTML = html;
+      } else {
+        el.className = 'status error hidden';
+        el.innerHTML = '';
+      }
+    }
+
+    function applyLeagueSettingsMismatch(settings) {
+      var rules = getLeagueRules();
+      var league = getSelectedLeague();
+      if (!league || !rules || !settings) {
+        setLeagueMismatch('');
+        return;
+      }
+      var messages = [];
+      if (settings.league_format && settings.league_format !== rules.format) {
+        messages.push('Stored league_format "' + settings.league_format + '" does not match the registry format "' + rules.format + '".');
+      }
+      if (settings.scoring && settings.scoring !== rules.scoring) {
+        messages.push('Stored scoring "' + settings.scoring + '" does not match the registry scoring "' + rules.scoring + '".');
+      }
+      if (messages.length === 0) {
+        setLeagueMismatch('');
+        return;
+      }
+      setLeagueMismatch(
+        '<strong>Configuration mismatch.</strong> ' + messages.join(' ') +
+        ' The registry value is authoritative; run the gated migration to align the sheet.'
+      );
+    }
+
     // Builds the picker from the shared league registry so the options list
     // real league names rather than hardcoded Singles/Doubles labels.
     function populateLeaguePicker() {
@@ -602,7 +706,7 @@
         : null;
       var rules = window.LeagueFormat && window.LeagueFormat.rulesForLeague
         ? window.LeagueFormat.rulesForLeague(leagueId)
-        : { usesTags: true, usesPoints: false, hasPairs: false };
+        : { format: 'singles', scoring: 'tags', usesTags: true, usesPoints: false, hasPairs: false };
 
       var selector = document.getElementById('leaguePicker');
       if (selector && league) selector.value = league.id;
@@ -613,6 +717,9 @@
           ? 'Managing ' + league.name + '.'
           : 'Managing the Singles league.';
       }
+
+      renderLeagueBadges(league, rules);
+      setLeagueMismatch('');
 
       // Tag tooling follows the scoring method; it is hidden for any league
       // that does not settle with tags.
@@ -747,6 +854,13 @@
       if (provisioned) {
         btn.textContent = 'Doubles Provisioned';
         setDoublesProvisionStatus('ok', '<strong>Doubles provisioned.</strong> Re-provisioning is disabled.');
+      } else if (state.league_format_matches === false || state.scoring_matches === false) {
+        // The sheet exists but does not record the registry's format and
+        // scoring. Provisioning is what backfills the metadata columns.
+        btn.textContent = 'Provision Doubles Spreadsheet';
+        setDoublesProvisionStatus('error',
+          '<strong>Configuration mismatch.</strong> The League sheet does not record ' +
+          'this league\'s format and scoring. Provision to backfill the metadata columns.');
       } else {
         btn.textContent = 'Provision Doubles Spreadsheet';
         setDoublesProvisionStatus('hidden', '');
@@ -1111,6 +1225,8 @@
           return;
         }
 
+        setLeagueMismatch('');
+
         if (data.state === 'missing') {
           document.getElementById('leagueMissing').style.display = '';
           document.getElementById('leagueForm').style.display = 'none';
@@ -1132,8 +1248,10 @@
           document.getElementById('ace_pot_contribution').value = s.ace_pot_contribution !== undefined && s.ace_pot_contribution !== '' ? s.ace_pot_contribution : '';
           document.getElementById('ace_pot_current_total').value = s.ace_pot_current_total !== undefined && s.ace_pot_current_total !== '' ? s.ace_pot_current_total : '';
           document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
+          applyLeagueSettingsMismatch(s);
           log('League settings loaded');
         } else {
+          setLeagueMismatch('');
           log('League sheet exists but has no settings row');
         }
       } catch (err) {

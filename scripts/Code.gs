@@ -72,6 +72,12 @@ const WEEKLY_RECORD_PAIR_HEADERS = [
   'partner_member_number'
 ];
 
+// Doubles team-placement columns. Singles has no team concept.
+const WEEKLY_RECORD_TEAM_HEADERS = [
+  'team_position',
+  'team_position_raw'
+];
+
 const WEEKLY_RECORD_SCORE_HEADERS = [
   'score'
 ];
@@ -222,7 +228,8 @@ const DOUBLES_POINTS_PARTICIPATION = 0.5;
 // and a pair row claiming the same member conflict rather than double-write.
 const DOUBLES_SOLO_SCOPE = '__solo__';
 
-// League sheet column headers (15 columns)
+// League sheet base column headers (15 columns). The settings row values live
+// in these columns; the two metadata enums below are appended after them.
 const LEAGUE_SHEET_HEADERS = [
   'league_name',
   'description',
@@ -241,11 +248,18 @@ const LEAGUE_SHEET_HEADERS = [
   'updated_at'
 ];
 
-// Doubles League sheet headers: the 15 singles columns plus the league_format
-// column. The singles League schema is unchanged (no league_format column).
-const LEAGUE_SHEET_HEADERS_DOUBLES = LEAGUE_SHEET_HEADERS.concat([
-  'league_format'
-]);
+// League metadata columns appended to every League sheet: the stored format
+// and scoring string enums. The registry (LEAGUE_SPREADSHEETS) is the routing
+// authority; the sheet records the same values as per-spreadsheet confirmation
+// so drift is visible. Decided 2026-10-08: singles sheets extend to 17 columns,
+// so both formats carry both metadata columns.
+const LEAGUE_SHEET_METADATA_HEADERS = ['league_format', 'scoring'];
+
+const LEAGUE_SHEET_HEADERS_EXTENDED = LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS);
+
+// Kept name for callers written before singles carried metadata; the doubles
+// schema and the extended singles schema are the same 17-column set now.
+const LEAGUE_SHEET_HEADERS_DOUBLES = LEAGUE_SHEET_HEADERS_EXTENDED;
 
 // ─── Spreadsheet routing ─────────────────────────────────────────────────────
 
@@ -371,34 +385,85 @@ function resolveLeagueFormat(selector) {
 }
 
 /**
- * Weekly record headers for a league format. Singles keeps the 48-column
- * schema; doubles appends the six doubles-only columns.
+ * The deploy-time default scoring for a format when no league record is in
+ * hand: singles settles tags, doubles settles points.
  */
-function getWeeklyRecordHeaders(format) {
-  return format === LEAGUE_FORMAT_DOUBLES
-    ? WEEKLY_RECORD_HEADERS_DOUBLES
-    : WEEKLY_RECORD_HEADERS;
+function defaultScoringForFormat(format) {
+  return normalizeFormat(format) === LEAGUE_FORMAT_DOUBLES ? SCORING_POINTS : SCORING_TAGS;
 }
 
 /**
- * League sheet headers for a league format. Singles keeps the 15-column
- * schema; doubles appends the league_format column.
+ * Builds capability rules from a (format, scoring) pair. A blank or omitted
+ * scoring falls back to that format's registry default, so the older
+ * single-argument builder calls keep working through the migration.
  */
-function getLeagueSheetHeaders(format) {
-  return format === LEAGUE_FORMAT_DOUBLES
-    ? LEAGUE_SHEET_HEADERS_DOUBLES
-    : LEAGUE_SHEET_HEADERS;
+function rulesForEnums(format, scoring) {
+  var resolvedFormat = normalizeFormat(format);
+  var resolvedScoring = normalizeScoring(
+    scoring === undefined || scoring === null || scoring === ''
+      ? defaultScoringForFormat(resolvedFormat)
+      : scoring
+  );
+  return {
+    format: resolvedFormat,
+    scoring: resolvedScoring,
+    usesTags: resolvedScoring === SCORING_TAGS,
+    usesPoints: resolvedScoring === SCORING_POINTS,
+    hasPairs: resolvedFormat === LEAGUE_FORMAT_DOUBLES
+  };
 }
 
 /**
- * ClubMembers headers for a league format. Singles keeps the 8-column schema;
- * doubles adds the `season_points` cache column so the roster tab holds the
- * totals.
+ * Weekly record headers for a (format, scoring) pair. Columns derive from the
+ * capability rules: pair/team columns for a pairs format and points columns
+ * for a points-scoring league. The tag columns stay in the base pool until the
+ * gated destructive drop flips that migration, so today's 48/54 schemas are
+ * byte-identical.
  */
-function getClubMemberHeaders(format) {
-  return format === LEAGUE_FORMAT_DOUBLES
-    ? CLUB_MEMBER_HEADERS_DOUBLES
-    : CLUB_MEMBER_HEADERS;
+function getWeeklyRecordHeaders(format, scoring) {
+  return orderWeeklyHeaders(
+    weeklyRecordColumnPool(format, scoring),
+    weeklyHumanFirstGroups(format, scoring)
+  );
+}
+
+/**
+ * Weekly column pool for a (format, scoring) pair, in historical relative
+ * order. Shared by the header builder, the column-order plan's known-set check,
+ * and the human-first reorder.
+ */
+function weeklyRecordColumnPool(format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  var columns = WEEKLY_RECORD_HEADERS_LEGACY.slice();
+  if (rules.hasPairs) {
+    columns = columns.concat(WEEKLY_RECORD_PAIR_HEADERS, WEEKLY_RECORD_TEAM_HEADERS);
+  }
+  if (rules.usesPoints) {
+    columns = columns.concat(WEEKLY_RECORD_POINTS_HEADERS);
+  }
+  return columns;
+}
+
+/**
+ * League sheet headers for a (format, scoring) pair. Both formats carry both
+ * metadata columns (see LEAGUE_SHEET_METADATA_HEADERS); the parameters are
+ * accepted for signature symmetry with the other header builders.
+ */
+function getLeagueSheetHeaders(format, scoring) {
+  return LEAGUE_SHEET_HEADERS_EXTENDED;
+}
+
+/**
+ * ClubMembers headers for a (format, scoring) pair: the base roster columns
+ * plus the season_points cache for a points-scoring league. The current_tag
+ * column stays until the gated destructive drop, so today's 8/9 schemas are
+ * byte-identical.
+ */
+function getClubMemberHeaders(format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  var columns = CLUB_MEMBER_HEADERS.slice();
+  if (rules.usesPoints) columns = columns.concat(['season_points']);
+  return columns;
 }
 
 // ─── End spreadsheet routing ─────────────────────────────────────────────────
@@ -510,17 +575,18 @@ function removeDefaultBlankSheet(spreadsheet) {
 // ─── Doubles provisioning ────────────────────────────────────────────────────
 
 /**
- * Ensures the League sheet exists for the given format and, for doubles,
- * records league_format. Idempotent.
+ * Ensures the League sheet exists for the given (format, scoring) pair and
+ * records both metadata enums. Idempotent and non-destructive.
  *
- * This helper only ensures existence and format metadata; it does not migrate
- * the legacy 12-column singles schema, so the existing singles handlers keep
- * their exact behavior. Migration is handled by handleCreateLeagueSheet.
+ * This helper only ensures existence and metadata; it does not migrate the
+ * legacy 12-column singles schema, so the existing singles handlers keep their
+ * exact behavior. Migration is handled by handleCreateLeagueSheet.
  *
  * Returns { sheet, created }.
  */
-function ensureLeagueSheetForFormat(spreadsheet, format) {
-  var headers = getLeagueSheetHeaders(format);
+function ensureLeagueSheetForFormat(spreadsheet, format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  var headers = getLeagueSheetHeaders(rules.format, rules.scoring);
   var existing = spreadsheet.getSheetByName('League');
 
   if (!existing) {
@@ -531,17 +597,13 @@ function ensureLeagueSheetForFormat(spreadsheet, format) {
     headerRange.setFontWeight('bold');
     sheet.setFrozenRows(1);
 
-    if (format === LEAGUE_FORMAT_DOUBLES) {
-      ensureLeagueFormatValue(sheet, format);
-    }
+    ensureLeagueMetadataValues(sheet, rules.format, rules.scoring);
 
     moveSheetToPosition(spreadsheet, 'League', 0);
     return { sheet: sheet, created: true };
   }
 
-  if (format === LEAGUE_FORMAT_DOUBLES) {
-    ensureLeagueFormatValue(existing, format);
-  }
+  ensureLeagueMetadataValues(existing, rules.format, rules.scoring);
 
   if (existing.getIndex() !== 1) {
     moveSheetToPosition(spreadsheet, 'League', 0);
@@ -551,9 +613,19 @@ function ensureLeagueSheetForFormat(spreadsheet, format) {
 }
 
 /**
- * Migrates the legacy 12-column singles League sheet to the current 15-column
- * schema. Returns true when a migration happened. Only handleCreateLeagueSheet
- * calls this, matching the original singles behavior.
+ * Ensures both League metadata columns exist and record the supplied enums.
+ * Idempotent: an existing column is only rewritten with the same value.
+ */
+function ensureLeagueMetadataValues(sheet, format, scoring) {
+  ensureLeagueFormatValue(sheet, format);
+  ensureLeagueScoringValue(sheet, scoring);
+}
+
+/**
+ * Migrates the legacy 12-column singles League sheet to the 15 base-column
+ * schema (the metadata columns are added by ensureLeagueSheetForFormat).
+ * Returns true when a migration happened. Only handleCreateLeagueSheet calls
+ * this, matching the original singles behavior.
  */
 function migrateOldLeagueSheet(spreadsheet) {
   var existing = spreadsheet.getSheetByName('League');
@@ -631,12 +703,39 @@ function ensureLeagueFormatValue(sheet, format) {
 }
 
 /**
+ * Ensures the League sheet's settings row records scoring. Adds the scoring
+ * column when a pre-existing sheet lacks it. Idempotent and non-destructive.
+ * Returns the 0-based column index of scoring.
+ */
+function ensureLeagueScoringValue(sheet, scoring) {
+  var lastColumn = Math.max(sheet.getLastColumn(), 1);
+  var headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  var scoringCol = headers.indexOf('scoring');
+
+  if (scoringCol === -1) {
+    scoringCol = headers.length;
+    sheet.getRange(1, scoringCol + 1).setValue('scoring');
+    sheet.getRange(1, scoringCol + 1).setFontWeight('bold');
+  }
+
+  if (sheet.getLastRow() < 2) {
+    var blankRow = new Array(scoringCol + 1).fill('');
+    blankRow[scoringCol] = scoring;
+    sheet.appendRow(blankRow);
+  } else {
+    sheet.getRange(2, scoringCol + 1).setValue(scoring);
+  }
+
+  return scoringCol;
+}
+
+/**
  * Ensures the doubles weekly template tab exists with the format's weekly
  * headers. The template is a non-dated sheet so it never appears as a league
  * week. Idempotent. Returns { sheet, created }.
  */
-function ensureWeekTemplateSheet(spreadsheet, format) {
-  var headers = getWeeklyRecordHeaders(format);
+function ensureWeekTemplateSheet(spreadsheet, format, scoring) {
+  var headers = getWeeklyRecordHeaders(format, scoring);
   var result = ensureCanonicalSheet(spreadsheet, WEEK_TEMPLATE_SHEET_NAME, headers);
   return { sheet: result.sheet, created: !result.alreadyExisted };
 }
@@ -645,7 +744,7 @@ function ensureWeekTemplateSheet(spreadsheet, format) {
  * Creates (or returns) a dated weekly tab for the doubles spreadsheet using
  * the doubles headers. Returns { sheet, created }.
  */
-function ensureWeekSheet(spreadsheet, leagueDate, format) {
+function ensureWeekSheet(spreadsheet, leagueDate, format, scoring) {
   if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
     throw new Error('leagueDate must be YYYY-MM-DD.');
   }
@@ -656,7 +755,7 @@ function ensureWeekSheet(spreadsheet, leagueDate, format) {
     return { sheet: existing, created: false };
   }
 
-  var headers = getWeeklyRecordHeaders(format);
+  var headers = getWeeklyRecordHeaders(format, scoring);
   var sheet = spreadsheet.insertSheet(tabName);
   sheet.appendRow(headers);
 
@@ -741,14 +840,18 @@ function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
  * credentials. Returns a summary.
  */
 function provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet) {
-  var league = ensureLeagueSheetForFormat(doublesSpreadsheet, LEAGUE_FORMAT_DOUBLES);
+  var league = ensureLeagueSheetForFormat(doublesSpreadsheet, LEAGUE_FORMAT_DOUBLES, SCORING_POINTS);
 
-  var club = ensureCanonicalSheet(doublesSpreadsheet, 'ClubMembers', getClubMemberHeaders(LEAGUE_FORMAT_DOUBLES));
+  var club = ensureCanonicalSheet(
+    doublesSpreadsheet,
+    'ClubMembers',
+    getClubMemberHeaders(LEAGUE_FORMAT_DOUBLES, SCORING_POINTS)
+  );
   if (club.sheet.getIndex() !== 2) {
     moveSheetToPosition(doublesSpreadsheet, 'ClubMembers', 1);
   }
 
-  var template = ensureWeekTemplateSheet(doublesSpreadsheet, LEAGUE_FORMAT_DOUBLES);
+  var template = ensureWeekTemplateSheet(doublesSpreadsheet, LEAGUE_FORMAT_DOUBLES, SCORING_POINTS);
 
   organizeWeekSheetsChronologically(doublesSpreadsheet);
   removeDefaultBlankSheet(doublesSpreadsheet);
@@ -758,7 +861,7 @@ function provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet) {
     : { seeded: 0, seeded_member_numbers: [], skipped_existing: 0, error: 'No singles spreadsheet supplied.' };
 
   return {
-    league: { created: league.created, league_format: LEAGUE_FORMAT_DOUBLES },
+    league: { created: league.created, league_format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS },
     club_members: { created: !club.alreadyExisted },
     week_template: { created: template.created },
     roster_seed: seed
@@ -768,10 +871,11 @@ function provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet) {
 /**
  * Authoritative doubles provisioning-state check. Doubles are considered
  * provisioned only when every required artifact is present and the League
- * sheet records the doubles league_format:
+ * sheet records the registry's doubles league_format and scoring method:
  *   - ClubMembers sheet is present.
  *   - League sheet is present.
  *   - League sheet records league_format=doubles.
+ *   - League sheet records scoring=points.
  *   - Week template sheet is present.
  *
  * The admin UI read path and the provisioning mutation both call this single
@@ -782,16 +886,21 @@ function getDoublesProvisioningState(spreadsheet) {
   var league = spreadsheet.getSheetByName('League');
   var clubMembers = spreadsheet.getSheetByName('ClubMembers');
   var weekTemplate = spreadsheet.getSheetByName(WEEK_TEMPLATE_SHEET_NAME);
+  var expected = getLeagueRules(LEAGUE_ID_DOUBLES);
   var leagueFormat = readLeagueFormat(league);
-  var leagueFormatMatches = leagueFormat === LEAGUE_FORMAT_DOUBLES;
+  var leagueFormatMatches = leagueFormat === expected.format;
+  var leagueScoring = readLeagueScoring(league);
+  var leagueScoringMatches = leagueScoring === expected.scoring;
 
   return {
-    provisioned: !!(league && clubMembers && weekTemplate && leagueFormatMatches),
+    provisioned: !!(league && clubMembers && weekTemplate && leagueFormatMatches && leagueScoringMatches),
     league_present: !!league,
     club_members_present: !!clubMembers,
     week_template_present: !!weekTemplate,
     league_format: leagueFormat,
-    league_format_matches: leagueFormatMatches
+    league_format_matches: leagueFormatMatches,
+    scoring: leagueScoring,
+    scoring_matches: leagueScoringMatches
   };
 }
 
@@ -872,43 +981,79 @@ function readLeagueFormat(sheet) {
 }
 
 /**
- * Whether a ClubMembers header row matches a format. A doubles roster
- * provisioned by an earlier version may still carry the optional, now-unused
- * season_points column, so both the bare schema and the schema plus
+ * Reads the scoring stored on the League sheet, or null when absent.
+ */
+function readLeagueScoring(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  var headers = getSheetHeaders(sheet);
+  var scoringCol = headers.indexOf('scoring');
+  if (scoringCol === -1) return null;
+  var value = sheet.getRange(2, scoringCol + 1).getValue();
+  return value === '' || value === null || value === undefined ? null : value;
+}
+
+/**
+ * Whether a League header row matches the expected metadata schema for a
+ * (format, scoring) pair. The current 17-column layout is required; the two
+ * pre-migration layouts (bare 15-column singles, 16-column doubles) are also
+ * accepted as "known but un-migrated" so the topology check does not fail on a
+ * sheet the gated extension has not reached yet.
+ */
+function leagueHeadersMatch(headers, format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  if (arraysEqual(headers, getLeagueSheetHeaders(rules.format, rules.scoring))) return true;
+  if (rules.format === LEAGUE_FORMAT_SINGLES && arraysEqual(headers, LEAGUE_SHEET_HEADERS)) return true;
+  if (rules.format === LEAGUE_FORMAT_DOUBLES &&
+      arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(['league_format']))) return true;
+  return false;
+}
+
+/**
+ * Whether a ClubMembers header row matches a (format, scoring) pair. A doubles
+ * roster provisioned by an earlier version may still carry the optional,
+ * now-unused season_points column, so both the bare schema and the schema plus
  * season_points are accepted there. Totals are aggregated live and never read
  * that column.
  */
-function clubMemberHeadersMatch(headers, format) {
-  if (format === LEAGUE_FORMAT_DOUBLES) {
-    return arraysEqual(headers, CLUB_MEMBER_HEADERS) ||
-      arraysEqual(headers, CLUB_MEMBER_HEADERS_DOUBLES);
+function clubMemberHeadersMatch(headers, format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  if (rules.usesPoints) {
+    return arraysEqual(headers, getClubMemberHeaders(rules.format, rules.scoring)) ||
+      arraysEqual(headers, CLUB_MEMBER_HEADERS);
   }
   return arraysEqual(headers, CLUB_MEMBER_HEADERS);
 }
 
 /**
- * Inspects a spreadsheet against the expected topology/headers for a format.
- * Returns a plain report object suitable for logging or tests.
+ * Inspects a spreadsheet against the expected topology/headers for a
+ * (format, scoring) pair. Returns a plain report object suitable for logging or
+ * tests.
  */
-function inspectSpreadsheetTopology(spreadsheet, format) {
+function inspectSpreadsheetTopology(spreadsheet, format, scoring) {
+  var rules = rulesForEnums(format, scoring);
   var league = spreadsheet.getSheetByName('League');
   var club = spreadsheet.getSheetByName('ClubMembers');
   var template = spreadsheet.getSheetByName(WEEK_TEMPLATE_SHEET_NAME);
+  var leagueFormat = readLeagueFormat(league);
+  var leagueScoring = readLeagueScoring(league);
 
   return {
     sheet_names: spreadsheet.getSheets().map(function(s) { return s.getName(); }),
     league: {
       present: !!league,
-      headers_match: arraysEqual(getSheetHeaders(league), getLeagueSheetHeaders(format)),
-      league_format: readLeagueFormat(league)
+      headers_match: leagueHeadersMatch(getSheetHeaders(league), rules.format, rules.scoring),
+      league_format: leagueFormat,
+      league_format_matches: leagueFormat === rules.format,
+      scoring: leagueScoring,
+      scoring_matches: leagueScoring === rules.scoring
     },
     club_members: {
       present: !!club,
-      headers_match: clubMemberHeadersMatch(getSheetHeaders(club), format)
+      headers_match: clubMemberHeadersMatch(getSheetHeaders(club), rules.format, rules.scoring)
     },
     week_template: {
       present: !!template,
-      headers_match: arraysEqual(getSheetHeaders(template), getWeeklyRecordHeaders(format))
+      headers_match: arraysEqual(getSheetHeaders(template), getWeeklyRecordHeaders(rules.format, rules.scoring))
     }
   };
 }
@@ -978,32 +1123,27 @@ function isWeeklyRecordHeaderRow(headers) {
 }
 
 /**
- * The full known weekly column set for a format. Used to flag a sheet that
- * carries a column the migration does not recognize.
+ * The full known weekly column set for a (format, scoring) pair. Used to flag a
+ * sheet that carries a column the migration does not recognize. The tag
+ * columns remain known until the gated destructive drop removes them.
  */
-function weeklyColumnsKnownForFormat(format) {
-  return format === LEAGUE_FORMAT_DOUBLES
-    ? WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES
-    : WEEKLY_RECORD_HEADERS_LEGACY;
+function weeklyColumnsKnownForFormat(format, scoring) {
+  return weeklyRecordColumnPool(format, scoring);
 }
 
 /**
- * Human-first groups for a format, in promotion order.
+ * Human-first groups for a (format, scoring) pair, in promotion order. Pair and
+ * points groups follow the capabilities, so a future format x scoring league
+ * promotes the columns it actually carries.
  */
-function weeklyHumanFirstGroups(format) {
-  if (format === LEAGUE_FORMAT_DOUBLES) {
-    return [
-      WEEKLY_RECORD_NAME_HEADERS,
-      WEEKLY_RECORD_PAIR_HEADERS,
-      WEEKLY_RECORD_SCORE_HEADERS,
-      WEEKLY_RECORD_POINTS_HEADERS
-    ];
-  }
-  return [
-    WEEKLY_RECORD_NAME_HEADERS,
-    WEEKLY_RECORD_SCORE_HEADERS,
-    WEEKLY_RECORD_TAG_HEADERS
-  ];
+function weeklyHumanFirstGroups(format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  var groups = [WEEKLY_RECORD_NAME_HEADERS];
+  if (rules.hasPairs) groups.push(WEEKLY_RECORD_PAIR_HEADERS);
+  groups.push(WEEKLY_RECORD_SCORE_HEADERS);
+  if (rules.usesPoints) groups.push(WEEKLY_RECORD_POINTS_HEADERS);
+  if (rules.usesTags) groups.push(WEEKLY_RECORD_TAG_HEADERS);
+  return groups;
 }
 
 /**
@@ -1035,7 +1175,7 @@ function isWeeklyColumnOrderMigrationAuthorized() {
  * weekly core column that is missing, or a column outside the format's known
  * schema all return an error so the captain can inspect the sheet first.
  */
-function planWeeklyColumnReorder(headers, format) {
+function planWeeklyColumnReorder(headers, format, scoring) {
   if (!headers || headers.length === 0) {
     return { status: 'error', error: 'Weekly header row is empty.' };
   }
@@ -1062,7 +1202,7 @@ function planWeeklyColumnReorder(headers, format) {
     return { status: 'error', error: 'Weekly header row is missing required columns: ' + missing.join(', ') + '.' };
   }
 
-  var known = weeklyColumnsKnownForFormat(format);
+  var known = weeklyColumnsKnownForFormat(format, scoring);
   var unknown = headers.filter(function(h) { return known.indexOf(h) === -1; });
   if (unknown.length > 0) {
     return {
@@ -1071,7 +1211,7 @@ function planWeeklyColumnReorder(headers, format) {
     };
   }
 
-  var target = orderWeeklyHeaders(headers, weeklyHumanFirstGroups(format));
+  var target = orderWeeklyHeaders(headers, weeklyHumanFirstGroups(format, scoring));
   if (arraysEqual(headers, target)) {
     return {
       status: 'already-canonical',
@@ -1173,6 +1313,7 @@ function applyWeeklyColumnReorder(sheet, plan) {
 function migrateWeeklyColumnOrder(spreadsheet, format, options) {
   options = options || {};
   var apply = options.apply === true;
+  var scoring = options.scoring;
   var sheets = spreadsheet.getSheets();
   var plans = [];
   var results = [];
@@ -1193,7 +1334,7 @@ function migrateWeeklyColumnOrder(spreadsheet, format, options) {
     var headers = getSheetHeaders(sheet);
     if (!isWeeklyRecordHeaderRow(headers)) continue;
 
-    var plan = planWeeklyColumnReorder(headers, format);
+    var plan = planWeeklyColumnReorder(headers, format, scoring);
     if (plan.status === 'error') {
       scanError = { sheet_name: sheet.getName(), error: plan.error };
       break;
@@ -1245,14 +1386,16 @@ function migrateWeeklyColumnOrder(spreadsheet, format, options) {
 function handleMigrateWeeklyColumnOrder(data) {
   data = data || {};
   var selector = leagueSelectorFrom(data);
-  var format = resolveLeagueFormat(selector);
+  var rules = getLeagueRules(selector);
+  var format = rules.format;
   var apply = data.apply === true || data.apply === 'true';
   var spreadsheet = resolveSpreadsheet(selector);
 
-  var report = migrateWeeklyColumnOrder(spreadsheet, format, { apply: apply });
+  var report = migrateWeeklyColumnOrder(spreadsheet, rules.format, { apply: apply, scoring: rules.scoring });
   if (report.error) {
     return respond('error', report.error, {
       format: format,
+      scoring: rules.scoring,
       applied: false,
       authorized: report.authorized === true,
       failed_sheet: report.failed_sheet || null
@@ -1268,6 +1411,7 @@ function handleMigrateWeeklyColumnOrder(data) {
 
   return respond('ok', message, {
     format: format,
+    scoring: rules.scoring,
     applied: apply,
     authorized: report.authorized === true,
     sheets_changed: changed,
@@ -1403,10 +1547,10 @@ function handleGetClubMembersStatus(data) {
  */
 function handleCreateClubMembersTab(data) {
   const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
-  const format = resolveLeagueFormat(leagueSelectorFrom(data));
+  const rules = getLeagueRules(leagueSelectorFrom(data));
 
   // Ensure League exists first — prerequisite for canonical order
-  ensureLeagueSheetForFormat(spreadsheet, format);
+  ensureLeagueSheetForFormat(spreadsheet, rules.format, rules.scoring);
 
   const existing = spreadsheet.getSheetByName('ClubMembers');
 
@@ -1425,7 +1569,7 @@ function handleCreateClubMembersTab(data) {
   }
 
   const sheet = spreadsheet.insertSheet('ClubMembers');
-  const clubHeaders = getClubMemberHeaders(format);
+  const clubHeaders = getClubMemberHeaders(rules.format, rules.scoring);
   sheet.appendRow(clubHeaders);
 
   const headerRange = sheet.getRange(1, 1, 1, clubHeaders.length);
@@ -1471,13 +1615,13 @@ function handleCreateWeeklyTab(data) {
   const tabName = 'Week ' + leagueDate;
 
   const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
-  const format = resolveLeagueFormat(leagueSelectorFrom(data));
-  const weekHeaders = getWeeklyRecordHeaders(format);
+  const rules = getLeagueRules(leagueSelectorFrom(data));
+  const weekHeaders = getWeeklyRecordHeaders(rules.format, rules.scoring);
 
   // Ensure canonical prerequisite sheets exist in correct order
-  ensureLeagueSheetForFormat(spreadsheet, format);
+  ensureLeagueSheetForFormat(spreadsheet, rules.format, rules.scoring);
 
-  ensureCanonicalSheet(spreadsheet, 'ClubMembers', getClubMemberHeaders(format));
+  ensureCanonicalSheet(spreadsheet, 'ClubMembers', getClubMemberHeaders(rules.format, rules.scoring));
   if (spreadsheet.getSheetByName('ClubMembers').getIndex() !== 2) {
     moveSheetToPosition(spreadsheet, 'ClubMembers', 1);
   }
@@ -1858,7 +2002,7 @@ function handleSubmitCheckIn(data) {
   // --- Step 4: Write the check-in record ---
   var recordTimestamp = new Date().toISOString();
 
-  const weeklyHeaders = getWeeklyRecordHeaders(format);
+  const weeklyHeaders = getWeeklyRecordHeaders(rules.format, rules.scoring);
   const newRecord = new Array(weeklyHeaders.length).fill('');
   newRecord[weeklyHeaders.indexOf('member_number')] = memberId;
   newRecord[weeklyHeaders.indexOf('player_name_snapshot')] = memberRow[playerNameCol] || trimmedName;
@@ -1899,33 +2043,34 @@ function handleSubmitCheckIn(data) {
  * Creates the League sheet if it does not already exist.
  * Initializes with headers and an empty row for future settings.
  * Idempotent: returns alreadyExisted=true if the sheet already exists.
- * Migrates existing 12-column sheets to the current 15-column schema.
+ * Migrates existing 12-column sheets to the 15 base-column schema and records
+ * both metadata enums.
  * Ensures League is at position 1 (first tab).
  */
 function handleCreateLeagueSheet(data) {
   const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
-  const format = resolveLeagueFormat(leagueSelectorFrom(data));
+  const rules = getLeagueRules(leagueSelectorFrom(data));
 
   let migrated = false;
-  if (format === LEAGUE_FORMAT_SINGLES) {
+  if (rules.format === LEAGUE_FORMAT_SINGLES) {
     migrated = migrateOldLeagueSheet(spreadsheet);
   }
 
-  const result = ensureLeagueSheetForFormat(spreadsheet, format);
+  const result = ensureLeagueSheetForFormat(spreadsheet, rules.format, rules.scoring);
   removeDefaultBlankSheet(spreadsheet);
 
   if (migrated) {
     return respond('ok', 'League sheet migrated to new schema.', {
       alreadyExisted: true,
       migrated: true,
-      columns: getLeagueSheetHeaders(format).length
+      columns: getLeagueSheetHeaders(rules.format, rules.scoring).length
     });
   }
 
   if (result.created) {
     return respond('ok', 'League sheet created successfully.', {
       alreadyExisted: false,
-      columns: getLeagueSheetHeaders(format).length
+      columns: getLeagueSheetHeaders(rules.format, rules.scoring).length
     });
   }
 
@@ -2016,6 +2161,21 @@ function handleSaveLeagueSettings(data) {
     const num = Number(raw);
     if (isNaN(num) || num < 0) {
       return respond('error', 'Field "' + field + '" must be a non-negative number.');
+    }
+  }
+
+  // Validate the two metadata enums against their allow-lists. They are
+  // recorded by provisioning and the gated migration, never by this settings
+  // form (the admin renders them read-only), so an unknown value is rejected
+  // rather than silently coerced or written.
+  const enumFields = { league_format: LEAGUE_FORMATS, scoring: SCORING_METHODS };
+  for (const field of Object.keys(enumFields)) {
+    const raw = settings[field];
+    if (raw === '' || raw === null || raw === undefined) {
+      continue;
+    }
+    if (enumFields[field].indexOf(raw) === -1) {
+      return respond('error', 'Field "' + field + '" must be one of: ' + enumFields[field].join(', ') + '.');
     }
   }
 
@@ -3374,9 +3534,15 @@ function buildCommitImportFields(udiscRow) {
  * scorecard columns come from the raw UDisc pair row, but the identity columns
  * are the partner's own name/username/PDGA (the raw row carries the pair name
  * and comma-joined usernames, not one partner's identity).
+ *
+ * The shared builder carries `udisc_ending_tag`; a points-scoring league
+ * settles placement, not bag tags, so that key is dropped here. This is the
+ * capability-gated form of the detag slice that stops the one remaining live
+ * tag write to a doubles sheet. Existing stored values are never touched.
  */
-function buildDoublesImportFields(udiscRow, partner) {
+function buildDoublesImportFields(udiscRow, partner, rules) {
   var fields = buildCommitImportFields(udiscRow);
+  if (!rules || !rules.usesTags) delete fields.udisc_ending_tag;
   fields.udisc_name_import = (partner.name || '').toString().trim();
   fields.udisc_username_import = (partner.username || '').toString().trim();
   fields.udisc_pdga_number_import = (partner.pdga_number || '').toString().trim();
@@ -3690,6 +3856,7 @@ function commitDoublesPairUnderLock(context) {
   var isSolo = context.isSolo;
   var udiscRow = context.udiscRow;
   var now = context.now;
+  var rules = context.rules;
   var claimedPairMember = context.claimedPairMember;
   var memberToPairKey = context.memberToPairKey;
   var createdMemberNumbers = context.createdMemberNumbers;
@@ -3755,7 +3922,7 @@ function commitDoublesPairUnderLock(context) {
     for (var w = 0; w < plan.length; w++) {
       var item = plan[w];
       var memberNumber = item.member_number;
-      var importFields = buildDoublesImportFields(udiscRow, item.partner);
+      var importFields = buildDoublesImportFields(udiscRow, item.partner, rules);
       var pairFields = buildDoublesPairFields(freshHeaders, udiscRow, memberNumber, pairKey, isSolo);
       var fields = {};
       var key;
@@ -3820,7 +3987,8 @@ function commitDoublesPairUnderLock(context) {
  * (must be true), overrides (optional per-row, per-partner member claims).
  */
 function handleCommitUdiscImportDoubles(data) {
-  if (!getLeagueRules(leagueSelectorFrom(data)).hasPairs) {
+  var rules = getLeagueRules(leagueSelectorFrom(data));
+  if (!rules.hasPairs) {
     return respond('error', 'Pair-based UDisc import commit is not available for this league\'s format.');
   }
 
@@ -3991,6 +4159,7 @@ function handleCommitUdiscImportDoubles(data) {
         isSolo: isSolo,
         udiscRow: udiscRow,
         now: now,
+        rules: rules,
         claimedPairMember: claimedPairMember,
         memberToPairKey: memberToPairKey,
         createdMemberNumbers: createdMemberNumbers
