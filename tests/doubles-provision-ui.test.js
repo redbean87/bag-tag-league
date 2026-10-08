@@ -61,3 +61,11 @@ test('singles provisioning controls are unchanged', () => {
   const apply = functionBody('applyLeague');
   assert.match(apply, /provisionCard\.style\.display = rules\.hasPairs \? '' : 'none'/);
 });
+
+test('an unprovisioned sheet with a metadata mismatch banners the drift', () => {
+  const apply = functionBody('applyDoublesProvisioningState');
+  assert.match(apply, /state\.league_format_matches === false/);
+  assert.match(apply, /state\.scoring_matches === false/);
+  assert.match(apply, /Configuration mismatch\./);
+  assert.match(apply, /backfill the metadata columns/);
+});

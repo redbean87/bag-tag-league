@@ -19,6 +19,12 @@ function leagueFormatValue(sheet) {
   return col === -1 ? null : sheet.getRange(2, col + 1).getValue();
 }
 
+function leagueScoringValue(sheet) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const col = headers.indexOf('scoring');
+  return col === -1 ? null : sheet.getRange(2, col + 1).getValue();
+}
+
 test('provisionDoublesWorkbook creates the canonical doubles tabs', () => {
   const h = loadCode();
   const singles = buildSinglesWithRoster(h);
@@ -39,6 +45,7 @@ test('provisionDoublesWorkbook creates the canonical doubles tabs', () => {
     h.bound.LEAGUE_SHEET_HEADERS_DOUBLES
   );
   assert.equal(leagueFormatValue(league), h.bound.LEAGUE_FORMAT_DOUBLES);
+  assert.equal(leagueScoringValue(league), h.bound.SCORING_POINTS);
 
   assert.deepEqual(
     h.fn('getSheetHeaders')(doubles.getSheetByName('ClubMembers')),
@@ -85,13 +92,16 @@ test('inspectSpreadsheetTopology reports matching headers and league_format', ()
   assert.equal(report.league.present, true);
   assert.equal(report.league.headers_match, true);
   assert.equal(report.league.league_format, h.bound.LEAGUE_FORMAT_DOUBLES);
+  assert.equal(report.league.league_format_matches, true);
+  assert.equal(report.league.scoring, h.bound.SCORING_POINTS);
+  assert.equal(report.league.scoring_matches, true);
   assert.equal(report.club_members.present, true);
   assert.equal(report.club_members.headers_match, true);
   assert.equal(report.week_template.present, true);
   assert.equal(report.week_template.headers_match, true);
 });
 
-test('ensureLeagueSheetForFormat adds league_format to an existing 15-column doubles sheet', () => {
+test('ensureLeagueSheetForFormat adds both metadata columns to an existing 15-column doubles sheet', () => {
   const h = loadCode();
   const spreadsheet = h.makeSpreadsheet('existing-doubles');
   const league = spreadsheet.insertSheet('League');
@@ -102,6 +112,21 @@ test('ensureLeagueSheetForFormat adds league_format to an existing 15-column dou
 
   assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
   assert.equal(leagueFormatValue(league), h.bound.LEAGUE_FORMAT_DOUBLES);
+  assert.equal(leagueScoringValue(league), h.bound.SCORING_POINTS);
+});
+
+test('ensureLeagueSheetForFormat extends an existing bare singles sheet to the 17-column schema', () => {
+  const h = loadCode();
+  const spreadsheet = h.makeSpreadsheet('existing-singles');
+  const league = spreadsheet.insertSheet('League');
+  league.appendRow(h.bound.LEAGUE_SHEET_HEADERS); // bare 15-column singles League
+  league.appendRow(new Array(h.bound.LEAGUE_SHEET_HEADERS.length).fill(''));
+
+  h.fn('ensureLeagueSheetForFormat')(spreadsheet, h.bound.LEAGUE_FORMAT_SINGLES);
+
+  assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
+  assert.equal(leagueFormatValue(league), h.bound.LEAGUE_FORMAT_SINGLES);
+  assert.equal(leagueScoringValue(league), h.bound.SCORING_TAGS);
 });
 
 test('handleCreateWeeklyTab writes doubles headers for the doubles spreadsheet', () => {
@@ -194,15 +219,17 @@ test('saving doubles league settings preserves league_format', () => {
 
   const league = doubles.getSheetByName('League');
   assert.equal(leagueFormatValue(league), h.bound.LEAGUE_FORMAT_DOUBLES);
+  assert.equal(leagueScoringValue(league), h.bound.SCORING_POINTS);
 
   const loaded = h.parse(h.fn('handleGetLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES
   }));
   assert.equal(loaded.settings.league_name, 'Doubles League');
   assert.equal(loaded.settings.league_format, h.bound.LEAGUE_FORMAT_DOUBLES);
+  assert.equal(loaded.settings.scoring, h.bound.SCORING_POINTS);
 });
 
-test('singles legacy 12-column League migration still works and adds no league_format', () => {
+test('singles legacy 12-column League migration extends to the 17-column schema', () => {
   const OLD_LEAGUE_HEADERS = [
     'league_name', 'description', 'location', 'schedule', 'contact_information',
     'entry_fee', 'ace_pot_contribution', 'ace_pot_total',
@@ -225,8 +252,11 @@ test('singles legacy 12-column League migration still works and adds no league_f
 
   assert.equal(result.status, 'ok');
   assert.equal(result.migrated, true);
-  assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS);
-  assert.equal(leagueFormatValue(league), null, 'singles must not gain league_format');
+  // Decided 2026-10-08: singles extends to the 17-column schema, so it now
+  // records its format and scoring like doubles.
+  assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
+  assert.equal(leagueFormatValue(league), h.bound.LEAGUE_FORMAT_SINGLES);
+  assert.equal(leagueScoringValue(league), h.bound.SCORING_TAGS);
   assert.equal(league.getRange(2, h.bound.LEAGUE_SHEET_HEADERS.indexOf('league_name') + 1).getValue(), 'Legacy Singles');
   assert.equal(league.getRange(2, h.bound.LEAGUE_SHEET_HEADERS.indexOf('ace_pot_current_total') + 1).getValue(), 42);
 });

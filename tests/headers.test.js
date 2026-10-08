@@ -121,20 +121,25 @@ test('doubles weekly headers lead with names, pair, score, then points', () => {
   );
 });
 
-test('singles league headers are unchanged (15 columns, no league_format)', () => {
+test('the singles League base columns stay 15 and carry no metadata', () => {
   const h = loadCode();
 
   assert.equal(h.bound.LEAGUE_SHEET_HEADERS.length, 15);
   assert.ok(!h.bound.LEAGUE_SHEET_HEADERS.includes('league_format'));
+  assert.ok(!h.bound.LEAGUE_SHEET_HEADERS.includes('scoring'));
 });
 
-test('doubles league headers append league_format', () => {
+test('both League schemas extend the base with league_format and scoring', () => {
   const h = loadCode();
-  const doubles = h.bound.LEAGUE_SHEET_HEADERS_DOUBLES;
+  const extended = h.bound.LEAGUE_SHEET_HEADERS_DOUBLES;
+  const base = h.bound.LEAGUE_SHEET_HEADERS;
 
-  assert.equal(doubles.length, h.bound.LEAGUE_SHEET_HEADERS.length + 1);
-  assert.deepEqual(doubles.slice(0, h.bound.LEAGUE_SHEET_HEADERS.length), h.bound.LEAGUE_SHEET_HEADERS);
-  assert.equal(doubles[doubles.length - 1], 'league_format');
+  // Decided 2026-10-08: singles sheets extend to 17 columns, so both formats
+  // carry the same two metadata columns. 15 base + 2 metadata = 17.
+  assert.equal(extended.length, base.length + 2);
+  assert.deepEqual(extended.slice(0, base.length), base);
+  assert.deepEqual(extended.slice(base.length), ['league_format', 'scoring']);
+  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 17);
 });
 
 test('format-specific header accessors gate singles versus doubles', () => {
@@ -144,8 +149,37 @@ test('format-specific header accessors gate singles versus doubles', () => {
 
   assert.deepEqual(weekHeaders(h.bound.LEAGUE_FORMAT_SINGLES), h.bound.WEEKLY_RECORD_HEADERS);
   assert.deepEqual(weekHeaders(h.bound.LEAGUE_FORMAT_DOUBLES), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
-  assert.deepEqual(leagueHeaders(h.bound.LEAGUE_FORMAT_SINGLES), h.bound.LEAGUE_SHEET_HEADERS);
+  // Both leagues now carry both metadata columns.
+  assert.deepEqual(leagueHeaders(h.bound.LEAGUE_FORMAT_SINGLES), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
   assert.deepEqual(leagueHeaders(h.bound.LEAGUE_FORMAT_DOUBLES), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
+});
+
+test('the header builders accept (format, scoring) and keep day-one schemas', () => {
+  const h = loadCode();
+  const weekHeaders = h.fn('getWeeklyRecordHeaders');
+  const clubHeaders = h.fn('getClubMemberHeaders');
+
+  // Explicit capability pairs resolve to exactly today's schemas.
+  assert.deepEqual(
+    weekHeaders(h.bound.LEAGUE_FORMAT_SINGLES, h.bound.SCORING_TAGS),
+    h.bound.WEEKLY_RECORD_HEADERS
+  );
+  assert.deepEqual(
+    weekHeaders(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_POINTS),
+    h.bound.WEEKLY_RECORD_HEADERS_DOUBLES
+  );
+  assert.deepEqual(
+    clubHeaders(h.bound.LEAGUE_FORMAT_SINGLES, h.bound.SCORING_TAGS),
+    h.bound.CLUB_MEMBER_HEADERS
+  );
+  assert.deepEqual(
+    clubHeaders(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_POINTS),
+    h.bound.CLUB_MEMBER_HEADERS_DOUBLES
+  );
+
+  // An omitted scoring falls back to the format's default.
+  assert.deepEqual(weekHeaders(h.bound.LEAGUE_FORMAT_DOUBLES), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  assert.deepEqual(clubHeaders(h.bound.LEAGUE_FORMAT_DOUBLES), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
 });
 
 test('readers resolve weekly fields by header name after the reorder', () => {

@@ -15,7 +15,7 @@ topology. It is deterministic and safe to run repeatedly:
 
 | Tab | Headers | Notes |
 |-----|---------|-------|
-| `League` | 15 singles columns + `league_format` | Settings row records `league_format=doubles` |
+| `League` | 15 base columns + `league_format` + `scoring` | Settings row records `league_format=doubles` and `scoring=points` |
 | `ClubMembers` | The 8 singles columns + `season_points` | One row per member, `member_number` preserved; `season_points` caches the live season total |
 | `Week template` | The 54 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
 | `Week YYYY-MM-DD` | The 54 human-first weekly columns | Created on demand for a league date |
@@ -34,8 +34,11 @@ headers are ordered
 human-first: names, then pair linkage and score/points where they apply, then
 the remaining columns in their historical relative order. Header names and
 counts are unchanged, so every reader that resolves a column by name keeps
-working; only the physical order changed. The singles `LEAGUE_SHEET_HEADERS`
-(15) are unchanged.
+working; only the physical order changed. The 15 base `LEAGUE_SHEET_HEADERS`
+columns are unchanged; both leagues append the same two metadata columns
+(`league_format` and `scoring`), so a League sheet is 17 columns. The registry
+is authoritative for routing and the sheet records the same values as
+per-spreadsheet confirmation; a mismatch is reported, never auto-corrected.
 
 ## Roster seeding
 
@@ -103,6 +106,7 @@ following are true, as reported by the single backend helper
 - the `ClubMembers` sheet is present;
 - the `League` sheet is present;
 - the `League` sheet records `league_format=doubles`;
+- the `League` sheet records `scoring=points`;
 - the `Week template` sheet is present.
 
 When provisioned, the admin card disables the button and shows **"Doubles
@@ -119,6 +123,6 @@ doubles spreadsheet only.
 `npm test` runs the unit suite with Node's built-in test runner. The suite uses
 an in-memory SpreadsheetApp fake, so it needs no Google credentials and performs
 no live sheet writes. It covers spreadsheet routing/defaults, `league_format`
-gating, header constants, doubles provisioning, roster-seed `member_number`
-preservation, the doubles provisioning-state guard, and the disabled
-re-provisioning UI.
+and `scoring` gating, header constants, doubles provisioning, roster-seed
+`member_number` preservation, the doubles provisioning-state guard, and the
+disabled re-provisioning UI.

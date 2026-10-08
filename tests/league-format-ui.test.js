@@ -211,3 +211,51 @@ test('an unknown league or value normalizes to the registry defaults', () => {
   assert.equal(LeagueFormat.normalizeFormat(LeagueFormat.FORMATS.DOUBLES), LeagueFormat.FORMATS.DOUBLES);
   assert.equal(LeagueFormat.normalizeScoring(LeagueFormat.SCORING.POINTS), LeagueFormat.SCORING.POINTS);
 });
+
+// ─── Slice 7: picker badges, read-only settings, mismatch banner ─────────────
+
+function functionBody(html, name) {
+  const start = html.indexOf('function ' + name + '(');
+  assert.notEqual(start, -1, 'expected function ' + name);
+  const next = html.indexOf('\n    function ', start + 1);
+  return html.slice(start, next === -1 ? undefined : next);
+}
+
+test('the admin picker renders format and scoring badges from the registry record', () => {
+  const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
+
+  assert.match(html, /id="leagueBadges"/);
+  assert.match(html, /function renderLeagueBadges\(league, rules\)/);
+  assert.match(html, /badgeElement\(league\.format\)/);
+  assert.match(html, /badgeElement\(league\.scoring, 'scoring'\)/);
+
+  const apply = functionBody(html, 'applyLeague');
+  assert.match(apply, /renderLeagueBadges\(league, rules\)/);
+});
+
+test('the settings form shows format and scoring read-only', () => {
+  const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
+
+  assert.match(html, /id="settingsFormat"/);
+  assert.match(html, /id="settingsScoring"/);
+  assert.match(html, /function renderReadonlySettings\(rules\)/);
+  assert.match(html, /Format and scoring are set when a league is provisioned/);
+
+  // The settings payload never carries the metadata enums for writing.
+  const save = functionBody(html, 'saveLeagueSettings');
+  assert.doesNotMatch(save, /league_format:\s*document\.getElementById/);
+  assert.doesNotMatch(save, /scoring:\s*document\.getElementById/);
+});
+
+test('the admin banners a stored format/scoring that disagrees with the registry', () => {
+  const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
+
+  assert.match(html, /id="leagueMismatch"/);
+  assert.match(html, /function applyLeagueSettingsMismatch\(settings\)/);
+  const mismatch = functionBody(html, 'applyLeagueSettingsMismatch');
+  assert.match(mismatch, /settings\.league_format !== rules\.format/);
+  assert.match(mismatch, /settings\.scoring !== rules\.scoring/);
+
+  const load = functionBody(html, 'loadLeagueSettings');
+  assert.match(load, /applyLeagueSettingsMismatch\(s\)/);
+});

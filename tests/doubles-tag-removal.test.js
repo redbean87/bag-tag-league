@@ -160,7 +160,7 @@ test('the tag-based import preview refuses a points-scoring league instead of ex
 
   assert.equal(result.status, 'error');
   assert.match(result.message, /scoring method/i);
-  assert.doesNotMatch(JSON.stringify(result), /in_tag|out_tag|current_tag/);
+  assert.doesNotMatch(JSON.stringify(result), /(in_tag|out_tag|udisc_ending_tag|current_tag)/);
 });
 
 test('doubles import preview exposes no tag fields', () => {
@@ -175,7 +175,109 @@ test('doubles import preview exposes no tag fields', () => {
 
   assert.equal(result.status, 'ok');
   const serialized = JSON.stringify(result);
-  assert.doesNotMatch(serialized, /in_tag|out_tag|current_tag/);
+  assert.doesNotMatch(serialized, /(in_tag|out_tag|udisc_ending_tag|current_tag)/);
+});
+
+// ─── Doubles: the live tag write is stopped (detag Slice 2) ──────────────────
+
+test('buildDoublesImportFields drops the inherited udisc_ending_tag for a points league', () => {
+  const h = loadCode();
+  const build = h.fn('buildDoublesImportFields');
+  const rules = h.fn('getLeagueRules')(h.bound.LEAGUE_ID_DOUBLES);
+
+  const fields = build(
+    { name: 'Damon Forsythe & Brad Stevenson', bag_tag_at_end: 99 },
+    { name: 'Damon Forsythe', username: 'damon31', pdga_number: '151236' },
+    rules
+  );
+
+  assert.equal('udisc_ending_tag' in fields, false);
+  assert.equal(fields.udisc_name_import, 'Damon Forsythe');
+  assert.equal(fields.score, '');
+});
+
+test('buildDoublesImportFields keeps udisc_ending_tag for a tag-scoring league', () => {
+  const h = loadCode();
+  const build = h.fn('buildDoublesImportFields');
+  const rules = h.fn('rulesForEnums')(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_TAGS);
+
+  const fields = build(
+    { bag_tag_at_end: 99 },
+    { name: 'A', username: 'a', pdga_number: '' },
+    rules
+  );
+
+  assert.equal(fields.udisc_ending_tag, 99);
+});
+
+test('a doubles import commit stores no udisc_ending_tag value', () => {
+  const h = loadCode();
+  const { doubles, week } = buildDoubles(h, [
+    [3, 'Damon Forsythe', 'damon31', '151236', 7, true, '', ''],
+    [7, 'Brad Stevenson', 'donjoses', '85170', 5, true, '', '']
+  ]);
+
+  const result = h.parse(h.fn('handleCommitUdiscImportDoubles')({
+    league: h.bound.LEAGUE_ID_DOUBLES,
+    league_date: WEEK_DATE,
+    approved: true,
+    rows: [{
+      name: 'Damon Forsythe & Brad Stevenson',
+      usernames: 'damon31,donjoses',
+      position: 1,
+      position_raw: 1,
+      round_total_score: 41,
+      bag_tag_at_end: 99
+    }]
+  }));
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.results[0].status, 'committed');
+
+  const headers = week.rows[0];
+  const endTagCol = headers.indexOf('udisc_ending_tag');
+  const dataRows = week.rows.slice(1);
+  assert.ok(dataRows.length >= 2, 'both partners get a weekly row');
+  dataRows.forEach((row) => {
+    assert.equal(row[endTagCol], '', 'the doubles commit must not write udisc_ending_tag');
+  });
+  assert.equal(doubles.getSheetByName('Week ' + WEEK_DATE).rows[0][endTagCol], 'udisc_ending_tag');
+});
+
+test('a re-import leaves any stored udisc_ending_tag value untouched', () => {
+  const h = loadCode();
+  const { week } = buildDoubles(h, [
+    [3, 'Damon Forsythe', 'damon31', '151236', 7, true, '', ''],
+    [7, 'Brad Stevenson', 'donjoses', '85170', 5, true, '', '']
+  ]);
+
+  const headers = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
+  const pairKey = 'dubs:' + WEEK_DATE + ':u:damon31+u:donjoses';
+  const existing = new Array(headers.length).fill('');
+  existing[headers.indexOf('member_number')] = 3;
+  existing[headers.indexOf('player_name_snapshot')] = 'Damon Forsythe';
+  existing[headers.indexOf('udisc_username_snapshot')] = 'damon31';
+  existing[headers.indexOf('pair_key')] = pairKey;
+  existing[headers.indexOf('udisc_ending_tag')] = 'stale';
+  week.appendRow(existing);
+
+  const result = h.parse(h.fn('handleCommitUdiscImportDoubles')({
+    league: h.bound.LEAGUE_ID_DOUBLES,
+    league_date: WEEK_DATE,
+    approved: true,
+    rows: [{
+      name: 'Damon Forsythe & Brad Stevenson',
+      usernames: 'damon31,donjoses',
+      position: 1,
+      position_raw: 1,
+      round_total_score: 41,
+      bag_tag_at_end: 99
+    }]
+  }));
+
+  assert.equal(result.status, 'ok');
+  const updated = week.rows.slice(1).find((row) => row[headers.indexOf('member_number')] === 3);
+  assert.equal(updated[headers.indexOf('udisc_ending_tag')], 'stale', 'stored value must be preserved, never rewritten');
 });
 
 // ─── Singles: tag lifecycle byte-identical regression ────────────────────────
