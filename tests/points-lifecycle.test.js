@@ -1,11 +1,13 @@
 'use strict';
 
-// Doubles points lifecycle — scoring rule, format gating, write-free preview,
-// re-runnable confirmation, idempotent finalization, season_points cache, and
-// end-to-end calculate -> confirm -> finalize.
+// Doubles points — compute-at-commit plus live summation.
 //
-// All tests run in a Node VM with an in-memory Sheets fake. No Google
-// credentials, network access, or live sheet writes are involved.
+// The import commit is the only points boundary: it derives each participant's
+// weekly_points from their committed team placement. Standings/member totals
+// aggregate those committed values live at read time, with no confirm/finalize
+// step and no cached season total. All tests run in a Node VM with an in-memory
+// Sheets fake. No Google credentials, network access, or live sheet writes are
+// involved.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -14,12 +16,8 @@ const { loadCode } = require('./helpers/load-code');
 const WEEK_DATE = '2026-10-05';
 const WEEK_TWO = '2026-10-12';
 
-function headersOf(h) {
-  return h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
-}
-
 function makeWeekRow(h, fields) {
-  const headers = headersOf(h);
+  const headers = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
   const row = new Array(headers.length).fill('');
   for (const key in fields) {
     const index = headers.indexOf(key);
@@ -40,20 +38,16 @@ function buildDoubles(h, weeks, clubRows) {
   (clubRows || [
     [1, 'Ann', 'ann', '', '', true, '', ''],
     [2, 'Bob', 'bob', '', '', true, '', ''],
-    [3, 'Cid', 'cid', '', '', true, '', ''],
-    [4, 'Dee', 'dee', '', '', true, '', ''],
-    [5, 'Eve', 'eve', '', '', true, '', ''],
-    [6, 'Fay', 'fay', '', '', true, '', ''],
-    [7, 'Gus', 'gus', '', '', true, '', ''],
-    [8, 'Hal', 'hal', '', '', true, '', ''],
-    [9, 'Ivy', 'ivy', '', '', true, '', ''],
-    [10, 'Jon', 'jon', '', '', true, '', '']
+    [3, 'Damon Forsythe', 'damon31', '151236', '', true, '', ''],
+    [7, 'Brad Stevenson', 'donjoses', '85170', '', true, '', ''],
+    [10, 'Jon', 'jon', '', '', true, '', ''],
+    [21, 'Alice Smith', 'alice', '', '', true, '', '']
   ]).forEach((row) => club.appendRow(row));
 
   const weekSheets = {};
   Object.keys(weeks || {}).forEach((date) => {
     const week = doubles.insertSheet('Week ' + date);
-    week.appendRow(headersOf(h));
+    week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
     (weeks[date] || []).forEach((row) => week.appendRow(row));
     weekSheets[date] = week;
   });
@@ -70,30 +64,31 @@ function call(h, action, extra) {
   return h.parse(h.fn(action)(payload));
 }
 
+function commit(h, rows, extra) {
+  return call(h, 'handleCommitUdiscImportDoubles', { rows, approved: true, ...extra });
+}
+
 function column(sheet, header) {
   const index = sheet.rows[0].indexOf(header);
   return sheet.rows.slice(1).map((row) => row[index]);
 }
 
-function rowByMember(sheet, memberNumber) {
-  const memberIndex = sheet.rows[0].indexOf('member_number');
-  return sheet.rows.slice(1).find((row) => row[memberIndex] === memberNumber);
-}
+const PAIR_ROW = {
+  name: 'Damon Forsythe & Brad Stevenson',
+  usernames: 'damon31,donjoses',
+  position: 1,
+  position_raw: 1,
+  round_total_score: 41
+};
 
-// A representative week: a 1st, a 2nd, a tied 2nd, a 4th, a solo 3rd, and a
-// blank-position participant. Seven rows model three pairs + two solos.
+// A representative committed week: a 1st pair, a 3rd pair, and a 4th solo.
 function sampleWeek(h) {
   return [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 3, player_name_snapshot: 'Cid', pair_key: 'p2', team_position: '2', team_position_raw: 2, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 4, player_name_snapshot: 'Dee', pair_key: 'p2', team_position: '2', team_position_raw: 2, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 5, player_name_snapshot: 'Eve', pair_key: 'p3', team_position: 'T2', team_position_raw: 2, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 6, player_name_snapshot: 'Fay', pair_key: 'p3', team_position: 'T2', team_position_raw: 2, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 7, player_name_snapshot: 'Gus', pair_key: 'p4', team_position: '4', team_position_raw: 4, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 8, player_name_snapshot: 'Hal', pair_key: 'p4', team_position: '4', team_position_raw: 4, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 9, player_name_snapshot: 'Ivy', pair_key: '', team_position: '', team_position_raw: '', weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 10, player_name_snapshot: 'Jon', pair_key: '', team_position: '3', team_position_raw: 3, weekly_points: '', weekly_points_status: 'pending' })
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2 }),
+    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2 }),
+    makeWeekRow(h, { member_number: 3, player_name_snapshot: 'Cid', pair_key: 'p2', team_position: '3', team_position_raw: 3, weekly_points: 1 }),
+    makeWeekRow(h, { member_number: 7, player_name_snapshot: 'Dee', pair_key: 'p2', team_position: '3', team_position_raw: 3, weekly_points: 1 }),
+    makeWeekRow(h, { member_number: 10, player_name_snapshot: 'Jon', pair_key: '', team_position: '4', team_position_raw: 4, weekly_points: 0.5 })
   ];
 }
 
@@ -114,354 +109,256 @@ test('doublesPointsForPosition implements 1st/2nd/3rd/participation', () => {
   assert.equal(points('T2'), 0.5, 'a non-numeric placement falls back to participation');
 });
 
-// ─── Preview (write-free) ────────────────────────────────────────────────────
+// ─── Import commit is the single points boundary ─────────────────────────────
 
-test('calculatePoints scores each row, pairs identically, and flags blanks', () => {
+test('the import commit writes points from the committed placement', () => {
+  const h = loadCode();
+  const week = buildDoubles(h, { [WEEK_DATE]: [] }).weekSheets[WEEK_DATE];
+
+  const result = commit(h, [PAIR_ROW]);
+  assert.equal(result.status, 'ok');
+  assert.equal(result.summary.committed, 1);
+
+  // Both partners of a 1st-place team receive the full placement value.
+  assert.deepEqual(column(week, 'weekly_points'), [2, 2]);
+  // The retired status column is cleared, not used as a lifecycle gate.
+  assert.deepEqual(column(week, 'weekly_points_status'), ['', '']);
+});
+
+test('a solo receives the full placement value at commit', () => {
+  const h = loadCode();
+  const week = buildDoubles(h, { [WEEK_DATE]: [] }).weekSheets[WEEK_DATE];
+
+  commit(h, [{ name: 'Alice Smith', username: 'alice', position: 3, position_raw: 3 }]);
+  assert.deepEqual(column(week, 'weekly_points'), [1]);
+  assert.equal(column(week, 'pair_key')[0], '');
+});
+
+test('a blank placement at commit earns the 0.5 showing-up credit', () => {
+  const h = loadCode();
+  const week = buildDoubles(h, { [WEEK_DATE]: [] }).weekSheets[WEEK_DATE];
+
+  commit(h, [{ name: 'Alice Smith', username: 'alice', position: '', position_raw: '' }]);
+  assert.deepEqual(column(week, 'weekly_points'), [0.5]);
+});
+
+test('re-committing the same import is idempotent and never accumulates points', () => {
+  const h = loadCode();
+  const week = buildDoubles(h, { [WEEK_DATE]: [] }).weekSheets[WEEK_DATE];
+
+  const first = commit(h, [PAIR_ROW]);
+  assert.equal(first.summary.committed, 1);
+  const firstPoints = column(week, 'weekly_points').slice();
+
+  // The existing import identity mechanism reconciles the same pair in place:
+  // the second commit succeeds without appending a duplicate row.
+  const second = commit(h, [PAIR_ROW]);
+  assert.equal(second.status, 'ok');
+  assert.deepEqual(column(week, 'weekly_points'), firstPoints);
+  assert.equal(column(week, 'weekly_points').length, 2, 'no duplicate rows');
+
+  // The same row twice in one payload reports the replay explicitly.
+  const batch = commit(h, [PAIR_ROW, PAIR_ROW]);
+  assert.equal(batch.summary.already_committed, 1);
+  assert.equal(batch.results[1].status, 'already_committed');
+  assert.equal(column(week, 'weekly_points').length, 2, 'still no duplicate rows');
+});
+
+// ─── Read-only results view ──────────────────────────────────────────────────
+
+test('calculatePoints is write-free and derives points from placement', () => {
   const h = loadCode();
   const { weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
+  const week = weekSheets[WEEK_DATE];
+  const before = week.rows.map((row) => row.slice());
 
   const result = call(h, 'handleCalculatePoints');
   assert.equal(result.status, 'ok');
   assert.equal(result.writes, false);
+  assert.equal(result.summary.total_rows, 5);
 
   const byMember = {};
   result.players.forEach((p) => { byMember[p.member_number] = p; });
-
   assert.equal(byMember[1].points, 2);
   assert.equal(byMember[2].points, 2, 'both 1st-place partners receive 2');
-  assert.equal(byMember[3].points, 1.5);
-  assert.equal(byMember[4].points, 1.5, 'both 2nd-place partners receive 1.5');
-  assert.equal(byMember[5].points, 1.5, 'a tied 2nd keeps the 2nd-place value');
-  assert.equal(byMember[6].points, 1.5);
-  assert.equal(byMember[7].points, 0.5, '4th is showing-up credit');
-  assert.equal(byMember[10].points, 1, 'a solo earns the full 3rd-place value');
-  assert.equal(byMember[9].points, 0.5, 'a blank placement earns 0.5');
-  assert.equal(byMember[9].has_position, false);
-  assert.equal(byMember[9].warning !== null, true, 'a blank placement is flagged');
+  assert.equal(byMember[3].points, 1);
+  assert.equal(byMember[10].points, 0.5, 'a solo earns the full 4th-place value');
 
-  assert.equal(result.warnings.length, 1);
-  assert.equal(result.warnings[0].member_number, 9);
-  assert.equal(result.warnings[0].code, 'blank_position');
-
-  assert.equal(result.summary.total_rows, 10);
-  assert.equal(result.summary.warnings, 1);
+  assert.deepEqual(week.rows, before, 'the results view never writes to the sheet');
 });
 
-test('calculatePoints never writes points or status', () => {
+test('calculatePoints flags a blank placement with a warning', () => {
   const h = loadCode();
-  const { weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-  const week = weekSheets[WEEK_DATE];
+  buildDoubles(h, { [WEEK_DATE]: [
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '', team_position_raw: '', weekly_points: 0.5 })
+  ] });
 
-  call(h, 'handleCalculatePoints');
-
-  assert.deepEqual(column(week, 'weekly_points'), new Array(10).fill(''));
-  assert.deepEqual(column(week, 'weekly_points_status'), new Array(10).fill('pending'));
+  const result = call(h, 'handleCalculatePoints');
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].code, 'blank_position');
+  assert.equal(result.players[0].points, 0.5);
+  assert.equal(result.players[0].has_position, false);
 });
 
-// ─── Format gating ───────────────────────────────────────────────────────────
+test('the results view exposes no lifecycle state or status', () => {
+  const h = loadCode();
+  buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
+
+  const result = call(h, 'handleCalculatePoints');
+  assert.equal('week_state' in result, false);
+  for (const player of result.players) {
+    assert.equal('stored_status' in player, false);
+    assert.equal('voided' in player, false);
+  }
+  assert.equal('finalized' in result.summary, false);
+  assert.equal('confirmed' in result.summary, false);
+  assert.equal('pending' in result.summary, false);
+});
+
+test('calculatePoints groups the results by pair_key with pair/place/points', () => {
+  const h = loadCode();
+  buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
+
+  const result = call(h, 'handleCalculatePoints');
+  assert.equal(result.pairs.length, 3, 'one group per pair plus one solo');
+
+  const p1 = result.pairs.find((pair) => pair.pair_key === 'p1');
+  assert.equal(p1.label, 'Ann / Bob');
+  assert.equal(p1.place, '1');
+  assert.equal(p1.points, 2);
+  assert.equal(p1.members.length, 2);
+
+  const solo = result.pairs.find((pair) => pair.pair_key === '');
+  assert.equal(solo.label, 'Jon');
+  assert.equal(solo.members.length, 1);
+  assert.equal(solo.points, 0.5);
+});
+
+// ─── Format gating + tag isolation ───────────────────────────────────────────
 
 test('points handlers refuse the singles format before opening a sheet', () => {
-  for (const action of ['handleCalculatePoints', 'handleConfirmPoints', 'handleFinalizePoints']) {
-    const h = loadCode();
-    const result = h.parse(h.fn(action)({
-      league_date: WEEK_DATE,
-      spreadsheetId: h.bound.SPREADSHEET_ID
-    }));
-
-    assert.equal(result.status, 'error', action + ' should refuse singles');
-    assert.match(result.message, /doubles/i, action + ' should name the doubles league');
-    assert.deepEqual(h.openByIdCalls, [], action + ' must not open the singles spreadsheet');
-  }
-});
-
-test('tag handlers still refuse doubles while points handlers accept it', () => {
   const h = loadCode();
-  buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-
-  const tag = h.parse(h.fn('handleCalculateTags')({
+  const result = h.parse(h.fn('handleCalculatePoints')({
     league_date: WEEK_DATE,
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES
+    spreadsheetId: h.bound.SPREADSHEET_ID
   }));
-  assert.equal(tag.status, 'error');
 
-  const points = call(h, 'handleCalculatePoints');
-  assert.equal(points.status, 'ok');
-});
-
-// ─── Confirmation ────────────────────────────────────────────────────────────
-
-test('confirmPoints writes weekly points and marks rows confirmed', () => {
-  const h = loadCode();
-  const { weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-  const week = weekSheets[WEEK_DATE];
-
-  const result = call(h, 'handleConfirmPoints');
-  assert.equal(result.status, 'ok');
-  assert.equal(result.players_updated, 10);
-
-  assert.deepEqual(column(week, 'weekly_points'), [2, 2, 1.5, 1.5, 1.5, 1.5, 0.5, 0.5, 0.5, 1]);
-  assert.deepEqual(column(week, 'weekly_points_status'), new Array(10).fill('confirmed'));
-});
-
-test('confirmPoints is re-runnable before finalization without double counting', () => {
-  const h = loadCode();
-  const { weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-  const week = weekSheets[WEEK_DATE];
-
-  call(h, 'handleConfirmPoints');
-  const first = column(week, 'weekly_points').slice();
-
-  // A stale write that a naive increment would build on.
-  const pointsIndex = week.rows[0].indexOf('weekly_points');
-  week.rows[1][pointsIndex] = 99;
-
-  const second = call(h, 'handleConfirmPoints');
-  assert.equal(second.status, 'ok');
-  assert.deepEqual(column(week, 'weekly_points'), first, 're-confirm reconciles, never accumulates');
-  assert.deepEqual(column(week, 'weekly_points_status'), new Array(10).fill('confirmed'));
-});
-
-test('confirmPoints refuses a finalized week before any write', () => {
-  const h = loadCode();
-  const { weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-  const week = weekSheets[WEEK_DATE];
-
-  call(h, 'handleConfirmPoints');
-  call(h, 'handleFinalizePoints');
-
-  const before = column(week, 'weekly_points').slice();
-  const result = call(h, 'handleConfirmPoints');
   assert.equal(result.status, 'error');
-  assert.match(result.message, /finalized/i);
-  assert.deepEqual(column(week, 'weekly_points'), before, 'a finalized week is not rewritten');
+  assert.match(result.message, /doubles/i);
+  assert.deepEqual(h.openByIdCalls, [], 'must not open the singles spreadsheet');
 });
 
-// ─── Finalization + season cache ─────────────────────────────────────────────
-
-test('finalizePoints requires confirmation first', () => {
-  const h = loadCode();
-  buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-
-  const result = call(h, 'handleFinalizePoints');
-  assert.equal(result.status, 'error');
-  assert.match(result.message, /confirm/i);
-});
-
-test('finalizePoints marks the week finalized and fills the season cache', () => {
-  const h = loadCode();
-  const { club, weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-  const week = weekSheets[WEEK_DATE];
-
-  call(h, 'handleConfirmPoints');
-  const result = call(h, 'handleFinalizePoints');
-  assert.equal(result.status, 'ok');
-
-  assert.deepEqual(column(week, 'weekly_points_status'), new Array(10).fill('finalized'));
-  assert.equal(result.season_points_updated, 10);
-
-  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2);
-  assert.equal(rowByMember(club, 3)[club.rows[0].indexOf('season_points')], 1.5);
-  assert.equal(rowByMember(club, 7)[club.rows[0].indexOf('season_points')], 0.5);
-  assert.equal(rowByMember(club, 9)[club.rows[0].indexOf('season_points')], 0.5);
-  assert.equal(rowByMember(club, 10)[club.rows[0].indexOf('season_points')], 1);
-
-  // The doubles topology report accepts the roster with or without the
-  // optional season_points cache column.
-  assert.equal(
-    h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS, 'doubles'),
-    true
-  );
-  assert.equal(
-    h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS_DOUBLES, 'doubles'),
-    true
-  );
-  assert.equal(
-    h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS_DOUBLES, 'singles'),
-    false,
-    'singles never grows a season_points column'
-  );
-});
-
-test('re-finalizing is idempotent and does not corrupt cached totals', () => {
-  const h = loadCode();
-  const { club, weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-  const week = weekSheets[WEEK_DATE];
-
-  call(h, 'handleConfirmPoints');
-  call(h, 'handleFinalizePoints');
-  const firstTotals = column(club, 'season_points').slice();
-
-  const second = call(h, 'handleFinalizePoints');
-  assert.equal(second.status, 'ok');
-  assert.deepEqual(column(club, 'season_points'), firstTotals, 'season cache stays stable');
-  assert.deepEqual(column(week, 'weekly_points_status'), new Array(10).fill('finalized'));
-});
-
-test('confirming a week refreshes the season cache before finalization', () => {
-  const h = loadCode();
-  const { club } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-
-  const confirm = call(h, 'handleConfirmPoints');
-  assert.equal(confirm.status, 'ok');
-  assert.equal(confirm.season_points_updated, 10);
-
-  // The cache already carries the confirmed week, so an unfinalized week is
-  // no longer missing from the stored season total.
-  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2);
-  assert.equal(rowByMember(club, 7)[club.rows[0].indexOf('season_points')], 0.5);
-});
-
-test('season cache sums calculated, confirmed, and finalized weeks', () => {
-  const h = loadCode();
-  const weekOne = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2, weekly_points_status: 'calculated' }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '2', team_position_raw: 2, weekly_points: 1.5, weekly_points_status: 'calculated' })
-  ];
-  const weekTwo = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p2', team_position: '1', team_position_raw: 1, weekly_points: 2, weekly_points_status: 'confirmed' }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p2', team_position: '3', team_position_raw: 3, weekly_points: 1, weekly_points_status: 'confirmed' })
-  ];
-  const weekThree = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p3', team_position: '2', team_position_raw: 2, weekly_points: 1.5, weekly_points_status: 'finalized' }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p3', team_position: '4', team_position_raw: 4, weekly_points: 0.5, weekly_points_status: 'finalized' })
-  ];
-  const { club } = buildDoubles(h, {
-    [WEEK_DATE]: weekOne,
-    [WEEK_TWO]: weekTwo,
-    ['2026-10-19']: weekThree
-  });
-
-  // Confirm and finalize two real lifecycle weeks; the calculated week stays
-  // as-is and must still be included.
-  call(h, 'handleConfirmPoints', { league_date: WEEK_TWO });
-  call(h, 'handleFinalizePoints', { league_date: WEEK_TWO });
-  call(h, 'handleConfirmPoints', { league_date: '2026-10-19' });
-  call(h, 'handleFinalizePoints', { league_date: '2026-10-19' });
-
-  // Ann: calculated 2 + confirmed 2 + finalized 1.5; Bob: calculated 1.5 +
-  // confirmed 1 + finalized 0.5.
-  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 5.5);
-  assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 3);
-});
-
-test('season cache sums finalized weeks across the season', () => {
-  const h = loadCode();
-  const weekOne = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: '', weekly_points_status: 'pending' })
-  ];
-  const weekTwo = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p2', team_position: '2', team_position_raw: 2, weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p2', team_position: '3', team_position_raw: 3, weekly_points: '', weekly_points_status: 'pending' })
-  ];
-  const { club } = buildDoubles(h, { [WEEK_DATE]: weekOne, [WEEK_TWO]: weekTwo });
-
-  call(h, 'handleConfirmPoints');
-  call(h, 'handleFinalizePoints');
-  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2);
-  assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 2);
-
-  call(h, 'handleConfirmPoints', { league_date: WEEK_TWO });
-  // A confirmed-but-unfinalized week already counts in the stored cache.
-  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2 + 1.5);
-  assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 2 + 1);
-
-  call(h, 'handleFinalizePoints', { league_date: WEEK_TWO });
-
-  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('season_points')], 2 + 1.5);
-  assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('season_points')], 2 + 1);
-});
-
-// Regression for the cache path: a cache left behind by the old finalized-only
-// aggregation must be overwritten with the all-weeks total, never served stale.
-test('a stale finalized-only cache is rebuilt to include confirmed weeks', () => {
-  const h = loadCode();
-  const weekOne = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, weekly_points: 2, weekly_points_status: 'finalized' })
-  ];
-  const weekTwo = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p2', team_position: '1', team_position_raw: 1, weekly_points: '', weekly_points_status: 'pending' })
-  ];
-  const { club } = buildDoubles(h, { [WEEK_DATE]: weekOne, [WEEK_TWO]: weekTwo });
-
-  // Materialize the cache column, then seed it with a value produced before the
-  // all-weeks change: it only saw the finalized week (2) and ignored week two.
-  h.fn('ensureSeasonPointsColumn')(club);
-  const seasonCol = club.rows[0].indexOf('season_points');
-  const memberCol = club.rows[0].indexOf('member_number');
-  const annRow = club.rows.find((row) => row[memberCol] === 1);
-  annRow[seasonCol] = 2;
-
-  call(h, 'handleConfirmPoints', { league_date: WEEK_TWO });
-
-  // Week two now confirms for 2, so the cache is 4 rather than the stale 2.
-  assert.equal(rowByMember(club, 1)[seasonCol], 4);
-});
-
-// ─── Tag isolation ───────────────────────────────────────────────────────────
-
-test('the points chain never touches tag state', () => {
+test('the points path never touches tag state', () => {
   const h = loadCode();
   const clubRows = [
     [1, 'Ann', 'ann', '', 5, true, '', ''],
     [2, 'Bob', 'bob', '', 9, true, '', '']
   ];
   const week = [
-    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, in_tag: '', out_tag: '', weekly_points: '', weekly_points_status: 'pending' }),
-    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '1', team_position_raw: 1, in_tag: '', out_tag: '', weekly_points: '', weekly_points_status: 'pending' })
+    makeWeekRow(h, { member_number: 1, player_name_snapshot: 'Ann', pair_key: 'p1', team_position: '1', team_position_raw: 1, in_tag: '', out_tag: '', weekly_points: 2 }),
+    makeWeekRow(h, { member_number: 2, player_name_snapshot: 'Bob', pair_key: 'p1', team_position: '1', team_position_raw: 1, in_tag: '', out_tag: '', weekly_points: 2 })
   ];
   const { club, weekSheets } = buildDoubles(h, { [WEEK_DATE]: week }, clubRows);
   const sheet = weekSheets[WEEK_DATE];
 
   call(h, 'handleCalculatePoints');
-  call(h, 'handleConfirmPoints');
-  call(h, 'handleFinalizePoints');
+  commit(h, [PAIR_ROW]);
 
-  assert.deepEqual(column(sheet, 'in_tag'), ['', '']);
-  assert.deepEqual(column(sheet, 'out_tag'), ['', '']);
-  assert.equal(rowByMember(club, 1)[club.rows[0].indexOf('current_tag')], 5);
-  assert.equal(rowByMember(club, 2)[club.rows[0].indexOf('current_tag')], 9);
+  assert.ok(column(sheet, 'in_tag').every((value) => value === ''));
+  assert.ok(column(sheet, 'out_tag').every((value) => value === ''));
+  assert.equal(club.rows.find((r) => r[0] === 1)[4], 5);
+  assert.equal(club.rows.find((r) => r[0] === 2)[4], 9);
 });
 
-// ─── End-to-end lifecycle ────────────────────────────────────────────────────
+// ─── Live summation (standings + member totals) ──────────────────────────────
 
-test('full lifecycle: preview -> confirm -> re-confirm -> finalize -> re-finalize', () => {
+test('sumSeasonPointsByMember sums committed weekly points across every week', () => {
   const h = loadCode();
-  const { club, weekSheets } = buildDoubles(h, { [WEEK_DATE]: sampleWeek(h) });
-  const week = weekSheets[WEEK_DATE];
-  const pointsCol = week.rows[0].indexOf('weekly_points');
-  const statusCol = week.rows[0].indexOf('weekly_points_status');
+  buildDoubles(h, {
+    [WEEK_DATE]: [
+      makeWeekRow(h, { member_number: 1, weekly_points: 2 }),
+      makeWeekRow(h, { member_number: 2, weekly_points: 1.5 })
+    ],
+    [WEEK_TWO]: [
+      makeWeekRow(h, { member_number: 1, weekly_points: 1.5 }),
+      makeWeekRow(h, { member_number: 2, weekly_points: 1 })
+    ]
+  });
 
-  // 1. Preview: no writes, points plus warnings.
-  const preview = call(h, 'handleCalculatePoints');
-  assert.equal(preview.status, 'ok');
-  assert.equal(preview.players.length, 10);
-  assert.equal(preview.warnings.length, 1);
-  assert.ok(week.rows.slice(1).every((row) => row[pointsCol] === '' && row[statusCol] === 'pending'));
+  const totals = h.fn('sumSeasonPointsByMember')(h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES));
+  assert.equal(totals[1], 3.5);
+  assert.equal(totals[2], 2.5);
+});
 
-  // 2. Confirm: weekly points + confirmed state.
-  const confirmOne = call(h, 'handleConfirmPoints');
-  assert.equal(confirmOne.players_updated, 10);
-  assert.ok(week.rows.slice(1).every((row) => row[statusCol] === 'confirmed'));
+test('uncommitted rows with no weekly_points are excluded from every total', () => {
+  const h = loadCode();
+  buildDoubles(h, {
+    [WEEK_DATE]: [
+      // Committed: points persisted at import commit.
+      makeWeekRow(h, { member_number: 1, team_position_raw: 1, weekly_points: 2 }),
+      // Uncommitted: a placement exists but the commit never persisted points.
+      makeWeekRow(h, { member_number: 2, team_position_raw: 1, weekly_points: '' })
+    ]
+  });
 
-  // 3. Re-confirm: no duplication.
-  const snapshot = week.rows.slice(1).map((row) => row[pointsCol]);
-  const confirmTwo = call(h, 'handleConfirmPoints');
-  assert.equal(confirmTwo.status, 'ok');
-  assert.deepEqual(week.rows.slice(1).map((row) => row[pointsCol]), snapshot);
+  const totals = h.fn('sumSeasonPointsByMember')(h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES));
+  assert.equal(totals[1], 2);
+  assert.equal(totals[2], undefined, 'a row without committed points contributes nothing');
 
-  // 4. Finalize: finalized state + season cache.
-  const finalizeOne = call(h, 'handleFinalizePoints');
-  assert.equal(finalizeOne.status, 'ok');
-  assert.ok(week.rows.slice(1).every((row) => row[statusCol] === 'finalized'));
-  const season = column(club, 'season_points').slice();
+  const listing = call(h, 'handleListClubMembers', { league: h.bound.LEAGUE_ID_DOUBLES });
+  const byNumber = {};
+  listing.members.forEach((m) => { byNumber[m.member_number] = m; });
+  assert.equal(byNumber[1].season_points, 2);
+  assert.equal(byNumber[2].season_points, 0);
+});
 
-  // 5. Re-finalize: stable cache.
-  const finalizeTwo = call(h, 'handleFinalizePoints');
-  assert.equal(finalizeTwo.status, 'ok');
-  assert.deepEqual(column(club, 'season_points'), season);
+test('member totals are the live sum of committed rows and ignore status labels', () => {
+  const h = loadCode();
+  buildDoubles(h, {
+    [WEEK_DATE]: [
+      makeWeekRow(h, { member_number: 1, weekly_points: 2, weekly_points_status: 'pending' }),
+      makeWeekRow(h, { member_number: 2, weekly_points: 1.5, weekly_points_status: 'finalized' }),
+      makeWeekRow(h, { member_number: 3, weekly_points: 1, weekly_points_status: 'confirmed' })
+    ]
+  });
 
-  // 6. Tags untouched.
-  assert.deepEqual(column(week, 'in_tag'), new Array(10).fill(''));
-  assert.deepEqual(column(week, 'out_tag'), new Array(10).fill(''));
+  const listing = call(h, 'handleListClubMembers', { league: h.bound.LEAGUE_ID_DOUBLES });
+  const byNumber = {};
+  listing.members.forEach((m) => { byNumber[m.member_number] = m; });
+  // The status label is display-only history; the committed value is summed.
+  assert.equal(byNumber[1].season_points, 2);
+  assert.equal(byNumber[2].season_points, 1.5);
+  assert.equal(byNumber[3].season_points, 1);
+});
+
+test('the season total is computed live and needs no cached season_points column', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, {
+    [WEEK_DATE]: [
+      makeWeekRow(h, { member_number: 1, weekly_points: 2 }),
+      makeWeekRow(h, { member_number: 2, weekly_points: 0.5 })
+    ]
+  });
+
+  // The roster has no season_points column at all.
+  assert.equal(club.rows[0].indexOf('season_points'), -1);
+
+  const listing = call(h, 'handleListClubMembers', { league: h.bound.LEAGUE_ID_DOUBLES });
+  const byNumber = {};
+  listing.members.forEach((m) => { byNumber[m.member_number] = m; });
+  assert.equal(byNumber[1].season_points, 2);
+  assert.equal(byNumber[2].season_points, 0.5);
+
+  // Reading totals never creates a cache column.
+  assert.equal(club.rows[0].indexOf('season_points'), -1);
+});
+
+test('a roster that still carries the legacy season_points column is accepted', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, { [WEEK_DATE]: [] });
+  club.rows[0].push('season_points');
+
+  assert.equal(h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS_DOUBLES, 'doubles'), true);
+  assert.equal(h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS, 'doubles'), true);
+  assert.equal(h.fn('clubMemberHeadersMatch')(h.bound.CLUB_MEMBER_HEADERS_DOUBLES, 'singles'), false);
 });

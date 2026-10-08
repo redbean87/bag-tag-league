@@ -1,8 +1,8 @@
 'use strict';
 
-// Member season totals — the doubles member listing surfaces style `season_points`
-// summed from every played week (calculated, confirmed, or finalized). Singles
-// member data is unchanged.
+// Member season totals — the doubles member listing surfaces `season_points`,
+// the live sum of every committed week's weekly_points. There is no status
+// filter and no cached season total. Singles member data is unchanged.
 //
 // All tests run in a Node VM with an in-memory Sheets fake. No Google
 // credentials, network access, or live sheet writes are involved.
@@ -52,9 +52,9 @@ function list(h, league) {
   return h.parse(h.fn('handleListClubMembers')({ league: league }));
 }
 
-// ─── Aggregation from finalized weeklies ─────────────────────────────────────
+// ─── Live aggregation from committed weeklies ────────────────────────────────
 
-test('season_points sums a member across multiple finalized weeks', () => {
+test('season_points sums a member across multiple committed weeks', () => {
   const h = loadCode();
   buildDoubles(h, {
     [WEEK_ONE]: [
@@ -76,7 +76,7 @@ test('season_points sums a member across multiple finalized weeks', () => {
   assert.equal(byNumber[2].season_points, 1.5);
 });
 
-test('season_points sums a member across calculated, confirmed, and finalized weeks', () => {
+test('season_points sums committed points whatever legacy status labels exist', () => {
   const h = loadCode();
   buildDoubles(h, {
     [WEEK_ONE]: [
@@ -94,14 +94,14 @@ test('season_points sums a member across calculated, confirmed, and finalized we
   result.members.forEach((m) => { byNumber[m.member_number] = m; });
 
   assert.equal(result.status, 'ok');
-  // Member 1: calculated 2 + confirmed 1.5; member 2: confirmed 1 + finalized 0.5.
+  // Member 1: 2 + 1.5; member 2: 1 + 0.5. Status labels never filter a total.
   assert.equal(byNumber[1].season_points, 3.5);
   assert.equal(byNumber[2].season_points, 1.5);
 });
 
-// Regression: a confirmed-but-not-finalized week used to be excluded because
-// the aggregation filtered on the finalized status alone.
-test('a confirmed week counts even though it is not finalized', () => {
+// Regression: the aggregation used to filter on a lifecycle status, so a week
+// that had not reached the final state was excluded.
+test('a committed week counts whatever legacy status label it carries', () => {
   const h = loadCode();
   buildDoubles(h, {
     [WEEK_ONE]: [
@@ -115,16 +115,16 @@ test('a confirmed week counts even though it is not finalized', () => {
   result.members.forEach((m) => { byNumber[m.member_number] = m; });
 
   assert.equal(byNumber[1].season_points, 2);
-  assert.equal(byNumber[2].season_points, 9, 'confirmed points must count toward the season total');
+  assert.equal(byNumber[2].season_points, 9, 'committed points count regardless of a legacy status');
 });
 
-test('pending and non-point-bearing weeks do not contribute', () => {
+test('rows without committed weekly_points do not contribute', () => {
   const h = loadCode();
   buildDoubles(h, {
     [WEEK_ONE]: [
-      makeWeekRow(h, { member_number: 1, weekly_points: 2, weekly_points_status: 'finalized' }),
+      makeWeekRow(h, { member_number: 1, weekly_points: 2 }),
       makeWeekRow(h, { member_number: 2, weekly_points: '', weekly_points_status: 'confirmed' }),
-      makeWeekRow(h, { member_number: 3, weekly_points: 9, weekly_points_status: 'pending' })
+      makeWeekRow(h, { member_number: 3, weekly_points: '', weekly_points_status: 'pending' })
     ]
   });
 
@@ -133,11 +133,11 @@ test('pending and non-point-bearing weeks do not contribute', () => {
   result.members.forEach((m) => { byNumber[m.member_number] = m; });
 
   assert.equal(byNumber[1].season_points, 2);
-  assert.equal(byNumber[2].season_points, 0, 'a point-bearing status with no points contributes nothing');
-  assert.equal(byNumber[3].season_points, 0, 'pending points must not count');
+  assert.equal(byNumber[2].season_points, 0, 'a blank weekly_points was never committed');
+  assert.equal(byNumber[3].season_points, 0, 'a blank weekly_points was never committed');
 });
 
-test('weekly status labels stay visible in the weekly records', () => {
+test('a committed week sums from the live weekly_points, ignoring the status label', () => {
   const h = loadCode();
   buildDoubles(h, {
     [WEEK_ONE]: [
@@ -146,13 +146,6 @@ test('weekly status labels stay visible in the weekly records', () => {
       makeWeekRow(h, { member_number: 3, weekly_points: 0.5, weekly_points_status: 'finalized' })
     ]
   });
-
-  const week = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES).getSheetByName('Week ' + WEEK_ONE);
-  const statusCol = week.getDataRange().getValues()[0].indexOf('weekly_points_status');
-  assert.deepEqual(
-    week.getDataRange().getValues().slice(1).map((row) => row[statusCol]),
-    ['calculated', 'confirmed', 'finalized']
-  );
 
   const result = list(h, h.bound.LEAGUE_ID_DOUBLES);
   const byNumber = {};

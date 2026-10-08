@@ -487,25 +487,19 @@
       <div id="finalizeRoundResult" class="status hidden"></div>
     </div>
 
-    <!-- 9b. Points (doubles mode only) -->
+    <!-- 9b. Points results (doubles mode only) -->
     <div class="card" id="pointsCalcCard" style="display:none;">
-      <h2>Points</h2>
+      <h2>Points Results</h2>
       <p class="help-text">
         Doubles weekly points: 1st=2, 2nd=1.5, 3rd=1, every other
         participant=0.5. Both partners receive the same value and a solo
-        receives the full value. Preview is write-free. Confirm writes
-        <code>weekly_points</code> (re-runnable before finalization). Finalize
-        locks the week and updates the season cache; Unlock reopens a finalized
-        week. The week roster is grouped by <code>pair_key</code> and can be
-        re-keyed or voided before confirmation. Tag data is never touched.
+        receives the full value. Points are computed from the committed
+        placement when the UDisc import is committed, and this panel is a
+        read-only view of those committed results. Season totals are summed
+        live from them, so there is nothing to confirm or finalize. Tag data
+        is never touched.
       </p>
-      <div class="field-group">
-        <p style="margin:0;">Week state: <strong id="pointsWeekState">not loaded</strong></p>
-      </div>
-      <button type="button" id="btnPreviewPoints" onclick="previewPoints()">Preview Points</button>
-      <button type="button" id="btnConfirmPoints" onclick="confirmPoints()" style="background:#34a853;">Confirm Points</button>
-      <button type="button" id="btnFinalizePoints" onclick="finalizePoints()" style="background:#6a1b9a;">Finalize Points</button>
-      <button type="button" id="btnUnlockPoints" onclick="unlockPoints()" style="background:#f9ab00; display:none;">Unlock Points</button>
+      <button type="button" id="btnLoadPoints" onclick="loadPoints()">Load Results</button>
       <div id="pointsPreview" style="display:none;"></div>
       <div id="pointsResult" class="status hidden"></div>
     </div>
@@ -622,7 +616,7 @@
       var provisionCard = document.getElementById('doublesProvisionCard');
       if (provisionCard) provisionCard.style.display = isDoubles ? '' : 'none';
 
-      // Points are doubles-only; hide the points tooling for singles.
+      // Points are doubles-only; hide the read-only results tooling for singles.
       var pointsCard = document.getElementById('pointsCalcCard');
       if (pointsCard) pointsCard.style.display = isDoubles ? '' : 'none';
 
@@ -641,8 +635,8 @@
 
     /**
      * Loads the doubles member list with each member's season total. The
-     * server sums every played week (calculated, confirmed, or finalized), so
-     * an unfinalized week still counts.
+     * server sums every committed week live, so no confirm/finalize step can
+     * hold a total back.
      */
     async function loadMembers() {
       var card = document.getElementById('membersCard');
@@ -932,9 +926,8 @@
     function onActiveLeagueDateChange() {
       updateGating();
       clearStaleSectionData();
-      // Doubles has a per-week points pipeline; load its roster/state as soon
-      // as a known week is selected so pair management is available without a
-      // separate click. Preview is write-free.
+      // Doubles results are read-only; load them as soon as a known week is
+      // selected so the committed points are visible without a separate click.
       if (getLeagueFormat() === 'doubles' && sheetExistsForDate(getActiveLeagueDate())) {
         refreshPointsPanel();
       }
@@ -957,9 +950,7 @@
         pointsPreview.style.display = 'none';
         pointsPreview.innerHTML = '';
       }
-      pointsPanelData = null;
       clearPointsStatus();
-      updatePointsControls(null);
     }
 
     async function createWeeklyTab(e) {
@@ -1967,6 +1958,10 @@
         }
 
         renderDoublesCommitResult(data);
+        // Points are computed at commit, so refresh the live results view and
+        // the member totals that sum them.
+        loadMembers();
+        refreshPointsPanel();
         log('Doubles import committed for ' + leagueDate);
       } catch (err) {
         setUdiscImportStatus('error', '<strong>Commit failed:</strong> ' + err.message);
@@ -2379,15 +2374,12 @@
       }
     }
 
-    // ─── Doubles Points (Preview / Confirm / Finalize / Unlock) ───────────
-    // The panel is the admin surface for the doubles points lifecycle. It
-    // renders the week roster grouped by pair_key (server-grouped as `pairs`,
-    // with a client fallback) plus a Pair/Place/Points/Status results table.
-    // Preview is write-free; Confirm/Finalize/Unlock and the pre-confirm
-    // re-key/void actions are format-gated server actions. Every render is
-    // driven from the server's `week_state`, so the controls can never open a
-    // transition the backend would refuse.
-    var pointsPanelData = null;
+    // ─── Doubles Points Results (read-only) ──────────────────────────────
+    // The panel is the admin surface for the doubles results. Points are
+    // computed from each committed placement at import commit, so this view is
+    // read-only: it renders the week roster grouped by pair_key (server-grouped
+    // as `pairs`, with a client fallback) plus a Pair/Place/Points results
+    // table. There is no confirm/finalize/status control anywhere in the flow.
 
     function setPointsStatus(type, html) {
       var el = document.getElementById('pointsResult');
@@ -2403,51 +2395,8 @@
       el.innerHTML = '';
     }
 
-    function pointsStatusLabel(status) {
-      if (status === 'finalized') return 'finalized';
-      if (status === 'confirmed') return 'confirmed';
-      if (status === 'voided') return 'voided';
-      return 'preview';
-    }
-
-    function pointsWeekStateLabel(state) {
-      if (state === 'finalized') return 'finalized (locked)';
-      if (state === 'confirmed') return 'confirmed';
-      if (state === 'preview') return 'preview';
-      return 'not loaded';
-    }
-
-    function currentPointsState() {
-      return pointsPanelData ? pointsPanelData.week_state : null;
-    }
-
-    // Enables only the transitions the server will accept for the current
-    // week state and points the disabled controls at the reason.
-    function updatePointsControls(state) {
-      var previewBtn = document.getElementById('btnPreviewPoints');
-      var confirmBtn = document.getElementById('btnConfirmPoints');
-      var finalizeBtn = document.getElementById('btnFinalizePoints');
-      var unlockBtn = document.getElementById('btnUnlockPoints');
-      var stateEl = document.getElementById('pointsWeekState');
-
-      if (stateEl) stateEl.textContent = pointsWeekStateLabel(state);
-      if (previewBtn) previewBtn.disabled = false;
-      if (confirmBtn) {
-        confirmBtn.disabled = state === 'finalized';
-        confirmBtn.title = state === 'finalized' ? 'Unlock the week before re-confirming.' : '';
-      }
-      if (finalizeBtn) {
-        finalizeBtn.disabled = state !== 'confirmed';
-        finalizeBtn.title = state === 'preview' ? 'Confirm points before finalizing.' : '';
-      }
-      if (unlockBtn) {
-        unlockBtn.style.display = state === 'finalized' ? '' : 'none';
-        unlockBtn.disabled = state !== 'finalized';
-      }
-    }
-
     // Client-side mirror of the server's pair grouping, used only if an older
-    // response omits `pairs`. Keeps the roster renderable from `players` alone.
+    // response omits `pairs`. Keeps the results renderable from `players` alone.
     function groupPointsPairsClient(players) {
       var order = [];
       var map = {};
@@ -2463,41 +2412,31 @@
         var names = [];
         var place = '';
         var hasPosition = false;
-        var points = 0;
-        var anyVoided = false;
-        var hasFinalized = false;
-        var hasConfirmed = false;
+        var points = null;
         for (var m = 0; m < members.length; m++) {
           var member = members[m];
           names.push(member.player_name || ('#' + member.member_number));
-          if (member.voided) anyVoided = true;
           if (!hasPosition && member.has_position) {
             hasPosition = true;
             place = member.team_position !== '' ? member.team_position : String(member.team_position_raw);
           }
-          if (!member.voided) points = member.points;
-          if (member.stored_status === 'finalized') hasFinalized = true;
-          if (member.stored_status === 'confirmed') hasConfirmed = true;
+          if (points === null) points = member.points;
         }
-        var status = hasFinalized ? 'finalized' : (hasConfirmed ? 'confirmed' : 'preview');
-        if (anyVoided) { status = 'voided'; points = 0; }
         pairs.push({
           pair_key: map[order[g]].pair_key,
           label: names.join(' / '),
           members: members,
           place: place,
           has_position: hasPosition,
-          points: points,
-          status: status,
-          voided: anyVoided
+          points: points === null ? 0 : points
         });
       }
       return pairs;
     }
 
-    // Write-free load of the week's points preview. Shared by the Preview
-    // button, the date-change auto-load, and every post-action refresh.
-    async function fetchPointsPreviewData() {
+    // Write-free read of the week's committed results. Shared by the Load
+    // button, the date-change auto-load, and every post-commit refresh.
+    async function fetchPointsResults() {
       var response = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
@@ -2514,33 +2453,33 @@
       var leagueDate = getActiveLeagueDate();
       if (!leagueDate) return null;
       try {
-        var data = await fetchPointsPreviewData();
+        var data = await fetchPointsResults();
         if (data.status === 'ok') {
-          renderPointsPreview(data);
+          renderPointsResults(data);
           return data;
         }
-        log('ERROR loading points panel: ' + data.message);
+        log('ERROR loading points results: ' + data.message);
       } catch (err) {
-        log('FAILED to load points panel: ' + err.message);
+        log('FAILED to load points results: ' + err.message);
       }
       return null;
     }
 
-    async function previewPoints() {
+    async function loadPoints() {
       var leagueDate = getActiveLeagueDate();
       if (!leagueDate) {
         setPointsStatus('error', '<strong>Please select a league date.</strong>');
         return;
       }
 
-      var btn = document.getElementById('btnPreviewPoints');
-      if (btn) { btn.disabled = true; btn.textContent = 'Calculating...'; }
+      var btn = document.getElementById('btnLoadPoints');
+      if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
       clearPointsStatus();
       document.getElementById('pointsPreview').style.display = 'none';
-      log('Calculating doubles points for ' + leagueDate);
+      log('Loading doubles points results for ' + leagueDate);
 
       try {
-        var data = await fetchPointsPreviewData();
+        var data = await fetchPointsResults();
 
         if (data.status !== 'ok') {
           setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
@@ -2548,27 +2487,20 @@
           return;
         }
 
-        renderPointsPreview(data);
-        log('Points preview generated for ' + leagueDate + ': ' + data.summary.total_rows + ' rows, ' + data.summary.warnings + ' warning(s). No writes made.');
+        renderPointsResults(data);
+        log('Points results loaded for ' + leagueDate + ': ' + data.summary.total_rows + ' rows, ' + data.summary.warnings + ' warning(s). No writes made.');
       } catch (err) {
-        setPointsStatus('error', '<strong>Preview failed:</strong> ' + err.message);
-        log('FAILED to preview points: ' + err.message);
+        setPointsStatus('error', '<strong>Load failed:</strong> ' + err.message);
+        log('FAILED to load points results: ' + err.message);
       } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Preview Points'; }
-        updatePointsControls(currentPointsState());
+        if (btn) { btn.disabled = false; btn.textContent = 'Load Results'; }
       }
     }
 
-    function renderPointsPreview(data) {
-      pointsPanelData = data;
+    function renderPointsResults(data) {
       var previewEl = document.getElementById('pointsPreview');
       var players = data.players || [];
       var pairs = data.pairs || groupPointsPairsClient(players);
-      var state = data.week_state || 'preview';
-      var editable = state === 'preview';
-      var disableAttr = editable ? '' : ' disabled';
-
-      updatePointsControls(state);
 
       var html = '';
       html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
@@ -2576,8 +2508,7 @@
       html += '<p>Weekly tab: <strong>' + escHtml(data.tab_name) + '</strong></p>';
       html += '<p>Participants: <strong>' + data.summary.total_rows + '</strong></p>';
       html += '<p>Blank-position warnings: <strong>' + data.summary.warnings + '</strong></p>';
-      html += '<p>Voided rows: <strong>' + (data.summary.voided || 0) + '</strong></p>';
-      html += '<p style="color:#888; font-style:italic;">Preview only. No writes were made.</p>';
+      html += '<p style="color:#888; font-style:italic;">Read-only. Points are computed from each committed placement at import commit.</p>';
       html += '</div>';
 
       if (data.warnings.length > 0) {
@@ -2594,24 +2525,13 @@
       }
       for (var p = 0; p < pairs.length; p++) {
         var pair = pairs[p];
-        var firstMember = pair.members.length ? pair.members[0] : null;
-        html += '<div class="pair-group" data-pair-key="' + escHtml(pair.pair_key) + '" data-member-number="' + (firstMember ? firstMember.member_number : '') + '" style="border:1px solid #ddd; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">';
-        html += '<div style="margin-bottom:0.5rem;">';
-        html += '<strong>Pair:</strong> <code class="pair-key-label">' + escHtml(pair.pair_key || '(solo)') + '</code>';
-        if (editable && pair.pair_key) {
-          html += ' <input type="text" class="rekey-input" value="' + escHtml(pair.pair_key) + '"' + disableAttr + ' style="width:14rem;">';
-          html += ' <button type="button" class="btn-rekey" onclick="rekeyPointsPair(this)"' + disableAttr + '>Re-key</button>';
-        }
-        if (editable) {
-          html += ' <button type="button" class="btn-void" onclick="voidPointsPair(this, ' + (pair.voided ? 'false' : 'true') + ')"' + disableAttr + '>' + (pair.voided ? 'Unvoid' : 'Void') + '</button>';
-        }
-        html += '</div>';
+        html += '<div class="pair-group" data-pair-key="' + escHtml(pair.pair_key) + '" style="border:1px solid #ddd; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">';
+        html += '<div style="margin-bottom:0.5rem;"><strong>Pair:</strong> <code class="pair-key-label">' + escHtml(pair.pair_key || '(solo)') + '</code></div>';
         html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem;">';
         html += '<tr style="background:#f0f0f0;">';
         html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Player</th>';
         html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Place</th>';
         html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Points</th>';
-        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Status</th>';
         html += '</tr>';
         for (var m = 0; m < pair.members.length; m++) {
           var pl = pair.members[m];
@@ -2622,8 +2542,7 @@
           html += '<tr>';
           html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(pl.player_name) + ' <span style="color:#888;">(#' + pl.member_number + ')</span></td>';
           html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + place + '</td>';
-          html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + pl.points + '</td>';
-          html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + pointsStatusLabel(pl.stored_status) + warningMark + '</td>';
+          html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + pl.points + warningMark + '</td>';
           html += '</tr>';
         }
         html += '</table>';
@@ -2636,7 +2555,6 @@
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Pair</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Place</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Points</th>';
-      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Status</th>';
       html += '</tr>';
       for (var r = 0; r < pairs.length; r++) {
         var result = pairs[r];
@@ -2647,245 +2565,12 @@
         html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(result.label) + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + resultPlace + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + result.points + '</td>';
-        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + pointsStatusLabel(result.status) + '</td>';
         html += '</tr>';
       }
       html += '</table>';
 
       previewEl.innerHTML = html;
       previewEl.style.display = '';
-    }
-
-    async function confirmPoints() {
-      var leagueDate = getActiveLeagueDate();
-      if (!leagueDate) {
-        setPointsStatus('error', '<strong>Please select a league date.</strong>');
-        return;
-      }
-
-      var btn = document.getElementById('btnConfirmPoints');
-      if (btn) { btn.disabled = true; btn.textContent = 'Writing...'; }
-      setPointsStatus('pending', 'Writing weekly points...');
-      log('Confirming doubles points for ' + leagueDate);
-
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({
-            action: 'confirmPoints', spreadsheetId: getSpreadsheetId(),
-            league_date: leagueDate
-          })
-        });
-        var data = await response.json();
-
-        if (data.status === 'ok') {
-          setPointsStatus('ok',
-            '<strong>Points confirmed.</strong> ' + data.players_updated +
-            ' rows updated in ' + escHtml(data.tab_name) + '.');
-          log('SUCCESS: Points confirmed. ' + data.players_updated + ' rows updated.');
-          await refreshPointsPanel();
-        } else {
-          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
-          log('ERROR: ' + data.message);
-        }
-      } catch (err) {
-        setPointsStatus('error', '<strong>Write failed:</strong> ' + err.message);
-        log('FAILED to confirm points: ' + err.message);
-      } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Confirm Points'; }
-        updatePointsControls(currentPointsState());
-      }
-    }
-
-    async function finalizePoints() {
-      var leagueDate = getActiveLeagueDate();
-      if (!leagueDate) {
-        setPointsStatus('error', '<strong>Please select a league date.</strong>');
-        return;
-      }
-
-      var btn = document.getElementById('btnFinalizePoints');
-      if (btn) { btn.disabled = true; btn.textContent = 'Finalizing...'; }
-      setPointsStatus('pending', 'Finalizing points and updating the season cache...');
-      log('Finalizing doubles points for ' + leagueDate);
-
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({
-            action: 'finalizePoints', spreadsheetId: getSpreadsheetId(),
-            league_date: leagueDate
-          })
-        });
-        var data = await response.json();
-
-        if (data.status === 'ok') {
-          setPointsStatus('ok',
-            '<strong>Points finalized.</strong> ' + data.players_finalized +
-            ' rows locked in ' + escHtml(data.tab_name) + '; season cache updated for ' +
-            data.season_points_updated + ' member(s).');
-          log('SUCCESS: Points finalized. ' + data.players_finalized + ' rows locked; season cache updated for ' + data.season_points_updated + ' member(s).');
-          await refreshPointsPanel();
-          loadMembers();
-        } else {
-          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
-          log('ERROR: ' + data.message);
-        }
-      } catch (err) {
-        setPointsStatus('error', '<strong>Finalize failed:</strong> ' + err.message);
-        log('FAILED to finalize points: ' + err.message);
-      } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Finalize Points'; }
-        updatePointsControls(currentPointsState());
-      }
-    }
-
-    async function unlockPoints() {
-      var leagueDate = getActiveLeagueDate();
-      if (!leagueDate) {
-        setPointsStatus('error', '<strong>Please select a league date.</strong>');
-        return;
-      }
-
-      var btn = document.getElementById('btnUnlockPoints');
-      if (btn) { btn.disabled = true; btn.textContent = 'Unlocking...'; }
-      setPointsStatus('pending', 'Unlocking the finalized week...');
-      log('Unlocking doubles points for ' + leagueDate);
-
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({
-            action: 'unlockPoints', spreadsheetId: getSpreadsheetId(),
-            league_date: leagueDate
-          })
-        });
-        var data = await response.json();
-
-        if (data.status === 'ok') {
-          setPointsStatus('ok',
-            '<strong>Week unlocked.</strong> ' + data.players_unlocked +
-            ' rows returned to confirmed for re-confirmation.');
-          log('SUCCESS: Week unlocked; ' + data.players_unlocked + ' rows returned to confirmed.');
-          await refreshPointsPanel();
-        } else {
-          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
-          log('ERROR: ' + data.message);
-        }
-      } catch (err) {
-        setPointsStatus('error', '<strong>Unlock failed:</strong> ' + err.message);
-        log('FAILED to unlock points: ' + err.message);
-      } finally {
-        if (btn) { btn.disabled = false; btn.textContent = 'Unlock Points'; }
-        updatePointsControls(currentPointsState());
-      }
-    }
-
-    // Pre-confirmation pair rename. The button lives inside the pair group, so
-    // the target key and its new value are read straight from that group.
-    async function rekeyPointsPair(btn) {
-      var group = btn && btn.closest ? btn.closest('.pair-group') : null;
-      if (!group) return;
-      var input = group.querySelector('.rekey-input');
-      var fromKey = group.getAttribute('data-pair-key');
-      var newKey = input ? input.value.trim() : '';
-      var leagueDate = getActiveLeagueDate();
-
-      if (!newKey) {
-        setPointsStatus('error', '<strong>Enter a new pair key.</strong>');
-        return;
-      }
-      if (newKey === fromKey) {
-        setPointsStatus('error', '<strong>The pair key is unchanged.</strong>');
-        return;
-      }
-      if (!leagueDate) {
-        setPointsStatus('error', '<strong>Please select a league date.</strong>');
-        return;
-      }
-
-      btn.disabled = true;
-      setPointsStatus('pending', 'Re-keying pair...');
-      log('Re-keying pair ' + fromKey + ' -> ' + newKey);
-
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({
-            action: 'rekeyPoints', spreadsheetId: getSpreadsheetId(),
-            league_date: leagueDate, pair_key: fromKey, new_pair_key: newKey
-          })
-        });
-        var data = await response.json();
-
-        if (data.status === 'ok') {
-          setPointsStatus('ok', '<strong>Pair re-keyed.</strong> ' + data.changed + ' row(s) now grouped under ' + escHtml(data.new_pair_key) + '.');
-          log('SUCCESS: Re-keyed pair ' + fromKey + ' -> ' + data.new_pair_key);
-          await refreshPointsPanel();
-        } else {
-          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
-          log('ERROR: ' + data.message);
-        }
-      } catch (err) {
-        setPointsStatus('error', '<strong>Re-key failed:</strong> ' + err.message);
-        log('FAILED to re-key pair: ' + err.message);
-      } finally {
-        updatePointsControls(currentPointsState());
-      }
-    }
-
-    // Pre-confirmation void/unvoid of a whole pair (or a keyless solo).
-    async function voidPointsPair(btn, voided) {
-      var group = btn && btn.closest ? btn.closest('.pair-group') : null;
-      if (!group) return;
-      var pairKey = group.getAttribute('data-pair-key');
-      var memberNumber = group.getAttribute('data-member-number');
-      var leagueDate = getActiveLeagueDate();
-
-      if (!leagueDate) {
-        setPointsStatus('error', '<strong>Please select a league date.</strong>');
-        return;
-      }
-
-      var payload = {
-        action: 'voidPoints', spreadsheetId: getSpreadsheetId(),
-        league_date: leagueDate, voided: voided
-      };
-      if (pairKey) payload.pair_key = pairKey;
-      else payload.member_number = memberNumber;
-
-      btn.disabled = true;
-      setPointsStatus('pending', voided ? 'Voiding pair...' : 'Restoring pair...');
-      log((voided ? 'Voiding ' : 'Restoring ') + (pairKey || ('member #' + memberNumber)) + ' for ' + leagueDate);
-
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify(payload)
-        });
-        var data = await response.json();
-
-        if (data.status === 'ok') {
-          setPointsStatus('ok', voided
-            ? '<strong>Pair voided.</strong> ' + data.changed + ' row(s) score 0 and are excluded from totals.'
-            : '<strong>Pair restored.</strong> ' + data.changed + ' row(s) returned to pending.');
-          log('SUCCESS: ' + (voided ? 'Voided ' : 'Restored ') + data.changed + ' row(s).');
-          await refreshPointsPanel();
-        } else {
-          setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
-          log('ERROR: ' + data.message);
-        }
-      } catch (err) {
-        setPointsStatus('error', '<strong>Void failed:</strong> ' + err.message);
-        log('FAILED to void pair: ' + err.message);
-      } finally {
-        updatePointsControls(currentPointsState());
-      }
     }
 
     // Init

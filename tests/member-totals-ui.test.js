@@ -44,9 +44,9 @@ test('the members table defaults a missing season_points to 0', () => {
   assert.match(render, /\? 0/);
 });
 
-test('finalizing points refreshes the members listing', () => {
-  const finalize = functionBody(adminHtml, 'finalizePoints');
-  assert.match(finalize, /loadMembers\(\)/);
+test('committing a doubles import refreshes the members listing', () => {
+  const commit = functionBody(adminHtml, 'commitUdiscImportDoubles');
+  assert.match(commit, /loadMembers\(\)/);
 });
 
 test('the player sign-in listing shows the doubles season total only', () => {
