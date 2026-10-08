@@ -76,13 +76,11 @@ test('doubles weekly headers lead with names, pair, score, then points', () => {
   const h = loadCode();
   const headers = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
 
-  assert.equal(headers.length, 54);
+  assert.equal(headers.length, 51);
   assert.deepEqual(headers.slice(0, DOUBLES_HUMAN_FIRST.length), DOUBLES_HUMAN_FIRST);
   assert.deepEqual(
     headers.slice(DOUBLES_HUMAN_FIRST.length),
     [
-      'in_tag',
-      'out_tag',
       'checked_in',
       'signed_in_at',
       'paid',
@@ -105,7 +103,6 @@ test('doubles weekly headers lead with names, pair, score, then points', () => {
       'hole_1', 'hole_2', 'hole_3', 'hole_4', 'hole_5', 'hole_6',
       'hole_7', 'hole_8', 'hole_9', 'hole_10', 'hole_11', 'hole_12',
       'hole_13', 'hole_14', 'hole_15', 'hole_16', 'hole_17', 'hole_18',
-      'udisc_ending_tag',
       'notes',
       'created_at',
       'updated_at',
@@ -115,6 +112,8 @@ test('doubles weekly headers lead with names, pair, score, then points', () => {
     'the remaining doubles columns keep their historical relative order'
   );
   assert.equal(new Set(headers).size, headers.length);
+  // The doubles schema carries no tag columns at all.
+  assert.equal(headers.filter((header) => /(^|_)tag$/.test(header)).length, 0);
   assert.deepEqual(
     headers.slice().sort(),
     h.bound.WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES.slice().sort()

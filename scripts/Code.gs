@@ -45,13 +45,17 @@ const CLUB_MEMBER_HEADERS = [
   'updated_at'
 ];
 
-// Doubles ClubMembers headers: the 8 singles columns plus the season_points
-// cache column. Totals are always derived live from committed weeks; the
-// column is a denormalized copy kept current on every points write (the UDisc
-// import commit) so the ClubMembers tab itself holds the totals. A roster
-// provisioned before the column existed is upgraded in place on the next
-// write.
-const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS.concat([
+// Doubles ClubMembers headers: the tag-free singles columns plus the
+// season_points cache column. Totals are always derived live from committed
+// weeks; the column is a denormalized copy kept current on every points write
+// (the UDisc import commit) so the ClubMembers tab itself holds the totals. A
+// roster provisioned before the detag is upgraded in place by the gated
+// drop-column migration.
+const CLUB_MEMBER_HEADERS_DETAG = CLUB_MEMBER_HEADERS.filter(function(header) {
+  return header !== 'current_tag';
+});
+
+const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS_DETAG.concat([
   'season_points'
 ]);
 
@@ -87,6 +91,16 @@ const WEEKLY_RECORD_SCORE_HEADERS = [
 const WEEKLY_RECORD_TAG_HEADERS = [
   'in_tag',
   'out_tag'
+];
+
+// Every tag column the weekly schema can carry. A points-scoring league drops
+// all three through the gated detag migration; the singles tags league keeps
+// in_tag/out_tag promoted (WEEKLY_RECORD_TAG_HEADERS) and udisc_ending_tag in
+// the tail.
+const WEEKLY_RECORD_DETAG_HEADERS = [
+  'in_tag',
+  'out_tag',
+  'udisc_ending_tag'
 ];
 
 // Doubles points columns. `weekly_points` is computed from the committed
@@ -152,7 +166,27 @@ const WEEKLY_RECORD_HEADERS_LEGACY = [
   'updated_at'
 ];
 
-const WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES = WEEKLY_RECORD_HEADERS_LEGACY.concat([
+// The tag-free weekly base for a points-scoring league: the singles legacy pool
+// minus the three tag columns. The header builders and the column-order
+// known-set check draw from this, so the 51-column doubles end-state derives
+// from the format x scoring model rather than a hand-written list.
+const WEEKLY_RECORD_HEADERS_LEGACY_DETAG = WEEKLY_RECORD_HEADERS_LEGACY.filter(function(header) {
+  return WEEKLY_RECORD_DETAG_HEADERS.indexOf(header) === -1;
+});
+
+// The tags-carrying weekly pool for a pairs/points league, kept only so the
+// drop migration and the topology check can recognize an un-migrated doubles
+// sheet during the transition. New sheets use the tag-free pool below.
+const WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES_TAGGED = WEEKLY_RECORD_HEADERS_LEGACY.concat([
+  'pair_key',
+  'partner_member_number',
+  'team_position',
+  'team_position_raw',
+  'weekly_points',
+  'weekly_points_status'
+]);
+
+const WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES = WEEKLY_RECORD_HEADERS_LEGACY_DETAG.concat([
   'pair_key',
   'partner_member_number',
   'team_position',
@@ -192,11 +226,25 @@ const WEEKLY_RECORD_HEADERS = orderWeeklyHeaders(
   [WEEKLY_RECORD_NAME_HEADERS, WEEKLY_RECORD_SCORE_HEADERS, WEEKLY_RECORD_TAG_HEADERS]
 );
 
-// Doubles WeeklyPlayerRecords headers, human-first (54 columns). Names, pair
-// linkage, score, and the points lifecycle lead, then the remaining columns
-// (including the unused singles tag columns) in their historical order.
+// Doubles WeeklyPlayerRecords headers, human-first (51 columns). Names, pair
+// linkage, score, and the points lifecycle lead, then the remaining tag-free
+// columns in their historical order. The tag columns are gone from the
+// doubles schema; a pre-detag sheet is recognized by
+// WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED until the gated drop migration runs.
 const WEEKLY_RECORD_HEADERS_DOUBLES = orderWeeklyHeaders(
   WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES,
+  [
+    WEEKLY_RECORD_NAME_HEADERS,
+    WEEKLY_RECORD_PAIR_HEADERS,
+    WEEKLY_RECORD_SCORE_HEADERS,
+    WEEKLY_RECORD_POINTS_HEADERS
+  ]
+);
+
+// The pre-detag canonical doubles order (54 columns), recognized as
+// "known-but-being-dropped" until the gated drop migration removes the tags.
+const WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED = orderWeeklyHeaders(
+  WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES_TAGGED,
   [
     WEEKLY_RECORD_NAME_HEADERS,
     WEEKLY_RECORD_PAIR_HEADERS,
@@ -430,11 +478,14 @@ function getWeeklyRecordHeaders(format, scoring) {
 /**
  * Weekly column pool for a (format, scoring) pair, in historical relative
  * order. Shared by the header builder, the column-order plan's known-set check,
- * and the human-first reorder.
+ * and the human-first reorder. A points-scoring league draws the tag-free base
+ * so the doubles schema is 51 columns; the singles tags league keeps the tag
+ * columns.
  */
 function weeklyRecordColumnPool(format, scoring) {
   var rules = rulesForEnums(format, scoring);
-  var columns = WEEKLY_RECORD_HEADERS_LEGACY.slice();
+  var base = rules.usesTags ? WEEKLY_RECORD_HEADERS_LEGACY : WEEKLY_RECORD_HEADERS_LEGACY_DETAG;
+  var columns = base.slice();
   if (rules.hasPairs) {
     columns = columns.concat(WEEKLY_RECORD_PAIR_HEADERS, WEEKLY_RECORD_TEAM_HEADERS);
   }
@@ -455,13 +506,13 @@ function getLeagueSheetHeaders(format, scoring) {
 
 /**
  * ClubMembers headers for a (format, scoring) pair: the base roster columns
- * plus the season_points cache for a points-scoring league. The current_tag
- * column stays until the gated destructive drop, so today's 8/9 schemas are
- * byte-identical.
+ * plus the season_points cache for a points-scoring league. A points league
+ * draws the tag-free base (8 columns, no current_tag); a tags league keeps the
+ * singles roster byte-identical.
  */
 function getClubMemberHeaders(format, scoring) {
   var rules = rulesForEnums(format, scoring);
-  var columns = CLUB_MEMBER_HEADERS.slice();
+  var columns = (rules.usesTags ? CLUB_MEMBER_HEADERS : CLUB_MEMBER_HEADERS_DETAG).slice();
   if (rules.usesPoints) columns = columns.concat(['season_points']);
   return columns;
 }
@@ -774,6 +825,11 @@ function ensureWeekSheet(spreadsheet, leagueDate, format, scoring) {
  * renumbered. Members already present in the doubles roster are skipped, so
  * the seed is safe to run repeatedly.
  *
+ * Values are copied by header name, not by position: the doubles roster no
+ * longer carries `current_tag`, so a positional copy would shift every column
+ * after pdga_number into the wrong field. `current_tag` is never copied and
+ * `season_points` has no singles source, so both land blank.
+ *
  * Returns { seeded, seeded_member_numbers, skipped_existing, error? }.
  */
 function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
@@ -787,7 +843,10 @@ function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
     return { seeded: 0, seeded_member_numbers: [], skipped_existing: 0, error: 'ClubMembers tab not found in singles spreadsheet.' };
   }
 
-  var memberCol = CLUB_MEMBER_HEADERS.indexOf('member_number');
+  var doublesHeaders = getSheetHeaders(doublesSheet);
+  var singlesHeaders = getSheetHeaders(singlesSheet);
+  var memberCol = doublesHeaders.indexOf('member_number');
+  var sourceMemberCol = singlesHeaders.indexOf('member_number');
   var singlesData = singlesSheet.getDataRange().getValues();
   var doublesData = doublesSheet.getDataRange().getValues();
 
@@ -804,7 +863,7 @@ function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
 
   for (var r = 1; r < singlesData.length; r++) {
     var sourceRow = singlesData[r];
-    var memberNumber = sourceRow[memberCol];
+    var memberNumber = sourceRow[sourceMemberCol];
 
     if (memberNumber === '' || memberNumber === null || memberNumber === undefined) {
       continue;
@@ -814,9 +873,17 @@ function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
       continue;
     }
 
-    var newRow = new Array(CLUB_MEMBER_HEADERS.length).fill('');
-    for (var c = 0; c < CLUB_MEMBER_HEADERS.length && c < sourceRow.length; c++) {
-      newRow[c] = sourceRow[c];
+    var newRow = new Array(doublesHeaders.length).fill('');
+    for (var c = 0; c < doublesHeaders.length; c++) {
+      var header = doublesHeaders[c];
+      // A points roster has no current_tag, and a legacy doubles roster that
+      // still carries one must not receive it either. season_points is a
+      // derived cache with no singles source.
+      if (header === 'current_tag' || header === 'season_points') continue;
+      var sourceIndex = singlesHeaders.indexOf(header);
+      if (sourceIndex !== -1 && sourceIndex < sourceRow.length) {
+        newRow[c] = sourceRow[sourceIndex];
+      }
     }
 
     doublesSheet.appendRow(newRow);
@@ -1009,19 +1076,31 @@ function leagueHeadersMatch(headers, format, scoring) {
 }
 
 /**
- * Whether a ClubMembers header row matches a (format, scoring) pair. A doubles
- * roster provisioned by an earlier version may still carry the optional,
- * now-unused season_points column, so both the bare schema and the schema plus
- * season_points are accepted there. Totals are aggregated live and never read
- * that column.
+ * Whether a ClubMembers header row matches a (format, scoring) pair. A roster
+ * provisioned before the detag may still carry the now-dropped current_tag
+ * column, and a points roster may or may not yet carry season_points, so those
+ * pre-migration layouts are accepted as "known but un-migrated" until the
+ * gated drop runs. Totals are aggregated live and never read the cache.
  */
 function clubMemberHeadersMatch(headers, format, scoring) {
   var rules = rulesForEnums(format, scoring);
-  if (rules.usesPoints) {
-    return arraysEqual(headers, getClubMemberHeaders(rules.format, rules.scoring)) ||
-      arraysEqual(headers, CLUB_MEMBER_HEADERS);
-  }
-  return arraysEqual(headers, CLUB_MEMBER_HEADERS);
+  if (arraysEqual(headers, getClubMemberHeaders(rules.format, rules.scoring))) return true;
+  if (arraysEqual(headers, CLUB_MEMBER_HEADERS)) return true;
+  if (rules.usesPoints && arraysEqual(headers, CLUB_MEMBER_HEADERS.concat(['season_points']))) return true;
+  return false;
+}
+
+/**
+ * Whether a weekly header row matches a (format, scoring) pair. A points
+ * league provisioned before the detag still carries the tag columns, so the
+ * pre-detag canonical layout is accepted as "known but un-migrated" until the
+ * gated drop runs.
+ */
+function weeklyHeadersMatch(headers, format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  if (arraysEqual(headers, getWeeklyRecordHeaders(rules.format, rules.scoring))) return true;
+  if (!rules.usesTags && arraysEqual(headers, WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED)) return true;
+  return false;
 }
 
 /**
@@ -1053,7 +1132,7 @@ function inspectSpreadsheetTopology(spreadsheet, format, scoring) {
     },
     week_template: {
       present: !!template,
-      headers_match: arraysEqual(getSheetHeaders(template), getWeeklyRecordHeaders(rules.format, rules.scoring))
+      headers_match: weeklyHeadersMatch(getSheetHeaders(template), rules.format, rules.scoring)
     }
   };
 }
@@ -1124,11 +1203,19 @@ function isWeeklyRecordHeaderRow(headers) {
 
 /**
  * The full known weekly column set for a (format, scoring) pair. Used to flag a
- * sheet that carries a column the migration does not recognize. The tag
- * columns remain known until the gated destructive drop removes them.
+ * sheet that carries a column the migration does not recognize. A points
+ * league's tag columns are still accepted here as "known-but-being-dropped"
+ * during the transition, so the human-first reorder dry run does not fail on
+ * the very columns the gated drop migration is about to remove.
  */
 function weeklyColumnsKnownForFormat(format, scoring) {
-  return weeklyRecordColumnPool(format, scoring);
+  var columns = weeklyRecordColumnPool(format, scoring).slice();
+  for (var i = 0; i < WEEKLY_RECORD_DETAG_HEADERS.length; i++) {
+    if (columns.indexOf(WEEKLY_RECORD_DETAG_HEADERS[i]) === -1) {
+      columns.push(WEEKLY_RECORD_DETAG_HEADERS[i]);
+    }
+  }
+  return columns;
 }
 
 /**
@@ -1421,6 +1508,284 @@ function handleMigrateWeeklyColumnOrder(data) {
 
 // ─── End weekly column-order migration ──────────────────────────────────────
 
+// ─── Detag column-drop migration ────────────────────────────────────────────
+
+// Script-property approval gate for the destructive detag drop. The captain
+// sets
+//
+//   DETAG_COLUMN_DROPS_APPROVAL = 'bag-detag-drops-c1'
+//
+// in the Apps Script project before running the apply entry point. Nothing in
+// deployment, startup, tests, or ordinary sheet operations sets this property,
+// so the drop cannot run unless a captain explicitly opts in.
+var DETAG_COLUMN_DROPS_APPROVAL_PROPERTY = 'DETAG_COLUMN_DROPS_APPROVAL';
+var DETAG_COLUMN_DROPS_APPROVAL_TOKEN = 'bag-detag-drops-c1';
+
+/**
+ * Whether the live detag drop has been explicitly authorized by the captain.
+ * A missing or mismatched Script Property means "not authorized".
+ */
+function isDetagColumnDropsAuthorized() {
+  try {
+    var value = PropertiesService.getScriptProperties()
+      .getProperty(DETAG_COLUMN_DROPS_APPROVAL_PROPERTY);
+    return value === DETAG_COLUMN_DROPS_APPROVAL_TOKEN;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * The weekly tag columns a (format, scoring) pair no longer uses. A
+ * tag-scoring league returns an empty list, so this migration can never remove
+ * tag data from a league that still settles tags.
+ */
+function detagDropHeadersForWeekly(format, scoring) {
+  return rulesForEnums(format, scoring).usesTags ? [] : WEEKLY_RECORD_DETAG_HEADERS.slice();
+}
+
+/**
+ * The ClubMembers tag columns a (format, scoring) pair no longer uses. A
+ * tag-scoring league keeps current_tag.
+ */
+function detagDropHeadersForClubMembers(format, scoring) {
+  return rulesForEnums(format, scoring).usesTags ? [] : ['current_tag'];
+}
+
+/**
+ * Plans the removal of the given tag columns from one header row. Pure: only
+ * reads the supplied header array and never touches a sheet. Returns:
+ *   { status: 'no-drop', headers, target_headers, drop_headers }
+ *   { status: 'drop', headers, target_headers, drop_headers }
+ *   { status: 'error', error }
+ *
+ * Ambiguous layouts fail instead of guessing: a blank or duplicate header
+ * returns an error so the captain can inspect the sheet first.
+ */
+function planTagColumnDrops(headers, dropHeaders) {
+  if (!headers || headers.length === 0) {
+    return { status: 'error', error: 'Header row is empty.' };
+  }
+
+  var seen = {};
+  for (var i = 0; i < headers.length; i++) {
+    var header = headers[i];
+    if (header === '' || header === null || header === undefined) {
+      return { status: 'error', error: 'Header row has a blank column at position ' + (i + 1) + '.' };
+    }
+    if (Object.prototype.hasOwnProperty.call(seen, header)) {
+      return { status: 'error', error: 'Header row has a duplicate column: ' + header + '.' };
+    }
+    seen[header] = true;
+  }
+
+  var drop = [];
+  for (var d = 0; d < dropHeaders.length; d++) {
+    if (headers.indexOf(dropHeaders[d]) !== -1) drop.push(dropHeaders[d]);
+  }
+
+  if (drop.length === 0) {
+    return {
+      status: 'no-drop',
+      headers: headers.slice(),
+      target_headers: headers.slice(),
+      drop_headers: []
+    };
+  }
+
+  var target = headers.filter(function(header) {
+    return drop.indexOf(header) === -1;
+  });
+
+  return {
+    status: 'drop',
+    headers: headers.slice(),
+    target_headers: target,
+    drop_headers: drop
+  };
+}
+
+/**
+ * Deletes the planned tag columns from a sheet. Deletes from the highest
+ * position to the lowest so earlier indices stay valid. Only called by
+ * migrateDetagColumnDrops after the authorization gate.
+ */
+function applyTagColumnDrops(sheet, plan) {
+  if (plan.status === 'no-drop') {
+    return { status: 'no-drop', sheet_name: sheet.getName(), dropped_columns: [] };
+  }
+  if (plan.status !== 'drop') {
+    throw new Error(plan.error || 'Invalid tag column-drop plan.');
+  }
+
+  var positions = plan.drop_headers.map(function(header) {
+    return plan.headers.indexOf(header);
+  }).sort(function(a, b) {
+    return b - a;
+  });
+
+  for (var i = 0; i < positions.length; i++) {
+    sheet.deleteColumn(positions[i] + 1);
+  }
+
+  var remaining = getSheetHeaders(sheet);
+  if (remaining.length > 0) {
+    sheet.getRange(1, 1, 1, remaining.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+
+  return {
+    status: 'dropped',
+    sheet_name: sheet.getName(),
+    dropped_columns: plan.drop_headers.slice(),
+    columns: remaining.length
+  };
+}
+
+/**
+ * Migrates a spreadsheet to the tag-free schema for its (format, scoring)
+ * pair. Weekly sheets are discovered by header name (so dated Week tabs and
+ * the Week template are covered without a name hard-list) and ClubMembers is
+ * found by name; a tag-scoring league drops nothing.
+ *
+ * Dry-run by default: with `apply: false` it writes nothing and returns the
+ * planned drops per sheet. With `apply: true` it refuses unless the captain has
+ * set the approval Script Property, then deletes every planned tag column. A
+ * sheet with nothing to drop is a no-op, and an ambiguous layout fails before
+ * any other sheet in the run is written.
+ *
+ * Returns { applied, authorized, results } or { applied: false, error }.
+ */
+function migrateDetagColumnDrops(spreadsheet, format, options) {
+  options = options || {};
+  var apply = options.apply === true;
+  var rules = rulesForEnums(format, options.scoring);
+  var weeklyDrop = detagDropHeadersForWeekly(rules.format, rules.scoring);
+  var clubDrop = detagDropHeadersForClubMembers(rules.format, rules.scoring);
+  var sheets = spreadsheet.getSheets();
+  var plans = [];
+  var results = [];
+
+  if (apply && !isDetagColumnDropsAuthorized()) {
+    return {
+      applied: false,
+      authorized: false,
+      error: 'Detag column-drop migration is not authorized. Set the ' +
+        DETAG_COLUMN_DROPS_APPROVAL_PROPERTY + ' Script Property to authorize it.',
+      results: []
+    };
+  }
+
+  var scanError = null;
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    var headers = getSheetHeaders(sheet);
+    if (!isWeeklyRecordHeaderRow(headers)) continue;
+
+    var plan = planTagColumnDrops(headers, weeklyDrop);
+    if (plan.status === 'error') {
+      scanError = { sheet_name: sheet.getName(), error: plan.error };
+      break;
+    }
+    plans.push({ sheet: sheet, plan: plan, kind: 'weekly' });
+  }
+
+  if (!scanError) {
+    var club = spreadsheet.getSheetByName('ClubMembers');
+    if (club) {
+      var clubHeaders = getSheetHeaders(club);
+      if (clubHeaders.indexOf('member_number') !== -1) {
+        var clubPlan = planTagColumnDrops(clubHeaders, clubDrop);
+        if (clubPlan.status === 'error') {
+          scanError = { sheet_name: club.getName(), error: clubPlan.error };
+        } else {
+          plans.push({ sheet: club, plan: clubPlan, kind: 'club_members' });
+        }
+      }
+    }
+  }
+
+  if (scanError) {
+    return { applied: false, authorized: true, error: scanError.error, failed_sheet: scanError.sheet_name, results: [] };
+  }
+
+  for (var p = 0; p < plans.length; p++) {
+    var entry = plans[p];
+    if (entry.plan.status === 'no-drop') {
+      results.push({ sheet_name: entry.sheet.getName(), kind: entry.kind, status: 'no-drop' });
+      continue;
+    }
+    if (!apply) {
+      results.push({
+        sheet_name: entry.sheet.getName(),
+        kind: entry.kind,
+        status: 'would-drop',
+        drop_headers: entry.plan.drop_headers.slice(),
+        from: entry.plan.headers,
+        to: entry.plan.target_headers
+      });
+      continue;
+    }
+    var applied = applyTagColumnDrops(entry.sheet, entry.plan);
+    results.push({
+      sheet_name: entry.sheet.getName(),
+      kind: entry.kind,
+      status: 'dropped',
+      drop_headers: applied.dropped_columns,
+      to: entry.plan.target_headers,
+      columns: applied.columns
+    });
+  }
+
+  return { applied: apply, authorized: true, results: results };
+}
+
+/**
+ * Admin/operator handler: dry-run or apply the detag column-drop migration.
+ * Always defaults to a dry run that writes nothing. Applying is refused unless
+ * the captain approval Script Property is present, so this cannot run from a
+ * deploy, page load, or ordinary sheet operation. A tag-scoring league is a
+ * no-op (its drop list is empty), so no tag data is ever removed there.
+ *
+ * Inputs: league/spreadsheetId selector, apply (boolean, default false).
+ */
+function handleMigrateDetagColumnDrops(data) {
+  data = data || {};
+  var selector = leagueSelectorFrom(data);
+  var rules = getLeagueRules(selector);
+  var apply = data.apply === true || data.apply === 'true';
+  var spreadsheet = resolveSpreadsheet(selector);
+
+  var report = migrateDetagColumnDrops(spreadsheet, rules.format, { apply: apply, scoring: rules.scoring });
+  if (report.error) {
+    return respond('error', report.error, {
+      format: rules.format,
+      scoring: rules.scoring,
+      applied: false,
+      authorized: report.authorized === true,
+      failed_sheet: report.failed_sheet || null
+    });
+  }
+
+  var changed = report.results.filter(function(r) {
+    return r.status === 'dropped' || r.status === 'would-drop';
+  }).length;
+  var message = apply
+    ? 'Detag column-drop migration applied to ' + changed + ' sheet(s).'
+    : 'Detag column-drop migration dry run: ' + changed + ' sheet(s) would change. No writes were made.';
+
+  return respond('ok', message, {
+    format: rules.format,
+    scoring: rules.scoring,
+    applied: apply,
+    authorized: report.authorized === true,
+    sheets_changed: changed,
+    results: report.results
+  });
+}
+
+// ─── End detag column-drop migration ────────────────────────────────────────
+
 // ─── End doubles provisioning ────────────────────────────────────────────────
 
 /**
@@ -1514,6 +1879,9 @@ function doPost(e) {
     }
     if (data.action === 'migrateWeeklyColumnOrder') {
       return handleMigrateWeeklyColumnOrder(data);
+    }
+    if (data.action === 'migrateDetagColumnDrops') {
+      return handleMigrateDetagColumnDrops(data);
     }
 
     return respond('error', 'Unknown action: ' + data.action);

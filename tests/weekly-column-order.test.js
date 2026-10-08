@@ -240,8 +240,6 @@ test('doubles migration promotes pair and points and preserves the rest', () => 
 
   assert.deepEqual(h.fn('getSheetHeaders')(sheet), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
   assertRowPreserved(h, sheet, fixture.headers, fixture.row, 1);
-  // Singles tag columns survive in the doubles tail (they are unused but kept).
-  assert.equal(valueByName(h, sheet, 'in_tag', 1), 'v_in_tag');
   assert.equal(valueByName(h, sheet, 'team_position', 1), 'v_team_position');
 });
 

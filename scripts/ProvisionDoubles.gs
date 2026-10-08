@@ -134,6 +134,46 @@ function applyWeeklyColumnOrderMigration() {
 }
 
 /**
+ * Operator entry point: dry-run the destructive detag column-drop migration for
+ * the doubles spreadsheet. Lists the tag columns that would be removed from
+ * every week tab (including the template) and from ClubMembers, and writes
+ * nothing, so it is safe to run at any time. The singles spreadsheet is never
+ * touched.
+ *
+ * Usage (Apps Script editor): run `previewDetagColumnDrops`.
+ */
+function previewDetagColumnDrops() {
+  var report = migrateDetagColumnDrops(
+    SpreadsheetApp.openById(getConfiguredDoublesSpreadsheetId()),
+    LEAGUE_FORMAT_DOUBLES,
+    { apply: false, scoring: SCORING_POINTS }
+  );
+
+  Logger.log('Detag column-drop migration preview:\n' + JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
+ * Operator entry point: apply the destructive detag column-drop migration to
+ * the doubles spreadsheet, deleting in_tag/out_tag/udisc_ending_tag from every
+ * week tab and current_tag from ClubMembers. Refuses unless the captain has set
+ * the DETAG_COLUMN_DROPS_APPROVAL Script Property. Run the preview first to
+ * inspect the exact columns for every sheet.
+ *
+ * Usage (Apps Script editor): run `applyDetagColumnDrops`.
+ */
+function applyDetagColumnDrops() {
+  var report = migrateDetagColumnDrops(
+    SpreadsheetApp.openById(getConfiguredDoublesSpreadsheetId()),
+    LEAGUE_FORMAT_DOUBLES,
+    { apply: true, scoring: SCORING_POINTS }
+  );
+
+  Logger.log('Detag column-drop migration applied:\n' + JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
  * Verifies the topology and headers of both spreadsheets against the schema
  * expected for their format. Returns a report and logs it.
  *

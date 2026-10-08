@@ -90,7 +90,7 @@ These fields are written directly into `WeeklyPlayerRecords` during import. They
 | `starting_hole` | `starting_hole` | Starting hole number |
 | `start_time` | `start_time` | Round start time |
 | `hole_1`–`hole_18` | `hole_1`–`hole_18` | Hole-by-hole score data |
-| `bag_tag_at_end` | `udisc_ending_tag` | Reference-only; must not override calculated `out_tag` |
+| `bag_tag_at_end` | `udisc_ending_tag` | Singles only: the doubles commit drops this field (points scoring, no tag columns); must not override calculated `out_tag` |
 | `event_relative_score` | `event_relative_score` | Event-level relative score (reference) |
 | `event_total_score` | `event_total_score` | Event-level total score (reference) |
 | `division` | `division` | Player's division (reference) |
@@ -122,7 +122,7 @@ These fields are imported from UDisc for reference and display only. They must n
 
 | App Field | Source | Notes |
 |---|---|---|
-| `udisc_ending_tag` | UDisc `bag_tag_at_end` | Retained for reference/transition purposes only |
+| `udisc_ending_tag` | UDisc `bag_tag_at_end` | Singles only: never written for the doubles (points-scoring) league |
 | `round_rating` | UDisc `round_rating` | Displayed for reference; not used in tag calculation |
 | `event_relative_score` | UDisc `event_relative_score` | Reference; round score is used for ranking |
 | `event_total_score` | UDisc `event_total_score` | Reference; round score is used for ranking |
@@ -167,7 +167,7 @@ These fields are imported from UDisc for reference and display only. They must n
 | `hole_16` | `hole_16` | Imported | Hole 16 score |
 | `hole_17` | `hole_17` | Imported | Hole 17 score |
 | `hole_18` | `hole_18` | Imported | Hole 18 score |
-| `bag_tag_at_end` | `udisc_ending_tag` | Imported reference | Must not override `out_tag` |
+| `bag_tag_at_end` | `udisc_ending_tag` | Imported reference | Singles only: dropped for the doubles commit; must not override `out_tag` |
 
 ## Identity Matching Strategy
 
@@ -203,6 +203,17 @@ The UDisc export contains two score fields:
 **Decision:** Use `round_total_score` as the primary `score` for tag calculation ranking. This is the score for the specific round being imported, which is what the tag calculation requires.
 
 `event_total_score` and `event_relative_score` are retained as reference fields but are not used in tag calculation.
+
+## Doubles (points-scoring) Import
+
+The doubles league scores by team placement rather than bag tags, so its UDisc
+commit is a separate, capability-gated path (`handleCommitUdiscImportDoubles`).
+It shares the identity/score/hole mapping above but adds the pair columns and
+computes `weekly_points` from the committed team position. It never writes a
+tag value: `buildDoublesImportFields` drops the inherited `udisc_ending_tag`
+for a points-scoring league, and the doubles weekly and roster schemas carry no
+tag columns at all. The `round_total_score` mapping still applies, but for
+doubles it feeds placement and points, not tag ranking.
 
 ## Notes on UDisc `checked_in` vs App Check-In
 

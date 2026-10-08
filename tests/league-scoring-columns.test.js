@@ -207,15 +207,18 @@ test('weekly header pool and human-first groups follow the capabilities', () => 
   ]);
 
   const doubles = pool(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_POINTS);
-  assert.equal(doubles.length, 54);
+  assert.equal(doubles.length, 51);
   assert.deepEqual(groups(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_POINTS).map((g) => g[0]), [
     'member_number',
     'pair_key',
     'score',
     'weekly_points'
   ]);
-  // weeklyColumnsKnownForFormat is the same pool the builder reorders.
-  assert.deepEqual(h.fn('weeklyColumnsKnownForFormat')(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_POINTS), doubles);
+  // weeklyColumnsKnownForFormat keeps the droppable tag columns known during
+  // the transition, so the reorder dry run can still read a pre-detag sheet.
+  const known = h.fn('weeklyColumnsKnownForFormat')(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_POINTS);
+  assert.equal(known.length, doubles.length + h.bound.WEEKLY_RECORD_DETAG_HEADERS.length);
+  h.bound.WEEKLY_RECORD_DETAG_HEADERS.forEach((header) => assert.ok(known.includes(header)));
 });
 
 test('planWeeklyColumnReorder accepts an explicit (format, scoring) pair', () => {

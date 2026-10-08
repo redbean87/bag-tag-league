@@ -53,7 +53,7 @@ One row per player. Updated only during league finalization or admin correction.
 | name | string | Player's display name |
 | udisc_username | string | UDisc username (nullable) |
 | pdga_number | string | PDGA number (nullable) |
-| current_tag | integer | Last-known calculated bag tag number. Only updated during league finalization with the player's `out_tag`. Not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`. |
+| current_tag | integer | Last-known calculated bag tag number. Singles only: the doubles roster is tag-free (it carries `season_points` instead). Only updated during league finalization with the player's `out_tag`. Not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`. |
 | is_active | boolean | Active/inactive status |
 | created_at | string (ISO 8601) | Record creation |
 | updated_at | string (ISO 8601) | Last modification |
@@ -83,8 +83,8 @@ One row per player per weekly league. Created during sign-in only.
 | player_name_snapshot | string | Snapshot of name at sign-in |
 | udisc_username_snapshot | string | Snapshot of UDisc username at sign-in |
 | pdga_number_snapshot | string | Snapshot of PDGA number at sign-in |
-| in_tag | integer | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Do not auto-derive from `ClubMembers.current_tag`. |
-| out_tag | integer | Player's ending bag tag, calculated by the app (nullable until calculation) |
+| in_tag | integer | Player's actual starting bag tag for the weekly league, supplied by the player during check-in. Singles only: the doubles weekly schema is tag-free. Do not auto-derive from `ClubMembers.current_tag`. |
+| out_tag | integer | Player's ending bag tag, calculated by the app (nullable until calculation). Singles only. |
 | checked_in | boolean | Explicit participation flag. Set TRUE when player completes check-in through the app. Authoritative participation indicator. |
 | signed_in_at | string (ISO 8601) | Timestamp when the player signed in through the app |
 | paid | boolean | Payment status (confirmed during check-in) |
@@ -123,7 +123,7 @@ One row per player per weekly league. Created during sign-in only.
 | hole_16 | integer | Score on hole 16 (nullable) |
 | hole_17 | integer | Score on hole 17 (nullable) |
 | hole_18 | integer | Score on hole 18 (nullable) |
-| udisc_ending_tag | integer | Optional ending bag tag from UDisc (`bag_tag_at_end`). Retained for reference/transition purposes only. Must not be used to calculate out_tag. (nullable) |
+| udisc_ending_tag | integer | Optional ending bag tag from UDisc (`bag_tag_at_end`). Singles only: the doubles commit drops this field and the doubles schema carries no tag columns. Retained for reference/transition purposes only. Must not be used to calculate out_tag. (nullable) |
 | notes | string | Admin notes (nullable) |
 | created_at | string (ISO 8601) | Record creation |
 | updated_at | string (ISO 8601) | Last modification |
@@ -140,6 +140,24 @@ One row per player per weekly league. Created during sign-in only.
 - **UDisc hole-by-hole import fields:** hole_1–hole_18
 - **UDisc reference-only fields:** udisc_ending_tag
 - **Admin fields:** notes
+
+### Doubles League Schema
+
+The doubles league is `doubles x points`: it settles weekly points by team
+placement and carries no tag columns. Per-league columns derive from the
+`format x scoring` capability model, so the doubles tabs differ from the
+singles tabs above:
+
+- Doubles `WeeklyPlayerRecords` is the **tag-free** weekly schema: the singles
+  columns minus `in_tag`, `out_tag`, and `udisc_ending_tag`, plus `pair_key`,
+  `partner_member_number`, `team_position`, `team_position_raw`,
+  `weekly_points`, and `weekly_points_status` (**51 columns**).
+- Doubles `ClubMembers` is the **tag-free** roster: the singles roster minus
+  `current_tag`, plus the `season_points` cache (**8 columns**).
+
+A pre-detag doubles sheet (54 weekly columns and a 9-column roster carrying
+`current_tag`) is brought forward by the gated `migrateDetagColumnDrops`
+migration. The singles schema is never modified by it.
 
 ### ImportHistory Tab
 

@@ -42,7 +42,7 @@ test('doubles weekly tabs are isolated by format through the shared accessors', 
 
   assert.equal(
     h.fn('getWeeklyRecordHeaders')(h.fn('resolveLeagueFormat')(h.bound.SPREADSHEET_ID_DOUBLES)).length,
-    54
+    51
   );
   assert.equal(
     h.fn('getWeeklyRecordHeaders')(h.fn('resolveLeagueFormat')(undefined)).length,
