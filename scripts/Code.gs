@@ -189,16 +189,23 @@ const WEEKLY_RECORD_HEADERS_DOUBLES = orderWeeklyHeaders(
 // and leaves every participant (pair partner or solo) pending; the points
 // chain then moves each row pending -> confirmed -> finalized. Blank and other
 // unknown values are treated as pending by the confirm path so a legacy row is
-// never silently skipped.
+// never silently skipped. `voided` is an admin-only terminal state set before
+// confirmation: the row keeps its placement for audit but scores 0 and is
+// excluded from every season total.
 const WEEKLY_POINTS_STATUS_PENDING = 'pending';
 const WEEKLY_POINTS_STATUS_CONFIRMED = 'confirmed';
 const WEEKLY_POINTS_STATUS_FINALIZED = 'finalized';
+const WEEKLY_POINTS_STATUS_VOIDED = 'voided';
+
+// Longest accepted admin-supplied pair key. The generated key is well under
+// this; the bound only exists to stop an unbounded cell value.
+const DOUBLES_PAIR_KEY_MAX_LENGTH = 120;
 
 // Statuses whose weekly points count toward a season total. Every played week
 // contributes no matter where it sits in the lifecycle: a calculated week, a
 // confirmed-but-not-finalized week, and a finalized week all count. Pending
-// weeks carry no points and stay excluded. The status label itself is display
-// only and never filters a total.
+// and voided weeks carry no points and stay excluded. The status label itself
+// is display only and never filters a total.
 const WEEKLY_POINTS_STATUS_CALCULATED = 'calculated';
 const SEASON_POINTS_STATUSES = [
   WEEKLY_POINTS_STATUS_CALCULATED,
@@ -1301,6 +1308,15 @@ function doPost(e) {
     }
     if (data.action === 'finalizePoints') {
       return handleFinalizePoints(data);
+    }
+    if (data.action === 'unlockPoints') {
+      return handleUnlockPoints(data);
+    }
+    if (data.action === 'rekeyPoints') {
+      return handleRekeyPoints(data);
+    }
+    if (data.action === 'voidPoints') {
+      return handleVoidPoints(data);
     }
     if (data.action === 'calculateTags') {
       return handleCalculateTags(data);
@@ -4655,6 +4671,7 @@ function buildDoublesPointsPlan(weeklyData, headers) {
   var hMember = headers.indexOf('member_number');
   var hName = headers.indexOf('player_name_snapshot');
   var hPair = headers.indexOf('pair_key');
+  var hPartner = headers.indexOf('partner_member_number');
   var hTeamPosition = headers.indexOf('team_position');
   var hPositionRaw = headers.indexOf('team_position_raw');
   var hPoints = headers.indexOf('weekly_points');
@@ -4668,13 +4685,16 @@ function buildDoublesPointsPlan(weeklyData, headers) {
     var memberNumber = row[hMember];
     if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
 
+    var storedStatus = hStatus !== -1 ? (row[hStatus] || '') : '';
+    var voided = storedStatus === WEEKLY_POINTS_STATUS_VOIDED;
     var rawPosition = row[hPositionRaw];
     var blankPosition = rawPosition === '' || rawPosition === null || rawPosition === undefined;
     var parsedPosition = parseInt(rawPosition, 10);
     var hasPosition = !blankPosition && !isNaN(parsedPosition) && parsedPosition >= 1;
+    var computedPoints = doublesPointsForPosition(rawPosition);
 
     var warning = null;
-    if (!hasPosition) {
+    if (!hasPosition && !voided) {
       warning = {
         row_index: i,
         member_number: memberNumber,
@@ -4690,12 +4710,15 @@ function buildDoublesPointsPlan(weeklyData, headers) {
       member_number: memberNumber,
       player_name: (hName !== -1 ? row[hName] : '') || '',
       pair_key: hPair !== -1 ? (row[hPair] || '') : '',
+      partner_member_number: hPartner !== -1 ? (row[hPartner] || '') : '',
       team_position: hTeamPosition !== -1 ? (row[hTeamPosition] || '') : '',
       team_position_raw: rawPosition === undefined ? '' : rawPosition,
       has_position: hasPosition,
-      points: doublesPointsForPosition(rawPosition),
+      computed_points: computedPoints,
+      points: voided ? 0 : computedPoints,
+      voided: voided,
       stored_points: hPoints !== -1 ? row[hPoints] : '',
-      stored_status: hStatus !== -1 ? (row[hStatus] || '') : '',
+      stored_status: storedStatus,
       warning: warning
     });
   }
@@ -4753,10 +4776,13 @@ function pointsRowResponse(row) {
     member_number: row.member_number,
     player_name: row.player_name,
     pair_key: row.pair_key,
+    partner_member_number: row.partner_member_number,
     team_position: row.team_position,
     team_position_raw: row.team_position_raw,
     has_position: row.has_position,
+    computed_points: row.computed_points,
     points: row.points,
+    voided: !!row.voided,
     stored_points: row.stored_points,
     stored_status: row.stored_status,
     warning: row.warning ? row.warning.message : null
@@ -4764,14 +4790,181 @@ function pointsRowResponse(row) {
 }
 
 function pointsSummary(rows) {
-  var summary = { total_rows: rows.length, warnings: 0, finalized: 0, confirmed: 0, pending: 0 };
+  var summary = { total_rows: rows.length, warnings: 0, finalized: 0, confirmed: 0, voided: 0, pending: 0 };
   for (var i = 0; i < rows.length; i++) {
     if (rows[i].warning) summary.warnings++;
     if (rows[i].stored_status === WEEKLY_POINTS_STATUS_FINALIZED) summary.finalized++;
     else if (rows[i].stored_status === WEEKLY_POINTS_STATUS_CONFIRMED) summary.confirmed++;
+    else if (rows[i].stored_status === WEEKLY_POINTS_STATUS_VOIDED) summary.voided++;
     else summary.pending++;
   }
   return summary;
+}
+
+/**
+ * Derives the single lifecycle state of a doubles week from its stored row
+ * statuses: `finalized` if any row is locked, otherwise `confirmed` if any row
+ * is confirmed, otherwise `preview`. Voided rows never raise the state; they
+ * are a pre-confirmation admin action and do not represent a committed week.
+ * The state drives the panel's control gating and every mutating guard.
+ */
+function doublesPointsWeekState(rows) {
+  var state = 'preview';
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].stored_status === WEEKLY_POINTS_STATUS_FINALIZED) return 'finalized';
+    if (rows[i].stored_status === WEEKLY_POINTS_STATUS_CONFIRMED) state = 'confirmed';
+  }
+  return state;
+}
+
+/**
+ * Groups planned rows by pair_key for the roster and results table. A keyless
+ * (solo) row is its own group. Each group carries the shared place and points
+ * plus a pair-level status so the results table reads Pair / Place / Points /
+ * Status from one deterministic source. A group with any voided member is
+ * voided: it shows 0 points and is excluded from totals.
+ */
+function groupDoublesPointsPairs(rows) {
+  var order = [];
+  var map = {};
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var key = row.pair_key ? row.pair_key : ('__solo__' + row.member_number);
+    if (!map[key]) {
+      map[key] = { pair_key: row.pair_key || '', members: [] };
+      order.push(key);
+    }
+    map[key].members.push(row);
+  }
+
+  var pairs = [];
+  for (var g = 0; g < order.length; g++) {
+    var members = map[order[g]].members;
+    var names = [];
+    var anyVoided = false;
+    var hasPosition = false;
+    var positionLabel = '';
+    var positionRaw = '';
+    var points = null;
+    var hasFinalized = false;
+    var hasConfirmed = false;
+
+    for (var m = 0; m < members.length; m++) {
+      var member = members[m];
+      names.push(member.player_name || ('#' + member.member_number));
+      if (member.voided) anyVoided = true;
+      if (!hasPosition && member.has_position) {
+        hasPosition = true;
+        positionLabel = member.team_position !== '' ? member.team_position : String(member.team_position_raw);
+        positionRaw = member.team_position_raw;
+      }
+      if (points === null && !member.voided) points = member.points;
+      if (member.stored_status === WEEKLY_POINTS_STATUS_FINALIZED) hasFinalized = true;
+      if (member.stored_status === WEEKLY_POINTS_STATUS_CONFIRMED) hasConfirmed = true;
+    }
+
+    var status = 'preview';
+    if (hasFinalized) status = WEEKLY_POINTS_STATUS_FINALIZED;
+    else if (hasConfirmed) status = WEEKLY_POINTS_STATUS_CONFIRMED;
+    if (anyVoided) {
+      status = WEEKLY_POINTS_STATUS_VOIDED;
+      points = 0;
+    } else if (points === null) {
+      points = 0;
+    }
+
+    pairs.push({
+      pair_key: map[order[g]].pair_key,
+      label: names.join(' / '),
+      members: members.map(pointsRowResponse),
+      place: hasPosition ? positionLabel : '',
+      place_raw: positionRaw,
+      has_position: hasPosition,
+      points: points,
+      status: status,
+      voided: anyVoided
+    });
+  }
+  return pairs;
+}
+
+/**
+ * Validates an admin-supplied replacement pair key. The generated key is
+ * `dubs:<date>:<tokenA>+<tokenB>`; an admin may re-key to any short, plain
+ * label, so the only rules are the ones the sheet itself needs: non-empty,
+ * bounded length, and no leading formula character or line break.
+ */
+function validateDoublesPairKey(raw) {
+  if (raw === null || raw === undefined) return { error: 'A new pair key is required.' };
+  var key = raw.toString().trim();
+  if (!key) return { error: 'A new pair key is required.' };
+  if (key.length > DOUBLES_PAIR_KEY_MAX_LENGTH) {
+    return { error: 'Pair key is too long (max ' + DOUBLES_PAIR_KEY_MAX_LENGTH + ' characters).' };
+  }
+  if (/^[=+\-@]/.test(key)) return { error: 'Pair key cannot start with =, +, -, or @.' };
+  if (/[\r\n\t]/.test(key)) return { error: 'Pair key cannot contain line breaks or tabs.' };
+  return { value: key };
+}
+
+/**
+ * Resolves the rows a re-key or void applies to, from either a `pair_key`
+ * (every member of that pair) or a `member_number` (one row, i.e. moving one
+ * player between pairs). Exactly one selector is required.
+ */
+function selectDoublesPointsRows(rows, data) {
+  var rawPair = data.pair_key === undefined || data.pair_key === null ? '' : String(data.pair_key).trim();
+  var hasMember = data.member_number !== undefined && data.member_number !== null && String(data.member_number).trim() !== '';
+  if (!rawPair && !hasMember) {
+    return { error: 'Provide a pair_key or member_number.' };
+  }
+
+  var selected = [];
+  var i;
+  if (rawPair) {
+    for (i = 0; i < rows.length; i++) {
+      if (rows[i].pair_key && rows[i].pair_key === rawPair) selected.push(rows[i]);
+    }
+    if (!selected.length) return { error: 'Pair not found: ' + rawPair + '.' };
+    return { rows: selected, byPair: true, pairKey: rawPair };
+  }
+
+  for (i = 0; i < rows.length; i++) {
+    if (String(rows[i].member_number) === String(data.member_number).trim()) selected.push(rows[i]);
+  }
+  if (!selected.length) return { error: 'Member not found: ' + data.member_number + '.' };
+  return { rows: selected, byPair: false };
+}
+
+/**
+ * Recomputes partner_member_number for every row from the current pair_key
+ * grouping: a two-member pair records each other, anything else is blank. This
+ * keeps the convenience column truthful after a re-key without touching any
+ * points or tag state.
+ */
+function syncDoublesPartnerNumbers(sheet, headers, rows) {
+  var hMember = headers.indexOf('member_number');
+  var hPartner = headers.indexOf('partner_member_number');
+  if (hPartner === -1) return;
+
+  var groups = {};
+  var i;
+  for (i = 0; i < rows.length; i++) {
+    var key = rows[i].pair_key;
+    if (!key) continue;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(rows[i].member_number);
+  }
+
+  for (i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var members = row.pair_key ? groups[row.pair_key] : [];
+    var partner = '';
+    if (members.length === 2) {
+      partner = String(members[0]) === String(row.member_number) ? members[1] : members[0];
+    }
+    sheet.getRange(row.row_index + 1, hPartner + 1).setValue(partner === '' ? '' : partner);
+    row.partner_member_number = partner === '' ? '' : partner;
+  }
 }
 
 /**
@@ -4794,9 +4987,11 @@ function handleCalculatePoints(data) {
     league_date: gate.leagueDate,
     tab_name: tab.tab_name,
     writes: false,
+    week_state: doublesPointsWeekState(tab.rows),
     total_players: tab.rows.length,
     warnings: tab.warnings,
     players: tab.rows.map(pointsRowResponse),
+    pairs: groupDoublesPointsPairs(tab.rows),
     summary: pointsSummary(tab.rows)
   });
 }
@@ -4834,6 +5029,10 @@ function handleConfirmPoints(data) {
 
   for (var i = 0; i < tab.rows.length; i++) {
     var row = tab.rows[i];
+    // A voided row is an explicit admin ruling, not a pending score: it keeps
+    // its 0/voided state through confirm and finalize instead of being
+    // silently reopened.
+    if (row.stored_status === WEEKLY_POINTS_STATUS_VOIDED) continue;
     var sheetRow = row.row_index + 1;
     tab.sheet.getRange(sheetRow, hPoints + 1).setValue(row.points);
     tab.sheet.getRange(sheetRow, hStatus + 1).setValue(WEEKLY_POINTS_STATUS_CONFIRMED);
@@ -4860,9 +5059,11 @@ function handleConfirmPoints(data) {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: gate.leagueDate,
     tab_name: tab.tab_name,
+    week_state: doublesPointsWeekState(tab.rows),
     players_updated: confirmed.length,
     warnings: tab.warnings,
     players: confirmed,
+    pairs: groupDoublesPointsPairs(tab.rows),
     season_points: season ? season.totals : null,
     season_points_updated: season ? season.club_members_updated : 0,
     summary: pointsSummary(tab.rows)
@@ -4969,6 +5170,7 @@ function handleFinalizePoints(data) {
   var unconfirmed = [];
   for (var i = 0; i < tab.rows.length; i++) {
     var row = tab.rows[i];
+    if (row.stored_status === WEEKLY_POINTS_STATUS_VOIDED) continue;
     if (row.stored_status === WEEKLY_POINTS_STATUS_FINALIZED) continue;
     var storedPoints = parseFloat(row.stored_points);
     if (row.stored_status !== WEEKLY_POINTS_STATUS_CONFIRMED || isNaN(storedPoints)) {
@@ -4986,18 +5188,21 @@ function handleFinalizePoints(data) {
 
   for (var r = 0; r < tab.rows.length; r++) {
     var planRow = tab.rows[r];
-    if (planRow.stored_status !== WEEKLY_POINTS_STATUS_FINALIZED) {
+    // A voided row stays voided: it is excluded from the season total and must
+    // not be relabelled finalized by the lock.
+    if (planRow.stored_status !== WEEKLY_POINTS_STATUS_VOIDED &&
+        planRow.stored_status !== WEEKLY_POINTS_STATUS_FINALIZED) {
       var sheetRow = planRow.row_index + 1;
       tab.sheet.getRange(sheetRow, hStatus + 1).setValue(WEEKLY_POINTS_STATUS_FINALIZED);
       if (hUpdatedAt !== -1) tab.sheet.getRange(sheetRow, hUpdatedAt + 1).setValue(now);
+      planRow.stored_status = WEEKLY_POINTS_STATUS_FINALIZED;
     }
     playerStates.push({
       member_number: planRow.member_number,
       player_name: planRow.player_name,
-      weekly_points: parseFloat(planRow.stored_points),
-      status: WEEKLY_POINTS_STATUS_FINALIZED
+      weekly_points: planRow.voided ? 0 : parseFloat(planRow.stored_points),
+      status: planRow.stored_status
     });
-    planRow.stored_status = WEEKLY_POINTS_STATUS_FINALIZED;
   }
 
   var season = recomputeSeasonPoints(spreadsheet, clubSheet);
@@ -5006,11 +5211,194 @@ function handleFinalizePoints(data) {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: gate.leagueDate,
     tab_name: tab.tab_name,
-    players_finalized: tab.rows.length,
+    week_state: doublesPointsWeekState(tab.rows),
+    players_finalized: playerStates.length,
     warnings: tab.warnings,
     players: playerStates,
+    pairs: groupDoublesPointsPairs(tab.rows),
     season_points: season.totals,
     season_points_updated: season.club_members_updated,
+    summary: pointsSummary(tab.rows)
+  });
+}
+
+/**
+ * Admin action: re-key a doubles pair before confirmation.
+ *
+ * Targets either one `pair_key` (rename every member of that pair) or one
+ * `member_number` (move a single player into another pair). The new key is
+ * validated with the same plain-text rules the roster needs, the move is
+ * refused once the week is confirmed or finalized, and partner_member_number
+ * is rebuilt from the new grouping. No points are recalculated because the
+ * score depends on team placement, not on the pair label.
+ *
+ * Inputs: league_date (required), new_pair_key (required), and exactly one of
+ * pair_key or member_number.
+ */
+function handleRekeyPoints(data) {
+  var gate = validateDoublesPointsRequest(data);
+  if (gate.error) return respond('error', gate.error);
+
+  var keyCheck = validateDoublesPairKey(data.new_pair_key);
+  if (keyCheck.error) return respond('error', keyCheck.error);
+  var newKey = keyCheck.value;
+
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate);
+  if (tab.error) return respond('error', tab.error);
+
+  if (doublesPointsWeekState(tab.rows) !== 'preview') {
+    return respond('error', 'Points are already confirmed for ' + gate.leagueDate + '. Re-key is only allowed before confirmation.');
+  }
+
+  var selected = selectDoublesPointsRows(tab.rows, data);
+  if (selected.error) return respond('error', selected.error);
+
+  // A pair rename that lands on another existing pair would silently merge two
+  // teams; make the admin move the individual rows instead.
+  if (selected.byPair) {
+    for (var k = 0; k < tab.rows.length; k++) {
+      if (tab.rows[k].pair_key === newKey && tab.rows[k].pair_key !== selected.pairKey) {
+        return respond('error', 'Pair key already in use: ' + newKey + '. Choose a unique key or move players individually.');
+      }
+    }
+  }
+
+  var hPair = tab.headers.indexOf('pair_key');
+  if (hPair === -1) return respond('error', 'pair_key column missing from the weekly tab.');
+  var hUpdatedAt = tab.headers.indexOf('updated_at');
+  var now = new Date().toISOString();
+  var changed = 0;
+
+  for (var i = 0; i < selected.rows.length; i++) {
+    var row = selected.rows[i];
+    if (String(row.pair_key) === newKey) continue;
+    tab.sheet.getRange(row.row_index + 1, hPair + 1).setValue(newKey);
+    if (hUpdatedAt !== -1) tab.sheet.getRange(row.row_index + 1, hUpdatedAt + 1).setValue(now);
+    changed++;
+  }
+
+  var refreshed = readDoublesPointsTab(spreadsheet, gate.leagueDate);
+  if (refreshed.error) return respond('error', refreshed.error);
+  syncDoublesPartnerNumbers(refreshed.sheet, refreshed.headers, refreshed.rows);
+
+  return respond('ok', 'Pair key updated.', {
+    format: LEAGUE_FORMAT_DOUBLES,
+    league_date: gate.leagueDate,
+    tab_name: refreshed.tab_name,
+    week_state: doublesPointsWeekState(refreshed.rows),
+    changed: changed,
+    new_pair_key: newKey,
+    warnings: refreshed.warnings,
+    players: refreshed.rows.map(pointsRowResponse),
+    pairs: groupDoublesPointsPairs(refreshed.rows),
+    summary: pointsSummary(refreshed.rows)
+  });
+}
+
+/**
+ * Admin action: void or un-void a doubles roster row before confirmation.
+ *
+ * Targets one `pair_key` (the whole pair) or one `member_number`. A voided row
+ * keeps its placement for audit but scores 0 and is excluded from every season
+ * total; re-voiding toggles it back to pending. Refused once the week is
+ * confirmed or finalized, because a committed score is not silently edited.
+ *
+ * Inputs: league_date (required), voided (optional boolean, default true), and
+ * exactly one of pair_key or member_number.
+ */
+function handleVoidPoints(data) {
+  var gate = validateDoublesPointsRequest(data);
+  if (gate.error) return respond('error', gate.error);
+
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate);
+  if (tab.error) return respond('error', tab.error);
+
+  if (doublesPointsWeekState(tab.rows) !== 'preview') {
+    return respond('error', 'Points are already confirmed for ' + gate.leagueDate + '. Void is only allowed before confirmation.');
+  }
+
+  var selected = selectDoublesPointsRows(tab.rows, data);
+  if (selected.error) return respond('error', selected.error);
+
+  var voided = data.voided === undefined ? true : !!data.voided;
+  var hPoints = tab.headers.indexOf('weekly_points');
+  var hStatus = tab.headers.indexOf('weekly_points_status');
+  var hUpdatedAt = tab.headers.indexOf('updated_at');
+  var now = new Date().toISOString();
+  var affected = 0;
+
+  for (var i = 0; i < selected.rows.length; i++) {
+    var row = selected.rows[i];
+    var sheetRow = row.row_index + 1;
+    tab.sheet.getRange(sheetRow, hPoints + 1).setValue(voided ? 0 : '');
+    tab.sheet.getRange(sheetRow, hStatus + 1).setValue(voided ? WEEKLY_POINTS_STATUS_VOIDED : WEEKLY_POINTS_STATUS_PENDING);
+    if (hUpdatedAt !== -1) tab.sheet.getRange(sheetRow, hUpdatedAt + 1).setValue(now);
+    affected++;
+  }
+
+  // Re-read so the returned roster, warnings, and row identities reflect the
+  // new void state (a voided blank-position row is no longer a warning).
+  var refreshed = readDoublesPointsTab(spreadsheet, gate.leagueDate);
+  if (refreshed.error) return respond('error', refreshed.error);
+
+  return respond('ok', voided ? 'Row voided.' : 'Row restored to pending.', {
+    format: LEAGUE_FORMAT_DOUBLES,
+    league_date: gate.leagueDate,
+    tab_name: refreshed.tab_name,
+    week_state: doublesPointsWeekState(refreshed.rows),
+    changed: affected,
+    warnings: refreshed.warnings,
+    players: refreshed.rows.map(pointsRowResponse),
+    pairs: groupDoublesPointsPairs(refreshed.rows),
+    summary: pointsSummary(refreshed.rows)
+  });
+}
+
+/**
+ * Admin action: unlock a finalized doubles week back to confirmed so it can be
+ * re-confirmed or re-finalized. Only a finalized week can be unlocked; the
+ * voided rows keep their state. The season cache is already keyed on confirmed
+ * rows, so it does not need a rewrite.
+ *
+ * Inputs: league_date (required, YYYY-MM-DD format)
+ */
+function handleUnlockPoints(data) {
+  var gate = validateDoublesPointsRequest(data);
+  if (gate.error) return respond('error', gate.error);
+
+  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate);
+  if (tab.error) return respond('error', tab.error);
+
+  if (doublesPointsWeekState(tab.rows) !== 'finalized') {
+    return respond('error', 'Week ' + gate.leagueDate + ' is not finalized; there is nothing to unlock.');
+  }
+
+  var hStatus = tab.headers.indexOf('weekly_points_status');
+  var hUpdatedAt = tab.headers.indexOf('updated_at');
+  var now = new Date().toISOString();
+  var unlocked = 0;
+
+  for (var i = 0; i < tab.rows.length; i++) {
+    var row = tab.rows[i];
+    if (row.stored_status !== WEEKLY_POINTS_STATUS_FINALIZED) continue;
+    tab.sheet.getRange(row.row_index + 1, hStatus + 1).setValue(WEEKLY_POINTS_STATUS_CONFIRMED);
+    if (hUpdatedAt !== -1) tab.sheet.getRange(row.row_index + 1, hUpdatedAt + 1).setValue(now);
+    row.stored_status = WEEKLY_POINTS_STATUS_CONFIRMED;
+    unlocked++;
+  }
+
+  return respond('ok', 'Week unlocked for re-confirmation.', {
+    format: LEAGUE_FORMAT_DOUBLES,
+    league_date: gate.leagueDate,
+    tab_name: tab.tab_name,
+    week_state: doublesPointsWeekState(tab.rows),
+    players_unlocked: unlocked,
+    warnings: tab.warnings,
+    players: tab.rows.map(pointsRowResponse),
+    pairs: groupDoublesPointsPairs(tab.rows),
     summary: pointsSummary(tab.rows)
   });
 }
