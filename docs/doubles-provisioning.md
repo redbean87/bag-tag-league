@@ -22,12 +22,17 @@ topology. It is deterministic and safe to run repeatedly:
 
 The doubles weekly schema carries the 48 singles columns plus six doubles-only
 columns: `pair_key`, `partner_member_number`, `team_position`,
-`team_position_raw`, `weekly_points`, and `weekly_points_status`. Both the
-singles and doubles weekly headers are ordered human-first: names, then pair
-linkage and score/points where they apply, then the remaining columns in their
-historical relative order. Header names and counts are unchanged, so every
-reader that resolves a column by name keeps working; only the physical order
-changed. The singles `LEAGUE_SHEET_HEADERS` (15) are unchanged.
+`team_position_raw`, `weekly_points`, and `weekly_points_status`. `weekly_points`
+is computed from each committed placement when the UDisc import is committed;
+`weekly_points_status` is a retired column kept only for schema compatibility
+and is no longer read or written. Season totals are summed live from the
+committed `weekly_points` values, so there is no confirm/finalize step and no
+cached season total. Both the singles and doubles weekly headers are ordered
+human-first: names, then pair linkage and score/points where they apply, then
+the remaining columns in their historical relative order. Header names and
+counts are unchanged, so every reader that resolves a column by name keeps
+working; only the physical order changed. The singles `LEAGUE_SHEET_HEADERS`
+(15) are unchanged.
 
 ## Roster seeding
 

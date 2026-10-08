@@ -1,8 +1,8 @@
 'use strict';
 
-// Structural checks for the doubles Points panel in the admin page.
-// Behavioural checks (card visibility, buttons, warning rendering) run in a
-// real browser; see the task's browser-context verification.
+// Structural checks for the read-only doubles Points Results panel in the
+// admin page. Behavioural checks (card visibility, button wiring, rendering)
+// run in a real browser; see the task's browser-context verification.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -19,32 +19,36 @@ function functionBody(name) {
   return html.slice(start, next === -1 ? undefined : next);
 }
 
-test('the points panel is present and doubles-only', () => {
+test('the points results panel is present and doubles-only', () => {
   assert.match(html, /id="pointsCalcCard"/);
-  assert.match(html, /id="btnPreviewPoints" onclick="previewPoints\(\)"/);
-  assert.match(html, /id="btnConfirmPoints" onclick="confirmPoints\(\)"/);
-  assert.match(html, /id="btnFinalizePoints" onclick="finalizePoints\(\)"/);
+  assert.match(html, /id="btnLoadPoints" onclick="loadPoints\(\)"/);
 
   const apply = functionBody('applyLeague');
   assert.match(apply, /pointsCard\.style\.display = isDoubles \? '' : 'none'/);
 });
 
-test('the points actions post to the format-gated server actions', () => {
-  assert.match(functionBody('previewPoints'), /action: 'calculatePoints'/);
-  assert.match(functionBody('confirmPoints'), /action: 'confirmPoints'/);
-  assert.match(functionBody('finalizePoints'), /action: 'finalizePoints'/);
-  // Every request is scoped to the selected league spreadsheet.
-  for (const name of ['previewPoints', 'confirmPoints', 'finalizePoints']) {
-    assert.match(functionBody(name), /spreadsheetId: getSpreadsheetId\(\)/);
+test('the retired lifecycle controls are gone from the panel', () => {
+  for (const id of ['btnPreviewPoints', 'btnConfirmPoints', 'btnFinalizePoints', 'btnUnlockPoints']) {
+    assert.doesNotMatch(html, new RegExp('id="' + id + '"'), id + ' must not exist');
+  }
+  for (const name of ['confirmPoints', 'finalizePoints', 'unlockPoints', 'rekeyPointsPair', 'voidPointsPair', 'updatePointsControls']) {
+    assert.equal(html.indexOf('function ' + name + '('), -1, name + ' must not exist');
   }
 });
 
-test('the preview renders no-write messaging and blank-position warnings', () => {
-  const render = functionBody('renderPointsPreview');
-  assert.match(render, /Preview only\. No writes were made\./);
+test('the points panel reads results from the format-gated server action', () => {
+  assert.match(functionBody('fetchPointsResults'), /action: 'calculatePoints'/);
+  assert.match(functionBody('fetchPointsResults'), /spreadsheetId: getSpreadsheetId\(\)/);
+  assert.match(functionBody('loadPoints'), /fetchPointsResults\(\)/);
+});
+
+test('the results view renders committed points, warnings, and no lifecycle state', () => {
+  const render = functionBody('renderPointsResults');
+  assert.match(render, /Read-only\. Points are computed from each committed placement at import commit\./);
   assert.match(render, /data\.warnings/);
   assert.match(render, /data\.players/);
-  assert.match(render, /pointsStatusLabel\(pl\.stored_status\)/);
+  assert.match(render, /pair\.members/);
+  assert.doesNotMatch(render, /pointsStatusLabel|week_state|stored_status|voided/);
 });
 
 test('the points panel resets when the active date or league changes', () => {
@@ -53,8 +57,14 @@ test('the points panel resets when the active date or league changes', () => {
   assert.match(clear, /clearPointsStatus\(\)/);
 });
 
+test('committing a doubles import refreshes the results view and member totals', () => {
+  const commit = functionBody('commitUdiscImportDoubles');
+  assert.match(commit, /refreshPointsPanel\(\)/);
+  assert.match(commit, /loadMembers\(\)/);
+});
+
 test('the points panel never references tag actions or tag fields', () => {
-  for (const name of ['previewPoints', 'confirmPoints', 'finalizePoints', 'renderPointsPreview']) {
+  for (const name of ['loadPoints', 'refreshPointsPanel', 'renderPointsResults']) {
     const body = functionBody(name);
     assert.doesNotMatch(body, /calculateTags|confirmTags|finalizeRound/);
     assert.doesNotMatch(body, /out_tag|current_tag/);

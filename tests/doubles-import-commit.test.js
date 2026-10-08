@@ -189,7 +189,9 @@ test('commits a pair as two linked weekly rows sharing one pair key', () => {
   assert.deepEqual(column(week, 'partner_member_number').sort(), [3, 7]);
   assert.deepEqual(column(week, 'team_position'), [1, 1]);
   assert.deepEqual(column(week, 'team_position_raw'), [1, 1]);
-  assert.deepEqual(column(week, 'weekly_points_status'), ['pending', 'pending']);
+  // Points are computed at commit: a 1st-place pair earns 2 for each partner.
+  assert.deepEqual(column(week, 'weekly_points'), [2, 2]);
+  assert.deepEqual(column(week, 'weekly_points_status'), ['', '']);
   assert.deepEqual(column(week, 'score'), [41, 41]);
 
   // Identity columns are each partner's own, not the raw pair string.
@@ -214,7 +216,7 @@ test('commits multiple independent pairs with distinct keys', () => {
 
 // ─── Solos ───────────────────────────────────────────────────────────────────
 
-test('commits a solo as one keyless weekly row with pending points default', () => {
+test('commits a solo as one keyless weekly row with its placement points', () => {
   const h = loadCode();
   const { week } = buildDoubles(h, []);
 
@@ -228,7 +230,9 @@ test('commits a solo as one keyless weekly row with pending points default', () 
   const rows = dataRows(week);
   assert.equal(rows.length, 1);
   assert.equal(rows[0][h_index(week, 'pair_key')], '');
-  assert.equal(rows[0][h_index(week, 'weekly_points_status')], 'pending');
+  // A solo receives the full placement value: 4th -> 0.5.
+  assert.equal(rows[0][h_index(week, 'weekly_points')], 0.5);
+  assert.equal(rows[0][h_index(week, 'weekly_points_status')], '');
   assert.equal(rows[0][h_index(week, 'member_number')], 21);
 });
 

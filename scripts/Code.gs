@@ -36,9 +36,10 @@ const CLUB_MEMBER_HEADERS = [
   'updated_at'
 ];
 
-// Doubles ClubMembers headers: the 8 singles columns plus the season_points
-// cache. The singles schema is unchanged; finalizePoints appends the optional
-// column on the doubles roster when it is missing (see ensureSeasonPointsColumn).
+// Doubles ClubMembers headers: the 8 singles columns plus the optional,
+// legacy season_points column. Totals are now aggregated live from committed
+// weeks, so the column is never written; it stays accepted here only so a
+// roster provisioned by an earlier version still matches the doubles schema.
 const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS.concat([
   'season_points'
 ]);
@@ -71,7 +72,9 @@ const WEEKLY_RECORD_TAG_HEADERS = [
   'out_tag'
 ];
 
-// Doubles points lifecycle columns.
+// Doubles points columns. `weekly_points` is computed from the committed
+// placement at import commit; `weekly_points_status` is a retired column kept
+// only for schema compatibility.
 const WEEKLY_RECORD_POINTS_HEADERS = [
   'weekly_points',
   'weekly_points_status'
@@ -185,26 +188,11 @@ const WEEKLY_RECORD_HEADERS_DOUBLES = orderWeeklyHeaders(
   ]
 );
 
-// Doubles points lifecycle status values. Import records raw team placements
-// and leaves every participant (pair partner or solo) pending; the points
-// chain then moves each row pending -> confirmed -> finalized. Blank and other
-// unknown values are treated as pending by the confirm path so a legacy row is
-// never silently skipped.
-const WEEKLY_POINTS_STATUS_PENDING = 'pending';
-const WEEKLY_POINTS_STATUS_CONFIRMED = 'confirmed';
-const WEEKLY_POINTS_STATUS_FINALIZED = 'finalized';
-
-// Statuses whose weekly points count toward a season total. Every played week
-// contributes no matter where it sits in the lifecycle: a calculated week, a
-// confirmed-but-not-finalized week, and a finalized week all count. Pending
-// weeks carry no points and stay excluded. The status label itself is display
-// only and never filters a total.
-const WEEKLY_POINTS_STATUS_CALCULATED = 'calculated';
-const SEASON_POINTS_STATUSES = [
-  WEEKLY_POINTS_STATUS_CALCULATED,
-  WEEKLY_POINTS_STATUS_CONFIRMED,
-  WEEKLY_POINTS_STATUS_FINALIZED
-];
+// There is no points lifecycle. The UDisc import commit is the single points
+// computation boundary and the only writer of `weekly_points`; totals are
+// summed live from the committed values. The `weekly_points_status` column is
+// kept in the header schema so existing spreadsheets migrate cleanly, but no
+// code reads or writes a lifecycle status anymore.
 
 // Decided doubles scoring rule: team placement 1st/2nd/3rd earns 2/1.5/1 and
 // every other participant (including a blank/DNF placement) earns 0.5 showing
@@ -817,9 +805,11 @@ function readLeagueFormat(sheet) {
 }
 
 /**
- * Whether a ClubMembers header row matches a format. The doubles roster may
- * carry the optional season_points cache column once points are recorded, so
- * both the bare schema and the schema plus season_points are accepted there.
+ * Whether a ClubMembers header row matches a format. A doubles roster
+ * provisioned by an earlier version may still carry the optional, now-unused
+ * season_points column, so both the bare schema and the schema plus
+ * season_points are accepted there. Totals are aggregated live and never read
+ * that column.
  */
 function clubMemberHeadersMatch(headers, format) {
   if (format === LEAGUE_FORMAT_DOUBLES) {
@@ -1296,12 +1286,6 @@ function doPost(e) {
     if (data.action === 'calculatePoints') {
       return handleCalculatePoints(data);
     }
-    if (data.action === 'confirmPoints') {
-      return handleConfirmPoints(data);
-    }
-    if (data.action === 'finalizePoints') {
-      return handleFinalizePoints(data);
-    }
     if (data.action === 'calculateTags') {
       return handleCalculateTags(data);
     }
@@ -1495,9 +1479,8 @@ function handleSearchClubMembers(data) {
   const lowerQuery = query.toLowerCase();
   const results = [];
 
-  // Doubles members carry their season total (the sum of all played weekly
-  // points, whatever their per-week status) in every search result. Singles
-  // keeps its tag-only payload.
+  // Doubles members carry their season total (the live sum of all committed
+  // weekly points) in every search result. Singles keeps its tag-only payload.
   const seasonTotals = isDoubles ? sumSeasonPointsByMember(spreadsheet) : null;
 
   for (let i = 1; i < playersData.length && results.length < 10; i++) {
@@ -1542,10 +1525,10 @@ function handleSearchClubMembers(data) {
 /**
  * Lists club members for the selected league.
  *
- * Doubles member records include `season_points`, the sum of that member's
- * finalized weekly points. A member with no finalized weeks reports 0 and is
- * never omitted. Singles records omit season_points entirely so the singles
- * payload and views stay exactly as they were.
+ * Doubles member records include `season_points`, the live sum of that
+ * member's committed weekly points. A member with no committed weeks reports 0
+ * and is never omitted. Singles records omit season_points entirely so the
+ * singles payload and views stay exactly as they were.
  *
  * Inputs: league (optional routing selector)
  */
@@ -1570,9 +1553,8 @@ function handleListClubMembers(data) {
   const currentTagCol = playersHeaders.indexOf('current_tag');
   const isActiveCol = playersHeaders.indexOf('is_active');
 
-  // One aggregation shared by every doubles member listing; it sums every
-  // played week (calculated, confirmed, or finalized) so an unfinalized week
-  // still counts toward the displayed total.
+  // One aggregation shared by every doubles member listing; it sums the
+  // points persisted at import commit, so a committed week always counts.
   const seasonTotals = isDoubles ? sumSeasonPointsByMember(spreadsheet) : null;
 
   const members = [];
@@ -3466,12 +3448,15 @@ function buildDoublesPairFields(headers, udiscRow, memberNumber, pairKey, isSolo
     fields.team_position_raw = row.position_raw !== undefined ? row.position_raw : '';
   }
   if (headers.indexOf('weekly_points') !== -1) {
-    fields.weekly_points = '';
+    // Points are computed here, at import commit, from the committed placement.
+    // Because it is a pure function of the placement, a re-import recomputes
+    // and overwrites the same value instead of accumulating.
+    fields.weekly_points = doublesPointsForPosition(row.position_raw);
   }
   if (headers.indexOf('weekly_points_status') !== -1) {
-    // Solos earn the full team value too (design §2.7/§7), so they start
-    // pending like every other participant rather than not-applicable.
-    fields.weekly_points_status = WEEKLY_POINTS_STATUS_PENDING;
+    // The status column is retired: a committed row is identified by its
+    // populated weekly_points, so clear any legacy lifecycle label.
+    fields.weekly_points_status = '';
   }
   return fields;
 }
@@ -4628,10 +4613,16 @@ function handleFinalizeRound(data) {
   });
 }
 
-// ─── Doubles points lifecycle (calculate / confirm / finalize) ───────────────
+// ─── Doubles points: compute-at-commit + live results ───────────────────────
 //
-// A parallel, format-gated chain beside the singles tag chain. Every entry
-// point refuses the singles format before opening any sheet, and none of these
+// Points are a single computed value, not a lifecycle. The UDisc import commit
+// is the only boundary that persists points: it derives each participant's
+// weekly_points directly from their committed team placement. Standings and
+// member totals then aggregate those committed values live at read time, so no
+// separate confirm/finalize step and no cached season total can go stale.
+//
+// A parallel, format-gated path beside the singles tag chain. Every entry point
+// refuses the singles format before opening any sheet, and none of these
 // functions reads or writes in_tag / out_tag / current_tag, so a tag event can
 // never enter points math and points math can never mutate tag state.
 
@@ -4645,20 +4636,20 @@ function doublesPointsForPosition(positionRaw) {
 }
 
 /**
- * Builds the deterministic per-row points plan for one doubles week tab.
- * Pure: reads the already-fetched values only and performs no writes. Each row
- * keeps its sheet row identity (row_index) so confirm/finalize can apply the
- * exact same result. A blank or non-numeric placement earns 0.5 showing-up
- * credit and emits a warning.
+ * Builds the read-only per-row results view for one doubles week tab. Pure:
+ * reads the already-fetched values only and performs no writes. Points are
+ * derived from the committed placement with the same rule the import commit
+ * applies, so the results view is always reproducible from the sheet. A blank
+ * or non-numeric placement earns 0.5 showing-up credit and emits a warning.
  */
 function buildDoublesPointsPlan(weeklyData, headers) {
   var hMember = headers.indexOf('member_number');
   var hName = headers.indexOf('player_name_snapshot');
   var hPair = headers.indexOf('pair_key');
+  var hPartner = headers.indexOf('partner_member_number');
   var hTeamPosition = headers.indexOf('team_position');
   var hPositionRaw = headers.indexOf('team_position_raw');
   var hPoints = headers.indexOf('weekly_points');
-  var hStatus = headers.indexOf('weekly_points_status');
 
   var rows = [];
   var warnings = [];
@@ -4690,12 +4681,12 @@ function buildDoublesPointsPlan(weeklyData, headers) {
       member_number: memberNumber,
       player_name: (hName !== -1 ? row[hName] : '') || '',
       pair_key: hPair !== -1 ? (row[hPair] || '') : '',
+      partner_member_number: hPartner !== -1 ? (row[hPartner] || '') : '',
       team_position: hTeamPosition !== -1 ? (row[hTeamPosition] || '') : '',
       team_position_raw: rawPosition === undefined ? '' : rawPosition,
       has_position: hasPosition,
       points: doublesPointsForPosition(rawPosition),
       stored_points: hPoints !== -1 ? row[hPoints] : '',
-      stored_status: hStatus !== -1 ? (row[hStatus] || '') : '',
       warning: warning
     });
   }
@@ -4704,9 +4695,8 @@ function buildDoublesPointsPlan(weeklyData, headers) {
 }
 
 /**
- * Opens and validates the doubles weekly points tab for a league date.
- * Returns { error } instead of a tab when the request cannot be served, so
- * every lifecycle handler reports the same structured error.
+ * Opens and validates the doubles weekly results tab for a league date.
+ * Returns { error } instead of a tab when the request cannot be served.
  */
 function readDoublesPointsTab(spreadsheet, leagueDate) {
   var tabName = 'Week ' + leagueDate;
@@ -4718,8 +4708,7 @@ function readDoublesPointsTab(spreadsheet, leagueDate) {
   var weeklyData = weeklySheet.getDataRange().getValues();
   var headers = weeklyData[0] || [];
   if (headers.indexOf('team_position_raw') === -1 ||
-      headers.indexOf('weekly_points') === -1 ||
-      headers.indexOf('weekly_points_status') === -1) {
+      headers.indexOf('weekly_points') === -1) {
     return { error: 'Weekly tab is not a doubles points tab: ' + tabName + '.' };
   }
 
@@ -4746,38 +4735,88 @@ function validateDoublesPointsRequest(data) {
   return { leagueDate: leagueDate };
 }
 
-/** Public shape of one planned row in a points response. */
+/** Public shape of one row in the read-only points results view. */
 function pointsRowResponse(row) {
   return {
     row_index: row.row_index,
     member_number: row.member_number,
     player_name: row.player_name,
     pair_key: row.pair_key,
+    partner_member_number: row.partner_member_number,
     team_position: row.team_position,
     team_position_raw: row.team_position_raw,
     has_position: row.has_position,
     points: row.points,
     stored_points: row.stored_points,
-    stored_status: row.stored_status,
     warning: row.warning ? row.warning.message : null
   };
 }
 
 function pointsSummary(rows) {
-  var summary = { total_rows: rows.length, warnings: 0, finalized: 0, confirmed: 0, pending: 0 };
+  var summary = { total_rows: rows.length, warnings: 0 };
   for (var i = 0; i < rows.length; i++) {
     if (rows[i].warning) summary.warnings++;
-    if (rows[i].stored_status === WEEKLY_POINTS_STATUS_FINALIZED) summary.finalized++;
-    else if (rows[i].stored_status === WEEKLY_POINTS_STATUS_CONFIRMED) summary.confirmed++;
-    else summary.pending++;
   }
   return summary;
 }
 
 /**
- * Admin action: preview doubles points without writing anything.
- * Returns per-row points plus a warning for every blank-position row, and
- * preserves each row's identity so confirmPoints applies the same result.
+ * Groups results rows by pair_key for the results table. A keyless (solo) row
+ * is its own group. Each group carries the shared place and points so the
+ * table reads Pair / Place / Points from one deterministic source.
+ */
+function groupDoublesPointsPairs(rows) {
+  var order = [];
+  var map = {};
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var key = row.pair_key ? row.pair_key : ('__solo__' + row.member_number);
+    if (!map[key]) {
+      map[key] = { pair_key: row.pair_key || '', members: [] };
+      order.push(key);
+    }
+    map[key].members.push(row);
+  }
+
+  var pairs = [];
+  for (var g = 0; g < order.length; g++) {
+    var members = map[order[g]].members;
+    var names = [];
+    var hasPosition = false;
+    var positionLabel = '';
+    var positionRaw = '';
+    var points = null;
+
+    for (var m = 0; m < members.length; m++) {
+      var member = members[m];
+      names.push(member.player_name || ('#' + member.member_number));
+      if (!hasPosition && member.has_position) {
+        hasPosition = true;
+        positionLabel = member.team_position !== '' ? member.team_position : String(member.team_position_raw);
+        positionRaw = member.team_position_raw;
+      }
+      if (points === null) points = member.points;
+    }
+
+    pairs.push({
+      pair_key: map[order[g]].pair_key,
+      label: names.join(' / '),
+      members: members.map(pointsRowResponse),
+      place: hasPosition ? positionLabel : '',
+      place_raw: positionRaw,
+      has_position: hasPosition,
+      points: points === null ? 0 : points
+    });
+  }
+  return pairs;
+}
+
+/**
+ * Admin action: read the committed doubles results for one week.
+ *
+ * Read-only: derives points from each committed placement with the same rule
+ * the import commit uses, and returns the pair-grouped results table. No sheet
+ * write, no confirm/finalize step, and no dependency on a points status.
  *
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
@@ -4789,7 +4828,7 @@ function handleCalculatePoints(data) {
   var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate);
   if (tab.error) return respond('error', tab.error);
 
-  return respond('ok', 'Points preview calculated. No writes were made.', {
+  return respond('ok', 'Points results loaded. No writes were made.', {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: gate.leagueDate,
     tab_name: tab.tab_name,
@@ -4797,104 +4836,19 @@ function handleCalculatePoints(data) {
     total_players: tab.rows.length,
     warnings: tab.warnings,
     players: tab.rows.map(pointsRowResponse),
+    pairs: groupDoublesPointsPairs(tab.rows),
     summary: pointsSummary(tab.rows)
   });
 }
 
 /**
- * Admin action: confirm doubles weekly points.
- * Recomputes the preview server-side (client rows are never trusted), refuses
- * a finalized week before any write, then writes weekly_points and marks each
- * row confirmed. Re-running while unfinalized reconciles the stored value with
- * the recomputed one instead of accumulating it, and refreshes the season
- * cache so a confirmed week counts before it is finalized. Never touches tag
- * state.
- *
- * Inputs: league_date (required, YYYY-MM-DD format)
- */
-function handleConfirmPoints(data) {
-  var gate = validateDoublesPointsRequest(data);
-  if (gate.error) return respond('error', gate.error);
-
-  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
-  var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate);
-  if (tab.error) return respond('error', tab.error);
-
-  for (var f = 0; f < tab.rows.length; f++) {
-    if (tab.rows[f].stored_status === WEEKLY_POINTS_STATUS_FINALIZED) {
-      return respond('error', 'Week ' + gate.leagueDate + ' is already finalized. Unlock before re-confirming.');
-    }
-  }
-
-  var hPoints = tab.headers.indexOf('weekly_points');
-  var hStatus = tab.headers.indexOf('weekly_points_status');
-  var hUpdatedAt = tab.headers.indexOf('updated_at');
-  var now = new Date().toISOString();
-  var confirmed = [];
-
-  for (var i = 0; i < tab.rows.length; i++) {
-    var row = tab.rows[i];
-    var sheetRow = row.row_index + 1;
-    tab.sheet.getRange(sheetRow, hPoints + 1).setValue(row.points);
-    tab.sheet.getRange(sheetRow, hStatus + 1).setValue(WEEKLY_POINTS_STATUS_CONFIRMED);
-    if (hUpdatedAt !== -1) tab.sheet.getRange(sheetRow, hUpdatedAt + 1).setValue(now);
-    row.stored_status = WEEKLY_POINTS_STATUS_CONFIRMED;
-    row.stored_points = row.points;
-    confirmed.push({
-      member_number: row.member_number,
-      player_name: row.player_name,
-      points: row.points
-    });
-  }
-
-  // Refresh the stored season cache so confirmed-but-not-yet-finalized weeks
-  // count immediately. Reusing recomputeSeasonPoints keeps the cache and the
-  // live member listings on the same all-weeks aggregation.
-  var season = null;
-  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
-  if (clubSheet) {
-    season = recomputeSeasonPoints(spreadsheet, clubSheet);
-  }
-
-  return respond('ok', 'Points confirmed.', {
-    format: LEAGUE_FORMAT_DOUBLES,
-    league_date: gate.leagueDate,
-    tab_name: tab.tab_name,
-    players_updated: confirmed.length,
-    warnings: tab.warnings,
-    players: confirmed,
-    season_points: season ? season.totals : null,
-    season_points_updated: season ? season.club_members_updated : 0,
-    summary: pointsSummary(tab.rows)
-  });
-}
-
-/**
- * Ensures the doubles ClubMembers roster has a season_points cache column,
- * appending it when missing. Returns the 0-based column index.
- */
-function ensureSeasonPointsColumn(clubSheet) {
-  var lastColumn = Math.max(clubSheet.getLastColumn(), 1);
-  var headers = clubSheet.getRange(1, 1, 1, lastColumn).getValues()[0];
-  var seasonCol = headers.indexOf('season_points');
-  if (seasonCol === -1) {
-    seasonCol = headers.length;
-    clubSheet.getRange(1, seasonCol + 1).setValue('season_points');
-    clubSheet.getRange(1, seasonCol + 1).setFontWeight('bold');
-  }
-  return seasonCol;
-}
-
-/**
- * Sums point-bearing weekly points per member_number across every Week tab.
- * Every played week counts regardless of lifecycle status: calculated,
- * confirmed, and finalized rows all contribute, so a confirmed-but-not-yet
- * finalized week is no longer excluded from a season total. Pending rows carry
- * no points and are skipped, as are blank/non-numeric values. Returns a plain
- * object keyed by member_number; a member with no counted rows is absent
- * (callers default to 0). This is the single aggregation the season cache and
- * every member listing share, so per-week status labels can never filter a
- * total again.
+ * Sums each member's committed weekly points across every Week tab. This is
+ * the single live aggregation every doubles total shares: it reads the points
+ * persisted at import commit and never consults a status column or a cached
+ * season total, so a total can never go stale. A row with a blank or
+ * non-numeric weekly_points was never committed and contributes nothing.
+ * Returns a plain object keyed by member_number; a member with no committed
+ * rows is absent (callers default to 0).
  */
 function sumSeasonPointsByMember(spreadsheet) {
   var totals = {};
@@ -4904,11 +4858,9 @@ function sumSeasonPointsByMember(spreadsheet) {
     var headers = data[0] || [];
     var hMember = headers.indexOf('member_number');
     var hPoints = headers.indexOf('weekly_points');
-    var hStatus = headers.indexOf('weekly_points_status');
-    if (hMember === -1 || hPoints === -1 || hStatus === -1) continue;
+    if (hMember === -1 || hPoints === -1) continue;
 
     for (var i = 1; i < data.length; i++) {
-      if (SEASON_POINTS_STATUSES.indexOf(data[i][hStatus]) === -1) continue;
       var memberNumber = data[i][hMember];
       if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
       var points = parseFloat(data[i][hPoints]);
@@ -4917,102 +4869,6 @@ function sumSeasonPointsByMember(spreadsheet) {
     }
   }
   return totals;
-}
-
-/**
- * Recomputes the doubles season_points cache from every point-bearing weekly
- * row across all Week tabs (calculated, confirmed, and finalized) and writes
- * the absolute total per member. Recomputing from source (rather than
- * incrementing) keeps it idempotent: finalizing or confirming the same week
- * twice writes the same total, and a cache written by the old finalized-only
- * aggregation is overwritten with the all-weeks total on the next update.
- */
-function recomputeSeasonPoints(spreadsheet, clubSheet) {
-  var seasonCol = ensureSeasonPointsColumn(clubSheet);
-  var clubData = clubSheet.getDataRange().getValues();
-  var clubHeaders = clubData[0] || [];
-  var memberCol = clubHeaders.indexOf('member_number');
-
-  var totals = sumSeasonPointsByMember(spreadsheet);
-
-  var updated = 0;
-  for (var j = 1; j < clubData.length; j++) {
-    var number = clubData[j][memberCol];
-    if (number === '' || number === null || number === undefined) continue;
-    var total = totals[number] !== undefined ? totals[number] : 0;
-    clubSheet.getRange(j + 1, seasonCol + 1).setValue(total);
-    updated++;
-  }
-
-  return { club_members_updated: updated, totals: totals };
-}
-
-/**
- * Admin action: finalize doubles weekly points.
- * Requires every row to be confirmed (a finalized week may be re-finalized
- * idempotently), marks the rows finalized, then rebuilds the ClubMembers
- * season_points cache from every point-bearing week. Never touches tag records.
- *
- * Inputs: league_date (required, YYYY-MM-DD format)
- */
-function handleFinalizePoints(data) {
-  var gate = validateDoublesPointsRequest(data);
-  if (gate.error) return respond('error', gate.error);
-
-  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
-  var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate);
-  if (tab.error) return respond('error', tab.error);
-
-  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
-  if (!clubSheet) return respond('error', 'ClubMembers tab not found.');
-
-  var unconfirmed = [];
-  for (var i = 0; i < tab.rows.length; i++) {
-    var row = tab.rows[i];
-    if (row.stored_status === WEEKLY_POINTS_STATUS_FINALIZED) continue;
-    var storedPoints = parseFloat(row.stored_points);
-    if (row.stored_status !== WEEKLY_POINTS_STATUS_CONFIRMED || isNaN(storedPoints)) {
-      unconfirmed.push(row.member_number);
-    }
-  }
-  if (unconfirmed.length > 0) {
-    return respond('error', 'Confirm points before finalizing. Unconfirmed rows: ' + unconfirmed.join(', ') + '.');
-  }
-
-  var hStatus = tab.headers.indexOf('weekly_points_status');
-  var hUpdatedAt = tab.headers.indexOf('updated_at');
-  var now = new Date().toISOString();
-  var playerStates = [];
-
-  for (var r = 0; r < tab.rows.length; r++) {
-    var planRow = tab.rows[r];
-    if (planRow.stored_status !== WEEKLY_POINTS_STATUS_FINALIZED) {
-      var sheetRow = planRow.row_index + 1;
-      tab.sheet.getRange(sheetRow, hStatus + 1).setValue(WEEKLY_POINTS_STATUS_FINALIZED);
-      if (hUpdatedAt !== -1) tab.sheet.getRange(sheetRow, hUpdatedAt + 1).setValue(now);
-    }
-    playerStates.push({
-      member_number: planRow.member_number,
-      player_name: planRow.player_name,
-      weekly_points: parseFloat(planRow.stored_points),
-      status: WEEKLY_POINTS_STATUS_FINALIZED
-    });
-    planRow.stored_status = WEEKLY_POINTS_STATUS_FINALIZED;
-  }
-
-  var season = recomputeSeasonPoints(spreadsheet, clubSheet);
-
-  return respond('ok', 'Points finalized. Season cache updated.', {
-    format: LEAGUE_FORMAT_DOUBLES,
-    league_date: gate.leagueDate,
-    tab_name: tab.tab_name,
-    players_finalized: tab.rows.length,
-    warnings: tab.warnings,
-    players: playerStates,
-    season_points: season.totals,
-    season_points_updated: season.club_members_updated,
-    summary: pointsSummary(tab.rows)
-  });
 }
 
 /**
