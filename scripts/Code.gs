@@ -194,6 +194,18 @@ const WEEKLY_POINTS_STATUS_PENDING = 'pending';
 const WEEKLY_POINTS_STATUS_CONFIRMED = 'confirmed';
 const WEEKLY_POINTS_STATUS_FINALIZED = 'finalized';
 
+// Statuses whose weekly points count toward a season total. Every played week
+// contributes no matter where it sits in the lifecycle: a calculated week, a
+// confirmed-but-not-finalized week, and a finalized week all count. Pending
+// weeks carry no points and stay excluded. The status label itself is display
+// only and never filters a total.
+const WEEKLY_POINTS_STATUS_CALCULATED = 'calculated';
+const SEASON_POINTS_STATUSES = [
+  WEEKLY_POINTS_STATUS_CALCULATED,
+  WEEKLY_POINTS_STATUS_CONFIRMED,
+  WEEKLY_POINTS_STATUS_FINALIZED
+];
+
 // Decided doubles scoring rule: team placement 1st/2nd/3rd earns 2/1.5/1 and
 // every other participant (including a blank/DNF placement) earns 0.5 showing
 // up credit. Both partners receive the identical value; a solo receives the
@@ -806,7 +818,7 @@ function readLeagueFormat(sheet) {
 
 /**
  * Whether a ClubMembers header row matches a format. The doubles roster may
- * carry the optional season_points cache column once points are finalized, so
+ * carry the optional season_points cache column once points are recorded, so
  * both the bare schema and the schema plus season_points are accepted there.
  */
 function clubMemberHeadersMatch(headers, format) {
@@ -1483,9 +1495,10 @@ function handleSearchClubMembers(data) {
   const lowerQuery = query.toLowerCase();
   const results = [];
 
-  // Doubles members carry their season total (the sum of finalized weekly
-  // points) in every search result. Singles keeps its tag-only payload.
-  const seasonTotals = isDoubles ? sumFinalizedPointsByMember(spreadsheet) : null;
+  // Doubles members carry their season total (the sum of all played weekly
+  // points, whatever their per-week status) in every search result. Singles
+  // keeps its tag-only payload.
+  const seasonTotals = isDoubles ? sumSeasonPointsByMember(spreadsheet) : null;
 
   for (let i = 1; i < playersData.length && results.length < 10; i++) {
     const row = playersData[i];
@@ -1557,9 +1570,10 @@ function handleListClubMembers(data) {
   const currentTagCol = playersHeaders.indexOf('current_tag');
   const isActiveCol = playersHeaders.indexOf('is_active');
 
-  // One aggregation shared by every doubles member listing; it sums only
-  // finalized weekly rows, so draft/cancelled weeks never leak into a total.
-  const seasonTotals = isDoubles ? sumFinalizedPointsByMember(spreadsheet) : null;
+  // One aggregation shared by every doubles member listing; it sums every
+  // played week (calculated, confirmed, or finalized) so an unfinalized week
+  // still counts toward the displayed total.
+  const seasonTotals = isDoubles ? sumSeasonPointsByMember(spreadsheet) : null;
 
   const members = [];
   for (let i = 1; i < playersData.length; i++) {
@@ -4792,7 +4806,9 @@ function handleCalculatePoints(data) {
  * Recomputes the preview server-side (client rows are never trusted), refuses
  * a finalized week before any write, then writes weekly_points and marks each
  * row confirmed. Re-running while unfinalized reconciles the stored value with
- * the recomputed one instead of accumulating it. Never touches tag state.
+ * the recomputed one instead of accumulating it, and refreshes the season
+ * cache so a confirmed week counts before it is finalized. Never touches tag
+ * state.
  *
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
@@ -4831,6 +4847,15 @@ function handleConfirmPoints(data) {
     });
   }
 
+  // Refresh the stored season cache so confirmed-but-not-yet-finalized weeks
+  // count immediately. Reusing recomputeSeasonPoints keeps the cache and the
+  // live member listings on the same all-weeks aggregation.
+  var season = null;
+  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  if (clubSheet) {
+    season = recomputeSeasonPoints(spreadsheet, clubSheet);
+  }
+
   return respond('ok', 'Points confirmed.', {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: gate.leagueDate,
@@ -4838,6 +4863,8 @@ function handleConfirmPoints(data) {
     players_updated: confirmed.length,
     warnings: tab.warnings,
     players: confirmed,
+    season_points: season ? season.totals : null,
+    season_points_updated: season ? season.club_members_updated : 0,
     summary: pointsSummary(tab.rows)
   });
 }
@@ -4859,13 +4886,17 @@ function ensureSeasonPointsColumn(clubSheet) {
 }
 
 /**
- * Sums finalized weekly points per member_number across every Week tab.
- * Returns a plain object keyed by member_number; a member with no finalized
- * rows is absent (callers default to 0). This is the single aggregation the
- * season cache and every member listing share, so draft/unfinalized weeks can
- * never leak into a total.
+ * Sums point-bearing weekly points per member_number across every Week tab.
+ * Every played week counts regardless of lifecycle status: calculated,
+ * confirmed, and finalized rows all contribute, so a confirmed-but-not-yet
+ * finalized week is no longer excluded from a season total. Pending rows carry
+ * no points and are skipped, as are blank/non-numeric values. Returns a plain
+ * object keyed by member_number; a member with no counted rows is absent
+ * (callers default to 0). This is the single aggregation the season cache and
+ * every member listing share, so per-week status labels can never filter a
+ * total again.
  */
-function sumFinalizedPointsByMember(spreadsheet) {
+function sumSeasonPointsByMember(spreadsheet) {
   var totals = {};
   var weekSheets = getWeekSheets(spreadsheet);
   for (var s = 0; s < weekSheets.length; s++) {
@@ -4877,7 +4908,7 @@ function sumFinalizedPointsByMember(spreadsheet) {
     if (hMember === -1 || hPoints === -1 || hStatus === -1) continue;
 
     for (var i = 1; i < data.length; i++) {
-      if (data[i][hStatus] !== WEEKLY_POINTS_STATUS_FINALIZED) continue;
+      if (SEASON_POINTS_STATUSES.indexOf(data[i][hStatus]) === -1) continue;
       var memberNumber = data[i][hMember];
       if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
       var points = parseFloat(data[i][hPoints]);
@@ -4889,10 +4920,12 @@ function sumFinalizedPointsByMember(spreadsheet) {
 }
 
 /**
- * Recomputes the doubles season_points cache from every finalized weekly row
- * across all Week tabs and writes the absolute total per member. Recomputing
- * from source (rather than incrementing) keeps it idempotent: finalizing the
- * same week twice writes the same total.
+ * Recomputes the doubles season_points cache from every point-bearing weekly
+ * row across all Week tabs (calculated, confirmed, and finalized) and writes
+ * the absolute total per member. Recomputing from source (rather than
+ * incrementing) keeps it idempotent: finalizing or confirming the same week
+ * twice writes the same total, and a cache written by the old finalized-only
+ * aggregation is overwritten with the all-weeks total on the next update.
  */
 function recomputeSeasonPoints(spreadsheet, clubSheet) {
   var seasonCol = ensureSeasonPointsColumn(clubSheet);
@@ -4900,7 +4933,7 @@ function recomputeSeasonPoints(spreadsheet, clubSheet) {
   var clubHeaders = clubData[0] || [];
   var memberCol = clubHeaders.indexOf('member_number');
 
-  var totals = sumFinalizedPointsByMember(spreadsheet);
+  var totals = sumSeasonPointsByMember(spreadsheet);
 
   var updated = 0;
   for (var j = 1; j < clubData.length; j++) {
@@ -4918,7 +4951,7 @@ function recomputeSeasonPoints(spreadsheet, clubSheet) {
  * Admin action: finalize doubles weekly points.
  * Requires every row to be confirmed (a finalized week may be re-finalized
  * idempotently), marks the rows finalized, then rebuilds the ClubMembers
- * season_points cache from all finalized weeks. Never touches tag records.
+ * season_points cache from every point-bearing week. Never touches tag records.
  *
  * Inputs: league_date (required, YYYY-MM-DD format)
  */

@@ -322,7 +322,7 @@
     <h2>Members</h2>
     <p class="help-text">
       Doubles members with their <strong>Season Total</strong>: the sum of
-      each member's finalized weekly points. A member with no finalized weeks
+      each member's points for every week played. A member with no points yet
       shows 0.
     </p>
     <button type="button" id="btnLoadMembers" onclick="loadMembers()">Refresh Members</button>
@@ -635,7 +635,8 @@
 
     /**
      * Loads the doubles member list with each member's season total. The
-     * server sums only finalized weekly points, so draft weeks never show up.
+     * server sums every played week (calculated, confirmed, or finalized), so
+     * an unfinalized week still counts.
      */
     async function loadMembers() {
       var card = document.getElementById('membersCard');
@@ -677,7 +678,7 @@
     }
 
     // Renders one row per member. season_points defaults to 0 so a member with
-    // no finalized result shows a number, never null/undefined/NaN.
+    // no points yet shows a number, never null/undefined/NaN.
     function renderMembers(members) {
       var container = document.getElementById('membersTable');
       if (!container) return;
