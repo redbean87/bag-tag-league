@@ -156,8 +156,8 @@ singles tabs above:
   `current_tag`, plus the `season_points` cache (**8 columns**).
 
 A pre-detag doubles sheet (54 weekly columns and a 9-column roster carrying
-`current_tag`) is brought forward by the gated `migrateDetagColumnDrops`
-migration. The singles schema is never modified by it.
+`current_tag`) is brought forward by the `migrateDetagColumnDrops` migration.
+The singles schema is never modified by it.
 
 ### ImportHistory Tab
 

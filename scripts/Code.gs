@@ -49,8 +49,8 @@ const CLUB_MEMBER_HEADERS = [
 // season_points cache column. Totals are always derived live from committed
 // weeks; the column is a denormalized copy kept current on every points write
 // (the UDisc import commit) so the ClubMembers tab itself holds the totals. A
-// roster provisioned before the detag is upgraded in place by the gated
-// drop-column migration.
+// roster provisioned before the detag is upgraded in place by the drop-column
+// migration.
 const CLUB_MEMBER_HEADERS_DETAG = CLUB_MEMBER_HEADERS.filter(function(header) {
   return header !== 'current_tag';
 });
@@ -1510,30 +1510,9 @@ function handleMigrateWeeklyColumnOrder(data) {
 
 // ─── Detag column-drop migration ────────────────────────────────────────────
 
-// Script-property approval gate for the destructive detag drop. The captain
-// sets
-//
-//   DETAG_COLUMN_DROPS_APPROVAL = 'bag-detag-drops-c1'
-//
-// in the Apps Script project before running the apply entry point. Nothing in
-// deployment, startup, tests, or ordinary sheet operations sets this property,
-// so the drop cannot run unless a captain explicitly opts in.
-var DETAG_COLUMN_DROPS_APPROVAL_PROPERTY = 'DETAG_COLUMN_DROPS_APPROVAL';
-var DETAG_COLUMN_DROPS_APPROVAL_TOKEN = 'bag-detag-drops-c1';
-
-/**
- * Whether the live detag drop has been explicitly authorized by the captain.
- * A missing or mismatched Script Property means "not authorized".
- */
-function isDetagColumnDropsAuthorized() {
-  try {
-    var value = PropertiesService.getScriptProperties()
-      .getProperty(DETAG_COLUMN_DROPS_APPROVAL_PROPERTY);
-    return value === DETAG_COLUMN_DROPS_APPROVAL_TOKEN;
-  } catch (e) {
-    return false;
-  }
-}
+// The destructive detag drop has no script-property interlock. The safety
+// model is the explicit operator go plus the preview: run the dry run first and
+// inspect exactly which columns will be removed before applying.
 
 /**
  * The weekly tag columns a (format, scoring) pair no longer uses. A
@@ -1608,7 +1587,7 @@ function planTagColumnDrops(headers, dropHeaders) {
 /**
  * Deletes the planned tag columns from a sheet. Deletes from the highest
  * position to the lowest so earlier indices stay valid. Only called by
- * migrateDetagColumnDrops after the authorization gate.
+ * migrateDetagColumnDrops after the plan is confirmed.
  */
 function applyTagColumnDrops(sheet, plan) {
   if (plan.status === 'no-drop') {
@@ -1649,12 +1628,12 @@ function applyTagColumnDrops(sheet, plan) {
  * found by name; a tag-scoring league drops nothing.
  *
  * Dry-run by default: with `apply: false` it writes nothing and returns the
- * planned drops per sheet. With `apply: true` it refuses unless the captain has
- * set the approval Script Property, then deletes every planned tag column. A
- * sheet with nothing to drop is a no-op, and an ambiguous layout fails before
- * any other sheet in the run is written.
+ * planned drops per sheet. With `apply: true` it deletes every planned tag
+ * column; the preview and its review are the safety check, and there is no
+ * script-property interlock. A sheet with nothing to drop is a no-op, and an
+ * ambiguous layout fails before any other sheet in the run is written.
  *
- * Returns { applied, authorized, results } or { applied: false, error }.
+ * Returns { applied, results } or { applied: false, error }.
  */
 function migrateDetagColumnDrops(spreadsheet, format, options) {
   options = options || {};
@@ -1665,16 +1644,6 @@ function migrateDetagColumnDrops(spreadsheet, format, options) {
   var sheets = spreadsheet.getSheets();
   var plans = [];
   var results = [];
-
-  if (apply && !isDetagColumnDropsAuthorized()) {
-    return {
-      applied: false,
-      authorized: false,
-      error: 'Detag column-drop migration is not authorized. Set the ' +
-        DETAG_COLUMN_DROPS_APPROVAL_PROPERTY + ' Script Property to authorize it.',
-      results: []
-    };
-  }
 
   var scanError = null;
   for (var i = 0; i < sheets.length; i++) {
@@ -1706,7 +1675,7 @@ function migrateDetagColumnDrops(spreadsheet, format, options) {
   }
 
   if (scanError) {
-    return { applied: false, authorized: true, error: scanError.error, failed_sheet: scanError.sheet_name, results: [] };
+    return { applied: false, error: scanError.error, failed_sheet: scanError.sheet_name, results: [] };
   }
 
   for (var p = 0; p < plans.length; p++) {
@@ -1737,15 +1706,14 @@ function migrateDetagColumnDrops(spreadsheet, format, options) {
     });
   }
 
-  return { applied: apply, authorized: true, results: results };
+  return { applied: apply, results: results };
 }
 
 /**
  * Admin/operator handler: dry-run or apply the detag column-drop migration.
- * Always defaults to a dry run that writes nothing. Applying is refused unless
- * the captain approval Script Property is present, so this cannot run from a
- * deploy, page load, or ordinary sheet operation. A tag-scoring league is a
- * no-op (its drop list is empty), so no tag data is ever removed there.
+ * Always defaults to a dry run that writes nothing; run the dry run and review
+ * the planned columns before applying. A tag-scoring league is a no-op (its
+ * drop list is empty), so no tag data is ever removed there.
  *
  * Inputs: league/spreadsheetId selector, apply (boolean, default false).
  */
@@ -1762,7 +1730,6 @@ function handleMigrateDetagColumnDrops(data) {
       format: rules.format,
       scoring: rules.scoring,
       applied: false,
-      authorized: report.authorized === true,
       failed_sheet: report.failed_sheet || null
     });
   }
@@ -1778,7 +1745,6 @@ function handleMigrateDetagColumnDrops(data) {
     format: rules.format,
     scoring: rules.scoring,
     applied: apply,
-    authorized: report.authorized === true,
     sheets_changed: changed,
     results: report.results
   });

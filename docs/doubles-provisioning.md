@@ -70,7 +70,7 @@ authorization. No credentials or secrets are stored in the repository.
 | `previewWeeklyColumnOrderMigration()` | Dry-run the human-first weekly column migration for both spreadsheets |
 | `applyWeeklyColumnOrderMigration()` | Apply the weekly column migration; refused unless the captain sets the approval Script Property |
 | `previewDetagColumnDrops()` | Dry-run the destructive detag column-drop migration for the doubles spreadsheet (writes nothing) |
-| `applyDetagColumnDrops()` | Drop `in_tag`/`out_tag`/`udisc_ending_tag` from doubles weeks and `current_tag` from the doubles roster; refused unless the captain sets the approval Script Property |
+| `applyDetagColumnDrops()` | Drop `in_tag`/`out_tag`/`udisc_ending_tag` from doubles weeks and `current_tag` from the doubles roster; run the preview first to inspect the columns |
 | `reportRosterCounts()` | Report Singles and Doubles roster counts |
 
 Each returns a plain report object and logs it with `Logger.log`, so the result
@@ -110,7 +110,7 @@ is `doubles` is selected, the **Doubles Provisioning** card calls the
 ## Detag column-drop migration
 
 The doubles league no longer collects, stores, or renders tag data, so the
-remaining physical tag columns are removed by a gated, destructive migration.
+remaining physical tag columns are removed by a destructive migration.
 `migrateDetagColumnDrops` discovers weekly sheets by header name (so the
 `Week template` and every dated `Week YYYY-MM-DD` tab are covered) and also
 plans the `ClubMembers` roster. It is a dry run by default; applying it deletes
@@ -119,12 +119,11 @@ from the roster, taking the stored values with them. A tag-scoring league (the
 singles spreadsheet) has an empty drop set, so running it there is a no-op and
 can never delete tag data.
 
-The apply path is refused unless the Apps Script project has
-`DETAG_COLUMN_DROPS_APPROVAL = bag-detag-drops-c1`; nothing in deployment,
-startup, tests, or ordinary sheet operations sets it. During the transition the
-code accepts the pre-detag layouts as known-but-un-migrated, so the column-order
-dry run and the topology check keep working on a sheet that still carries the
-tag columns.
+The safety model is the explicit operator go plus the preview: run the dry run
+first and inspect exactly which columns every sheet will lose before applying.
+There is no Script Property interlock. During the transition the code accepts
+the pre-detag layouts as known-but-un-migrated, so the column-order dry run and
+the topology check keep working on a sheet that still carries the tag columns.
 
 ## Re-provisioning guard
 

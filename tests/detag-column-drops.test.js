@@ -2,16 +2,15 @@
 
 // Detag column-drop migration — the destructive end of the doubles detag.
 // Removes in_tag/out_tag/udisc_ending_tag from every weekly sheet and
-// current_tag from ClubMembers, behind a captain approval gate. All behavior
-// runs in a Node VM with an in-memory Sheets fake: no Google credentials,
-// network access, or live sheet writes.
+// current_tag from ClubMembers. The safety model is the preview plus an
+// explicit apply: there is no script-property interlock. All behavior runs in
+// a Node VM with an in-memory Sheets fake: no Google credentials, network
+// access, or live sheet writes.
 
 const test = require('node:test');
 const assert = require('node:assert');
 const { loadCode } = require('./helpers/load-code');
 
-const APPROVAL_PROPERTY = 'DETAG_COLUMN_DROPS_APPROVAL';
-const APPROVAL_TOKEN = 'bag-detag-drops-c1';
 const WEEK_DATE = '2026-10-05';
 
 function valueByName(h, sheet, header, rowIndex) {
@@ -115,7 +114,7 @@ test('planTagColumnDrops fails on blank and duplicate headers', () => {
   assert.match(h.fn('planTagColumnDrops')(duplicate, ['in_tag']).error, /duplicate/);
 });
 
-// ─── Dry run and authorization gate ──────────────────────────────────────────
+// ─── Dry run and unguarded apply ─────────────────────────────────────────────
 
 test('dry run reports every planned drop and writes nothing', () => {
   const h = loadCode();
@@ -124,13 +123,15 @@ test('dry run reports every planned drop and writes nothing', () => {
   const report = h.fn('migrateDetagColumnDrops')(doubles, h.bound.LEAGUE_FORMAT_DOUBLES, { apply: false });
 
   assert.equal(report.applied, false);
-  assert.equal(report.authorized, true);
   const byName = resultsByName(report);
   assert.equal(byName['Week ' + WEEK_DATE].status, 'would-drop');
   assert.deepEqual(byName['Week ' + WEEK_DATE].drop_headers, ['in_tag', 'out_tag', 'udisc_ending_tag']);
+  assert.deepEqual(byName['Week ' + WEEK_DATE].from, h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
+  assert.deepEqual(byName['Week ' + WEEK_DATE].to, h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
   assert.equal(byName['Week template'].status, 'would-drop');
   assert.equal(byName['ClubMembers'].status, 'would-drop');
   assert.deepEqual(byName['ClubMembers'].drop_headers, ['current_tag']);
+  assert.deepEqual(byName['ClubMembers'].to, h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
 
   // Untouched: every sheet still carries the pre-detag tag columns.
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
@@ -138,24 +139,29 @@ test('dry run reports every planned drop and writes nothing', () => {
   assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS.concat(['season_points']));
 });
 
-test('apply is refused and writes nothing without captain authorization', () => {
+test('apply proceeds without any approval token and drops exactly the previewed columns', () => {
   const h = loadCode();
-  const { doubles, club, week } = taggedDoubles(h);
+  const { doubles, club, week, template } = taggedDoubles(h);
+
+  const preview = h.fn('migrateDetagColumnDrops')(doubles, h.bound.LEAGUE_FORMAT_DOUBLES, { apply: false });
+  const previewByName = resultsByName(preview);
 
   const report = h.fn('migrateDetagColumnDrops')(doubles, h.bound.LEAGUE_FORMAT_DOUBLES, { apply: true });
 
-  assert.equal(report.applied, false);
-  assert.equal(report.authorized, false);
-  assert.match(report.error, /not authorized/);
-  assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
-  assert.equal(h.fn('getSheetHeaders')(club).indexOf('current_tag') !== -1, true);
+  assert.equal(report.applied, true);
+  const byName = resultsByName(report);
+  assert.deepEqual(byName['Week ' + WEEK_DATE].drop_headers, previewByName['Week ' + WEEK_DATE].drop_headers);
+  assert.deepEqual(byName['Week template'].drop_headers, previewByName['Week template'].drop_headers);
+  assert.deepEqual(byName['ClubMembers'].drop_headers, previewByName['ClubMembers'].drop_headers);
+  assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  assert.deepEqual(h.fn('getSheetHeaders')(template), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
 });
 
-// ─── Authorized apply ────────────────────────────────────────────────────────
+// ─── Apply ───────────────────────────────────────────────────────────────────
 
-test('authorized apply drops the tag columns and preserves every other value', () => {
+test('apply drops the tag columns and preserves every other value', () => {
   const h = loadCode();
-  h.setScriptProperty(APPROVAL_PROPERTY, APPROVAL_TOKEN);
   const { doubles, club, week, template } = taggedDoubles(h);
 
   const report = h.fn('migrateDetagColumnDrops')(doubles, h.bound.LEAGUE_FORMAT_DOUBLES, { apply: true });
@@ -175,9 +181,8 @@ test('authorized apply drops the tag columns and preserves every other value', (
   assert.equal(valueByName(h, club, 'season_points', 1), 2);
 });
 
-test('authorized apply is idempotent on an already-detagged sheet', () => {
+test('apply is idempotent on an already-detagged sheet', () => {
   const h = loadCode();
-  h.setScriptProperty(APPROVAL_PROPERTY, APPROVAL_TOKEN);
   const { doubles, week } = taggedDoubles(h);
 
   h.fn('migrateDetagColumnDrops')(doubles, h.bound.LEAGUE_FORMAT_DOUBLES, { apply: true });
@@ -192,7 +197,6 @@ test('authorized apply is idempotent on an already-detagged sheet', () => {
 
 test('a tag-scoring league never drops a tag column', () => {
   const h = loadCode();
-  h.setScriptProperty(APPROVAL_PROPERTY, APPROVAL_TOKEN);
   const { singles, club, week } = taggedSingles(h);
 
   const report = h.fn('migrateDetagColumnDrops')(singles, h.bound.LEAGUE_FORMAT_SINGLES, {
@@ -212,7 +216,6 @@ test('a tag-scoring league never drops a tag column', () => {
 
 test('an ambiguous sheet aborts the run before any sheet is written', () => {
   const h = loadCode();
-  h.setScriptProperty(APPROVAL_PROPERTY, APPROVAL_TOKEN);
   const { doubles, club, week } = taggedDoubles(h);
 
   const duplicate = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED.slice();
@@ -278,23 +281,24 @@ test('the admin handler defaults to a dry run and never writes', () => {
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
 });
 
-test('the admin handler refuses apply without authorization', () => {
+test('the admin handler applies without any authorization token', () => {
   const h = loadCode();
-  const { doubles, week } = taggedDoubles(h);
+  const { doubles, club, week } = taggedDoubles(h);
 
   const result = h.parse(h.fn('handleMigrateDetagColumnDrops')({
     league: h.bound.LEAGUE_ID_DOUBLES,
     apply: true
   }));
 
-  assert.equal(result.status, 'error');
-  assert.match(result.message, /not authorized/);
-  assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
+  assert.equal(result.status, 'ok');
+  assert.equal(result.applied, true);
+  assert.equal(result.sheets_changed, 3);
+  assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
 });
 
-test('the admin handler applies under authorization and then reports no drop', () => {
+test('the admin handler drops the columns and then reports no drop', () => {
   const h = loadCode();
-  h.setScriptProperty(APPROVAL_PROPERTY, APPROVAL_TOKEN);
   const { doubles, club, week } = taggedDoubles(h);
 
   const applied = h.parse(h.fn('handleMigrateDetagColumnDrops')({

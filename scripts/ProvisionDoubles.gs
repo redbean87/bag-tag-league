@@ -156,9 +156,9 @@ function previewDetagColumnDrops() {
 /**
  * Operator entry point: apply the destructive detag column-drop migration to
  * the doubles spreadsheet, deleting in_tag/out_tag/udisc_ending_tag from every
- * week tab and current_tag from ClubMembers. Refuses unless the captain has set
- * the DETAG_COLUMN_DROPS_APPROVAL Script Property. Run the preview first to
- * inspect the exact columns for every sheet.
+ * week tab and current_tag from ClubMembers. There is no script-property
+ * interlock: run the preview first to inspect the exact columns for every sheet
+ * before applying.
  *
  * Usage (Apps Script editor): run `applyDetagColumnDrops`.
  */
