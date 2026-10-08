@@ -429,6 +429,14 @@
         if (member.udisc_username) detailParts.push('UDisc: ' + member.udisc_username);
         if (member.pdga_number) detailParts.push('PDGA: ' + member.pdga_number);
         if (!isDoubles && member.current_tag) detailParts.push('Tag: ' + member.current_tag);
+        // Doubles member listings show the finalized season total; singles
+        // keeps its tag-only detail line.
+        if (isDoubles) {
+          var seasonTotal = (member.season_points === undefined || member.season_points === null)
+            ? 0
+            : member.season_points;
+          detailParts.push('Season Total: ' + seasonTotal);
+        }
 
         item.innerHTML =
           '<div class="search-result-name">' + escapeHtml(member.name) + '</div>' +

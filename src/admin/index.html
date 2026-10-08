@@ -317,6 +317,19 @@
     </div>
   </div>
 
+  <!-- 2b. Members (doubles mode only) -->
+  <div class="card" id="membersCard" style="display:none;">
+    <h2>Members</h2>
+    <p class="help-text">
+      Doubles members with their <strong>Season Total</strong>: the sum of
+      each member's finalized weekly points. A member with no finalized weeks
+      shows 0.
+    </p>
+    <button type="button" id="btnLoadMembers" onclick="loadMembers()">Refresh Members</button>
+    <div id="membersTable" style="display:none;"></div>
+    <div id="membersResult" class="status hidden"></div>
+  </div>
+
   <!-- 3. Active League Date -->
   <div class="card" id="activeLeagueDateCard">
     <h2>Active League Date</h2>
@@ -607,11 +620,100 @@
       var pointsCard = document.getElementById('pointsCalcCard');
       if (pointsCard) pointsCard.style.display = isDoubles ? '' : 'none';
 
+      // The Members view is doubles-only too, so a singles page keeps its
+      // existing layout and never renders a season-total column.
+      var membersCard = document.getElementById('membersCard');
+      if (membersCard) membersCard.style.display = isDoubles ? '' : 'none';
+
       // Doubles provisioning state is authoritative on the server; load it
       // whenever the doubles league is selected rather than caching a local flag.
       if (isDoubles) {
         loadDoublesProvisioningState();
+        loadMembers();
       }
+    }
+
+    /**
+     * Loads the doubles member list with each member's season total. The
+     * server sums only finalized weekly points, so draft weeks never show up.
+     */
+    async function loadMembers() {
+      var card = document.getElementById('membersCard');
+      if (!card || card.style.display === 'none') return;
+
+      var btn = document.getElementById('btnLoadMembers');
+      if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'listClubMembers', spreadsheetId: getSpreadsheetId() })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          membersStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          return;
+        }
+
+        renderMembers(data.members || []);
+        membersStatus('hidden', '');
+        log('Loaded ' + (data.members || []).length + ' member(s)');
+      } catch (err) {
+        membersStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED to load members: ' + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh Members'; }
+      }
+    }
+
+    function membersStatus(type, html) {
+      var el = document.getElementById('membersResult');
+      if (!el) return;
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    // Renders one row per member. season_points defaults to 0 so a member with
+    // no finalized result shows a number, never null/undefined/NaN.
+    function renderMembers(members) {
+      var container = document.getElementById('membersTable');
+      if (!container) return;
+
+      if (!members.length) {
+        container.innerHTML = '<p class="help-text">No members yet.</p>';
+        container.style.display = '';
+        return;
+      }
+
+      var html = '<table style="width:100%; border-collapse:collapse;">' +
+        '<thead><tr>' +
+        '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Member #</th>' +
+        '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Name</th>' +
+        '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">UDisc</th>' +
+        '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">PDGA</th>' +
+        '<th style="text-align:right; border-bottom:1px solid #ddd; padding:0.5rem;">Season Total</th>' +
+        '</tr></thead><tbody>';
+
+      members.forEach(function(member) {
+        var total = (member.season_points === undefined || member.season_points === null || isNaN(member.season_points))
+          ? 0
+          : member.season_points;
+        html += '<tr>' +
+          '<td style="padding:0.5rem;">' + escHtml(member.member_number) + '</td>' +
+          '<td style="padding:0.5rem;">' + escHtml(member.name) +
+            (member.is_active === false ? ' <span style="color:#888;">(inactive)</span>' : '') + '</td>' +
+          '<td style="padding:0.5rem;">' + escHtml(member.udisc_username || '') + '</td>' +
+          '<td style="padding:0.5rem;">' + escHtml(member.pdga_number || '') + '</td>' +
+          '<td style="padding:0.5rem; text-align:right;">' + total + '</td>' +
+          '</tr>';
+      });
+
+      html += '</tbody></table>';
+      container.innerHTML = html;
+      container.style.display = '';
     }
 
     function setDoublesProvisionStatus(type, html) {
@@ -2439,6 +2541,7 @@
             data.season_points_updated + ' member(s).');
           log('SUCCESS: Points finalized. ' + data.players_finalized + ' rows locked; season cache updated for ' + data.season_points_updated + ' member(s).');
           document.getElementById('pointsPreview').style.display = 'none';
+          loadMembers();
         } else {
           setPointsStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
