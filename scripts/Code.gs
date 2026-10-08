@@ -36,10 +36,12 @@ const CLUB_MEMBER_HEADERS = [
   'updated_at'
 ];
 
-// Doubles ClubMembers headers: the 8 singles columns plus the optional,
-// legacy season_points column. Totals are now aggregated live from committed
-// weeks, so the column is never written; it stays accepted here only so a
-// roster provisioned by an earlier version still matches the doubles schema.
+// Doubles ClubMembers headers: the 8 singles columns plus the season_points
+// cache column. Totals are always derived live from committed weeks; the
+// column is a denormalized copy kept current on every points write (the UDisc
+// import commit) so the ClubMembers tab itself holds the totals. A roster
+// provisioned before the column existed is upgraded in place on the next
+// write.
 const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS.concat([
   'season_points'
 ]);
@@ -190,7 +192,8 @@ const WEEKLY_RECORD_HEADERS_DOUBLES = orderWeeklyHeaders(
 
 // There is no points lifecycle. The UDisc import commit is the single points
 // computation boundary and the only writer of `weekly_points`; totals are
-// summed live from the committed values. The `weekly_points_status` column is
+// summed live from the committed values and mirrored into the ClubMembers
+// `season_points` cache after each commit. The `weekly_points_status` column is
 // kept in the header schema so existing spreadsheets migrate cleanly, but no
 // code reads or writes a lifecycle status anymore.
 
@@ -332,6 +335,17 @@ function getLeagueSheetHeaders(format) {
   return format === LEAGUE_FORMAT_DOUBLES
     ? LEAGUE_SHEET_HEADERS_DOUBLES
     : LEAGUE_SHEET_HEADERS;
+}
+
+/**
+ * ClubMembers headers for a league format. Singles keeps the 8-column schema;
+ * doubles adds the `season_points` cache column so the roster tab holds the
+ * totals.
+ */
+function getClubMemberHeaders(format) {
+  return format === LEAGUE_FORMAT_DOUBLES
+    ? CLUB_MEMBER_HEADERS_DOUBLES
+    : CLUB_MEMBER_HEADERS;
 }
 
 // ─── End spreadsheet routing ─────────────────────────────────────────────────
@@ -676,7 +690,7 @@ function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
 function provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet) {
   var league = ensureLeagueSheetForFormat(doublesSpreadsheet, LEAGUE_FORMAT_DOUBLES);
 
-  var club = ensureCanonicalSheet(doublesSpreadsheet, 'ClubMembers', CLUB_MEMBER_HEADERS);
+  var club = ensureCanonicalSheet(doublesSpreadsheet, 'ClubMembers', getClubMemberHeaders(LEAGUE_FORMAT_DOUBLES));
   if (club.sheet.getIndex() !== 2) {
     moveSheetToPosition(doublesSpreadsheet, 'ClubMembers', 1);
   }
@@ -1358,9 +1372,10 @@ function handleCreateClubMembersTab(data) {
   }
 
   const sheet = spreadsheet.insertSheet('ClubMembers');
-  sheet.appendRow(CLUB_MEMBER_HEADERS);
+  const clubHeaders = getClubMemberHeaders(format);
+  sheet.appendRow(clubHeaders);
 
-  const headerRange = sheet.getRange(1, 1, 1, CLUB_MEMBER_HEADERS.length);
+  const headerRange = sheet.getRange(1, 1, 1, clubHeaders.length);
   headerRange.setFontWeight('bold');
   sheet.setFrozenRows(1);
 
@@ -1375,7 +1390,7 @@ function handleCreateClubMembersTab(data) {
 
   return respond('ok', 'ClubMembers tab created successfully.', {
     alreadyExisted: false,
-    columns: CLUB_MEMBER_HEADERS.length
+    columns: clubHeaders.length
   });
 }
 
@@ -1409,7 +1424,7 @@ function handleCreateWeeklyTab(data) {
   // Ensure canonical prerequisite sheets exist in correct order
   ensureLeagueSheetForFormat(spreadsheet, format);
 
-  ensureCanonicalSheet(spreadsheet, 'ClubMembers', CLUB_MEMBER_HEADERS);
+  ensureCanonicalSheet(spreadsheet, 'ClubMembers', getClubMemberHeaders(format));
   if (spreadsheet.getSheetByName('ClubMembers').getIndex() !== 2) {
     moveSheetToPosition(spreadsheet, 'ClubMembers', 1);
   }
@@ -1526,9 +1541,10 @@ function handleSearchClubMembers(data) {
  * Lists club members for the selected league.
  *
  * Doubles member records include `season_points`, the live sum of that
- * member's committed weekly points. A member with no committed weeks reports 0
- * and is never omitted. Singles records omit season_points entirely so the
- * singles payload and views stay exactly as they were.
+ * member's committed weekly points. The live sum is the source of truth; the
+ * stored ClubMembers column is a mirror of it. A member with no committed
+ * weeks reports 0 and is never omitted. Singles records omit season_points
+ * entirely so the singles payload and views stay exactly as they were.
  *
  * Inputs: league (optional routing selector)
  */
@@ -1727,15 +1743,17 @@ function handleSubmitCheckIn(data) {
         var newMemberNumber = maxMemberNumber + 1;
         var now = new Date().toISOString();
 
-        var newPlayer = new Array(CLUB_MEMBER_HEADERS.length).fill('');
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('member_number')] = newMemberNumber;
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('name')] = trimmedName;
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('udisc_username')] = trimmedUdisc;
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('pdga_number')] = trimmedPdga;
-        if (!isDoubles) newPlayer[CLUB_MEMBER_HEADERS.indexOf('current_tag')] = inTagNum;
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('is_active')] = true;
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('created_at')] = now;
-        newPlayer[CLUB_MEMBER_HEADERS.indexOf('updated_at')] = now;
+        // Build the row against the sheet's own header so a roster that
+        // carries the doubles season_points cache column stays aligned.
+        var newPlayer = new Array(playersHeaders.length).fill('');
+        newPlayer[playersHeaders.indexOf('member_number')] = newMemberNumber;
+        newPlayer[playersHeaders.indexOf('name')] = trimmedName;
+        newPlayer[playersHeaders.indexOf('udisc_username')] = trimmedUdisc;
+        newPlayer[playersHeaders.indexOf('pdga_number')] = trimmedPdga;
+        if (!isDoubles) newPlayer[playersHeaders.indexOf('current_tag')] = inTagNum;
+        newPlayer[playersHeaders.indexOf('is_active')] = true;
+        newPlayer[playersHeaders.indexOf('created_at')] = now;
+        newPlayer[playersHeaders.indexOf('updated_at')] = now;
 
         playersSheet.appendRow(newPlayer);
 
@@ -3933,10 +3951,13 @@ function handleCommitUdiscImportDoubles(data) {
     else summary.review++;
   }
 
+  var seasonSync = syncDoublesSeasonPoints(spreadsheet);
+
   return respond('ok', 'Doubles import committed.', {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: leagueDate,
     summary: summary,
+    season_points_synced: seasonSync.synced,
     results: results,
     created_member_numbers: createdMemberNumbers
   });
@@ -4618,8 +4639,9 @@ function handleFinalizeRound(data) {
 // Points are a single computed value, not a lifecycle. The UDisc import commit
 // is the only boundary that persists points: it derives each participant's
 // weekly_points directly from their committed team placement. Standings and
-// member totals then aggregate those committed values live at read time, so no
-// separate confirm/finalize step and no cached season total can go stale.
+// member totals then aggregate those committed values live at read time, and
+// the ClubMembers season_points cache is refreshed from the same live sum at
+// the end of every commit, so the two can never disagree.
 //
 // A parallel, format-gated path beside the singles tag chain. Every entry point
 // refuses the singles format before opening any sheet, and none of these
@@ -4843,12 +4865,12 @@ function handleCalculatePoints(data) {
 
 /**
  * Sums each member's committed weekly points across every Week tab. This is
- * the single live aggregation every doubles total shares: it reads the points
- * persisted at import commit and never consults a status column or a cached
- * season total, so a total can never go stale. A row with a blank or
- * non-numeric weekly_points was never committed and contributes nothing.
- * Returns a plain object keyed by member_number; a member with no committed
- * rows is absent (callers default to 0).
+ * the single live aggregation every doubles total shares and the source of
+ * truth: it reads the points persisted at import commit and never consults a
+ * status column or a cached season total, so a total can never go stale. A row
+ * with a blank or non-numeric weekly_points was never committed and
+ * contributes nothing. Returns a plain object keyed by member_number; a member
+ * with no committed rows is absent (callers default to 0).
  */
 function sumSeasonPointsByMember(spreadsheet) {
   var totals = {};
@@ -4869,6 +4891,72 @@ function sumSeasonPointsByMember(spreadsheet) {
     }
   }
   return totals;
+}
+
+/**
+ * Ensures the doubles ClubMembers roster carries the `season_points` cache
+ * column, appending the header after the last used column when an older roster
+ * was provisioned with the bare 8-column schema. Idempotent. Returns the
+ * 0-based column index, or -1 when there is no ClubMembers sheet.
+ */
+function ensureSeasonPointsColumn(clubSheet) {
+  if (!clubSheet) return -1;
+
+  var lastColumn = clubSheet.getLastColumn();
+  var headers = lastColumn > 0
+    ? clubSheet.getRange(1, 1, 1, lastColumn).getValues()[0]
+    : [];
+  var existing = headers.indexOf('season_points');
+  if (existing !== -1) return existing;
+
+  var nextColumn = lastColumn + 1;
+  clubSheet.getRange(1, nextColumn).setValue('season_points');
+  return nextColumn - 1;
+}
+
+/**
+ * Recomputes the doubles ClubMembers `season_points` cache from the committed
+ * weekly_points and persists it in one batch write for the whole roster.
+ *
+ * The live sum (`sumSeasonPointsByMember`) stays the source of truth and the
+ * listings keep computing it; this column is only a denormalized copy so the
+ * ClubMembers tab itself always holds current totals. Safe to call after every
+ * points write: it recomputes from scratch, so a re-run can never accumulate,
+ * and it creates the column in place for a roster that predates it.
+ *
+ * Returns { synced, members } where `members` maps member_number to the value
+ * written and `synced` is the number of roster rows refreshed.
+ */
+function syncDoublesSeasonPoints(spreadsheet) {
+  var result = { synced: 0, members: {} };
+  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  if (!clubSheet || clubSheet.getLastRow() < 2) return result;
+
+  var seasonCol = ensureSeasonPointsColumn(clubSheet);
+  if (seasonCol === -1) return result;
+
+  var clubData = clubSheet.getDataRange().getValues();
+  var headers = clubData[0] || [];
+  var memberCol = headers.indexOf('member_number');
+  if (memberCol === -1) return result;
+
+  var totals = sumSeasonPointsByMember(spreadsheet);
+  var values = [];
+  for (var i = 1; i < clubData.length; i++) {
+    var memberNumber = clubData[i][memberCol];
+    if (memberNumber === '' || memberNumber === null || memberNumber === undefined) {
+      // Preserve a blank spacer row's existing cache value rather than
+      // inventing a total for a row that is not a member.
+      values.push([clubData[i][seasonCol]]);
+      continue;
+    }
+    var total = totals[memberNumber] !== undefined ? totals[memberNumber] : 0;
+    values.push([total]);
+    result.members[memberNumber] = total;
+    result.synced++;
+  }
+  clubSheet.getRange(2, seasonCol + 1, values.length, 1).setValues(values);
+  return result;
 }
 
 /**
