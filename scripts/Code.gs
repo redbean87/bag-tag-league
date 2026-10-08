@@ -43,8 +43,45 @@ const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS.concat([
   'season_points'
 ]);
 
-// WeeklyPlayerRecords column headers (48 columns from the data model spec)
-const WEEKLY_RECORD_HEADERS = [
+// Human-first weekly column groups. A human reading a week tab should see the
+// identity, pair, score, and points/tag columns before the long tail of import
+// and reference fields. Header names never change, so every reader that
+// resolves a column by name keeps working after the reorder.
+const WEEKLY_RECORD_NAME_HEADERS = [
+  'member_number',
+  'player_name_snapshot',
+  'udisc_username_snapshot',
+  'pdga_number_snapshot'
+];
+
+// Doubles pair linkage. Singles has no pair concept.
+const WEEKLY_RECORD_PAIR_HEADERS = [
+  'pair_key',
+  'partner_member_number'
+];
+
+const WEEKLY_RECORD_SCORE_HEADERS = [
+  'score'
+];
+
+// Singles settles bags with tags, so the active tag columns are the singles
+// points set. udisc_ending_tag is reference-only and stays in the tail.
+const WEEKLY_RECORD_TAG_HEADERS = [
+  'in_tag',
+  'out_tag'
+];
+
+// Doubles points lifecycle columns.
+const WEEKLY_RECORD_POINTS_HEADERS = [
+  'weekly_points',
+  'weekly_points_status'
+];
+
+// Legacy (pre-human-first) weekly column order, kept verbatim so the placed-
+// sheet migration can recognize an un-migrated layout. This is also the pool
+// the human-first constants draw from, which preserves the historical relative
+// order of every column that is not promoted.
+const WEEKLY_RECORD_HEADERS_LEGACY = [
   'member_number',
   'player_name_snapshot',
   'udisc_username_snapshot',
@@ -95,10 +132,7 @@ const WEEKLY_RECORD_HEADERS = [
   'updated_at'
 ];
 
-// Doubles WeeklyPlayerRecords headers: the 48 singles columns plus the six
-// doubles-only columns from the design report. The singles constant is
-// untouched and the six columns are append-only so the 48 stay in order.
-const WEEKLY_RECORD_HEADERS_DOUBLES = WEEKLY_RECORD_HEADERS.concat([
+const WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES = WEEKLY_RECORD_HEADERS_LEGACY.concat([
   'pair_key',
   'partner_member_number',
   'team_position',
@@ -106,6 +140,50 @@ const WEEKLY_RECORD_HEADERS_DOUBLES = WEEKLY_RECORD_HEADERS.concat([
   'weekly_points',
   'weekly_points_status'
 ]);
+
+/**
+ * Reorders a column set so each human-first group leads, then every remaining
+ * column follows in its original relative order. Columns are matched by name,
+ * and a group member that is not present in the set is skipped, so the same
+ * helper serves singles and doubles without forcing a shared schema.
+ */
+function orderWeeklyHeaders(columns, humanFirstGroups) {
+  var ordered = [];
+  function push(header) {
+    if (columns.indexOf(header) !== -1 && ordered.indexOf(header) === -1) {
+      ordered.push(header);
+    }
+  }
+  for (var g = 0; g < humanFirstGroups.length; g++) {
+    for (var h = 0; h < humanFirstGroups[g].length; h++) {
+      push(humanFirstGroups[g][h]);
+    }
+  }
+  for (var c = 0; c < columns.length; c++) {
+    push(columns[c]);
+  }
+  return ordered;
+}
+
+// WeeklyPlayerRecords column headers, human-first (48 columns). Names, score,
+// then the singles bag-tag columns lead; the remaining 41 keep their order.
+const WEEKLY_RECORD_HEADERS = orderWeeklyHeaders(
+  WEEKLY_RECORD_HEADERS_LEGACY,
+  [WEEKLY_RECORD_NAME_HEADERS, WEEKLY_RECORD_SCORE_HEADERS, WEEKLY_RECORD_TAG_HEADERS]
+);
+
+// Doubles WeeklyPlayerRecords headers, human-first (54 columns). Names, pair
+// linkage, score, and the points lifecycle lead, then the remaining columns
+// (including the unused singles tag columns) in their historical order.
+const WEEKLY_RECORD_HEADERS_DOUBLES = orderWeeklyHeaders(
+  WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES,
+  [
+    WEEKLY_RECORD_NAME_HEADERS,
+    WEEKLY_RECORD_PAIR_HEADERS,
+    WEEKLY_RECORD_SCORE_HEADERS,
+    WEEKLY_RECORD_POINTS_HEADERS
+  ]
+);
 
 // Doubles points lifecycle status values. Import records raw team placements
 // and leaves every participant (pair partner or solo) pending; the points
@@ -797,6 +875,339 @@ function countRoster(spreadsheet) {
   return { present: true, count: memberNumbers.length, active_count: activeCount, member_numbers: memberNumbers };
 }
 
+// ─── Weekly column-order migration ───────────────────────────────────────────
+
+// Script-property approval gate for the live migration. The captain sets
+//
+//   WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL = 'bag-column-order-c1'
+//
+// in the Apps Script project before running the apply entry point. Nothing in
+// deployment, startup, tests, or ordinary sheet operations sets this property,
+// so the migration cannot run unless a captain explicitly opts in.
+var WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL_PROPERTY = 'WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL';
+var WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL_TOKEN = 'bag-column-order-c1';
+
+// Core columns every weekly PlayerRecords header row must carry. These never
+// appear together on ClubMembers or League, so the migration can find weekly
+// sheets by header name instead of by tab name.
+var WEEKLY_RECORD_CORE_HEADERS = [
+  'member_number',
+  'player_name_snapshot',
+  'score',
+  'hole_1'
+];
+
+/**
+ * Whether a header row describes a weekly PlayerRecords sheet.
+ */
+function isWeeklyRecordHeaderRow(headers) {
+  if (!headers || headers.length === 0) return false;
+  for (var i = 0; i < WEEKLY_RECORD_CORE_HEADERS.length; i++) {
+    if (headers.indexOf(WEEKLY_RECORD_CORE_HEADERS[i]) === -1) return false;
+  }
+  return true;
+}
+
+/**
+ * The full known weekly column set for a format. Used to flag a sheet that
+ * carries a column the migration does not recognize.
+ */
+function weeklyColumnsKnownForFormat(format) {
+  return format === LEAGUE_FORMAT_DOUBLES
+    ? WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES
+    : WEEKLY_RECORD_HEADERS_LEGACY;
+}
+
+/**
+ * Human-first groups for a format, in promotion order.
+ */
+function weeklyHumanFirstGroups(format) {
+  if (format === LEAGUE_FORMAT_DOUBLES) {
+    return [
+      WEEKLY_RECORD_NAME_HEADERS,
+      WEEKLY_RECORD_PAIR_HEADERS,
+      WEEKLY_RECORD_SCORE_HEADERS,
+      WEEKLY_RECORD_POINTS_HEADERS
+    ];
+  }
+  return [
+    WEEKLY_RECORD_NAME_HEADERS,
+    WEEKLY_RECORD_SCORE_HEADERS,
+    WEEKLY_RECORD_TAG_HEADERS
+  ];
+}
+
+/**
+ * Whether the live migration has been explicitly authorized by the captain.
+ * A missing or mismatched Script Property means "not authorized".
+ */
+function isWeeklyColumnOrderMigrationAuthorized() {
+  try {
+    var value = PropertiesService.getScriptProperties()
+      .getProperty(WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL_PROPERTY);
+    return value === WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL_TOKEN;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Plans a human-first reorder of one weekly header row. Pure: only reads the
+ * supplied header array and never touches a sheet.
+ *
+ * Columns are always matched by name. The plan is a permutation of the
+ * existing columns, so no column is added or dropped and every value/formula
+ * moves with its column. Returns:
+ *   { status: 'already-canonical', headers, target_headers, unknown_headers }
+ *   { status: 'reorder', headers, target_headers, permutation, unknown_headers }
+ *   { status: 'error', error }
+ *
+ * Ambiguous layouts fail instead of guessing: a blank or duplicate header, a
+ * weekly core column that is missing, or a column outside the format's known
+ * schema all return an error so the captain can inspect the sheet first.
+ */
+function planWeeklyColumnReorder(headers, format) {
+  if (!headers || headers.length === 0) {
+    return { status: 'error', error: 'Weekly header row is empty.' };
+  }
+
+  var seen = {};
+  for (var i = 0; i < headers.length; i++) {
+    var header = headers[i];
+    if (header === '' || header === null || header === undefined) {
+      return { status: 'error', error: 'Weekly header row has a blank column at position ' + (i + 1) + '.' };
+    }
+    if (Object.prototype.hasOwnProperty.call(seen, header)) {
+      return { status: 'error', error: 'Weekly header row has a duplicate column: ' + header + '.' };
+    }
+    seen[header] = true;
+  }
+
+  var missing = [];
+  for (var c = 0; c < WEEKLY_RECORD_CORE_HEADERS.length; c++) {
+    if (headers.indexOf(WEEKLY_RECORD_CORE_HEADERS[c]) === -1) {
+      missing.push(WEEKLY_RECORD_CORE_HEADERS[c]);
+    }
+  }
+  if (missing.length > 0) {
+    return { status: 'error', error: 'Weekly header row is missing required columns: ' + missing.join(', ') + '.' };
+  }
+
+  var known = weeklyColumnsKnownForFormat(format);
+  var unknown = headers.filter(function(h) { return known.indexOf(h) === -1; });
+  if (unknown.length > 0) {
+    return {
+      status: 'error',
+      error: 'Weekly header row has unrecognized columns: ' + unknown.join(', ') + '.'
+    };
+  }
+
+  var target = orderWeeklyHeaders(headers, weeklyHumanFirstGroups(format));
+  if (arraysEqual(headers, target)) {
+    return {
+      status: 'already-canonical',
+      headers: headers.slice(),
+      target_headers: target,
+      unknown_headers: []
+    };
+  }
+
+  var permutation = [];
+  for (var t = 0; t < target.length; t++) {
+    permutation.push(headers.indexOf(target[t]));
+  }
+
+  return {
+    status: 'reorder',
+    headers: headers.slice(),
+    target_headers: target,
+    permutation: permutation,
+    unknown_headers: []
+  };
+}
+
+/**
+ * Writes a reorder plan onto a sheet, preserving every cell value and formula.
+ * Reads formulas alongside values so a formula column survives the move. Only
+ * called by migrateWeeklyColumnOrder after the authorization gate.
+ */
+function applyWeeklyColumnReorder(sheet, plan) {
+  if (plan.status === 'already-canonical') {
+    return { status: 'already-canonical', sheet_name: sheet.getName(), data_rows: 0 };
+  }
+  if (plan.status !== 'reorder') {
+    throw new Error(plan.error || 'Invalid weekly column reorder plan.');
+  }
+
+  var lastRow = sheet.getLastRow();
+  var lastColumn = sheet.getLastColumn();
+  if (lastRow < 1) {
+    return { status: 'already-canonical', sheet_name: sheet.getName(), data_rows: 0 };
+  }
+
+  var range = sheet.getRange(1, 1, lastRow, lastColumn);
+  var values = range.getValues();
+  var formulas = typeof range.getFormulas === 'function' ? range.getFormulas() : [];
+
+  var reordered = [];
+  var reorderedFormulas = [];
+  for (var r = 0; r < values.length; r++) {
+    var row = values[r];
+    var rowFormulas = formulas.length > r ? formulas[r] : [];
+    var out = [];
+    var outFormulas = [];
+    for (var c = 0; c < plan.permutation.length; c++) {
+      var source = plan.permutation[c];
+      out.push(row[source]);
+      outFormulas.push(rowFormulas.length > source ? rowFormulas[source] : '');
+    }
+    reordered.push(out);
+    reorderedFormulas.push(outFormulas);
+  }
+
+  sheet.clear();
+  sheet.getRange(1, 1, reordered.length, plan.target_headers.length).setValues(reordered);
+  // setValues writes a formula cell's computed value; restore the formula text
+  // itself for every formula cell so the column move is lossless.
+  for (var fr = 0; fr < reorderedFormulas.length; fr++) {
+    for (var fc = 0; fc < reorderedFormulas[fr].length; fc++) {
+      var formula = reorderedFormulas[fr][fc];
+      if (formula !== '' && formula !== null && formula !== undefined) {
+        sheet.getRange(fr + 1, fc + 1).setFormula(formula);
+      }
+    }
+  }
+  sheet.getRange(1, 1, 1, plan.target_headers.length).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+
+  return {
+    status: 'reordered',
+    sheet_name: sheet.getName(),
+    data_rows: reordered.length - 1,
+    columns: plan.target_headers.length
+  };
+}
+
+/**
+ * Migrates every weekly PlayerRecords sheet in a spreadsheet to the human-first
+ * order. Weekly sheets are discovered by header name, so dated Week tabs and
+ * the Week template are covered without a name hard-list.
+ *
+ * Dry-run by default: with `apply: false` it writes nothing and returns the
+ * planned order per sheet. With `apply: true` it refuses unless the captain has
+ * set the approval Script Property, then reorders every sheet. A sheet that is
+ * already canonical is a no-op, and an ambiguous layout fails before any other
+ * sheet in the run is written.
+ *
+ * Returns { applied, authorized, results } or { applied: false, error }.
+ */
+function migrateWeeklyColumnOrder(spreadsheet, format, options) {
+  options = options || {};
+  var apply = options.apply === true;
+  var sheets = spreadsheet.getSheets();
+  var plans = [];
+  var results = [];
+
+  if (apply && !isWeeklyColumnOrderMigrationAuthorized()) {
+    return {
+      applied: false,
+      authorized: false,
+      error: 'Weekly column-order migration is not authorized. Set the ' +
+        WEEKLY_COLUMN_ORDER_MIGRATION_APPROVAL_PROPERTY + ' Script Property to authorize it.',
+      results: []
+    };
+  }
+
+  var scanError = null;
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    var headers = getSheetHeaders(sheet);
+    if (!isWeeklyRecordHeaderRow(headers)) continue;
+
+    var plan = planWeeklyColumnReorder(headers, format);
+    if (plan.status === 'error') {
+      scanError = { sheet_name: sheet.getName(), error: plan.error };
+      break;
+    }
+    plans.push({ sheet: sheet, plan: plan });
+  }
+
+  if (scanError) {
+    return { applied: false, authorized: true, error: scanError.error, failed_sheet: scanError.sheet_name, results: [] };
+  }
+
+  for (var p = 0; p < plans.length; p++) {
+    var entry = plans[p];
+    if (entry.plan.status === 'already-canonical') {
+      results.push({ sheet_name: entry.sheet.getName(), status: 'already-canonical' });
+      continue;
+    }
+    if (!apply) {
+      results.push({
+        sheet_name: entry.sheet.getName(),
+        status: 'would-reorder',
+        from: entry.plan.headers,
+        to: entry.plan.target_headers
+      });
+      continue;
+    }
+    var applied = applyWeeklyColumnReorder(entry.sheet, entry.plan);
+    results.push({
+      sheet_name: entry.sheet.getName(),
+      status: 'reordered',
+      from: entry.plan.headers,
+      to: entry.plan.target_headers,
+      data_rows: applied.data_rows,
+      columns: applied.columns
+    });
+  }
+
+  return { applied: apply, authorized: true, results: results };
+}
+
+/**
+ * Admin/operator handler: dry-run or apply the weekly column-order migration.
+ * Always defaults to a dry run that writes nothing. Applying is refused unless
+ * the captain approval Script Property is present, so this cannot run from a
+ * deploy, page load, or ordinary sheet operation.
+ *
+ * Inputs: league/spreadsheetId selector, apply (boolean, default false).
+ */
+function handleMigrateWeeklyColumnOrder(data) {
+  data = data || {};
+  var selector = leagueSelectorFrom(data);
+  var format = resolveLeagueFormat(selector);
+  var apply = data.apply === true || data.apply === 'true';
+  var spreadsheet = resolveSpreadsheet(selector);
+
+  var report = migrateWeeklyColumnOrder(spreadsheet, format, { apply: apply });
+  if (report.error) {
+    return respond('error', report.error, {
+      format: format,
+      applied: false,
+      authorized: report.authorized === true,
+      failed_sheet: report.failed_sheet || null
+    });
+  }
+
+  var changed = report.results.filter(function(r) {
+    return r.status === 'reordered' || r.status === 'would-reorder';
+  }).length;
+  var message = apply
+    ? 'Weekly column-order migration applied to ' + changed + ' sheet(s).'
+    : 'Weekly column-order migration dry run: ' + changed + ' sheet(s) would change. No writes were made.';
+
+  return respond('ok', message, {
+    format: format,
+    applied: apply,
+    authorized: report.authorized === true,
+    sheets_changed: changed,
+    results: report.results
+  });
+}
+
+// ─── End weekly column-order migration ──────────────────────────────────────
+
 // ─── End doubles provisioning ────────────────────────────────────────────────
 
 /**
@@ -890,6 +1301,9 @@ function doPost(e) {
     }
     if (data.action === 'getDoublesProvisioningState') {
       return handleGetDoublesProvisioningState(data);
+    }
+    if (data.action === 'migrateWeeklyColumnOrder') {
+      return handleMigrateWeeklyColumnOrder(data);
     }
 
     return respond('error', 'Unknown action: ' + data.action);

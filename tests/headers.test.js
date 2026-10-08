@@ -4,33 +4,121 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { loadCode } = require('./helpers/load-code');
 
-test('singles weekly headers are unchanged (48 columns)', () => {
-  const h = loadCode();
+// The human-first canonical order is asserted here so a future edit that
+// reshuffles a promoted group is caught immediately.
+const SINGLES_HUMAN_FIRST = [
+  'member_number',
+  'player_name_snapshot',
+  'udisc_username_snapshot',
+  'pdga_number_snapshot',
+  'score',
+  'in_tag',
+  'out_tag'
+];
 
-  assert.equal(h.bound.WEEKLY_RECORD_HEADERS.length, 48);
-  assert.equal(h.bound.WEEKLY_RECORD_HEADERS[0], 'member_number');
-  assert.equal(h.bound.WEEKLY_RECORD_HEADERS[47], 'updated_at');
-  assert.ok(!h.bound.WEEKLY_RECORD_HEADERS.includes('pair_key'));
+const DOUBLES_HUMAN_FIRST = [
+  'member_number',
+  'player_name_snapshot',
+  'udisc_username_snapshot',
+  'pdga_number_snapshot',
+  'pair_key',
+  'partner_member_number',
+  'score',
+  'weekly_points',
+  'weekly_points_status'
+];
+
+test('singles weekly headers lead with names, score, then tags', () => {
+  const h = loadCode();
+  const headers = h.bound.WEEKLY_RECORD_HEADERS;
+
+  assert.equal(headers.length, 48);
+  assert.deepEqual(headers.slice(0, SINGLES_HUMAN_FIRST.length), SINGLES_HUMAN_FIRST);
+  assert.deepEqual(
+    headers.slice(SINGLES_HUMAN_FIRST.length),
+    [
+      'checked_in',
+      'signed_in_at',
+      'paid',
+      'ctp',
+      'ace_pot',
+      'udisc_name_import',
+      'udisc_username_import',
+      'udisc_pdga_number_import',
+      'round_relative_score',
+      'round_rating',
+      'event_relative_score',
+      'event_total_score',
+      'udisc_checked_in',
+      'udisc_paid',
+      'starting_hole',
+      'start_time',
+      'division',
+      'udisc_position',
+      'udisc_position_raw',
+      'hole_1', 'hole_2', 'hole_3', 'hole_4', 'hole_5', 'hole_6',
+      'hole_7', 'hole_8', 'hole_9', 'hole_10', 'hole_11', 'hole_12',
+      'hole_13', 'hole_14', 'hole_15', 'hole_16', 'hole_17', 'hole_18',
+      'udisc_ending_tag',
+      'notes',
+      'created_at',
+      'updated_at'
+    ],
+    'the remaining singles columns keep their historical relative order'
+  );
+  assert.ok(!headers.includes('pair_key'));
+  // Every legacy column is preserved exactly once.
+  assert.equal(new Set(headers).size, headers.length);
+  assert.deepEqual(headers.slice().sort(), h.bound.WEEKLY_RECORD_HEADERS_LEGACY.slice().sort());
 });
 
-test('doubles weekly headers append the six doubles columns', () => {
+test('doubles weekly headers lead with names, pair, score, then points', () => {
   const h = loadCode();
-  const doubles = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
+  const headers = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
 
-  assert.equal(doubles.length, 54);
+  assert.equal(headers.length, 54);
+  assert.deepEqual(headers.slice(0, DOUBLES_HUMAN_FIRST.length), DOUBLES_HUMAN_FIRST);
   assert.deepEqual(
-    doubles.slice(0, 48),
-    h.bound.WEEKLY_RECORD_HEADERS,
-    'the first 48 singles columns must keep their order'
+    headers.slice(DOUBLES_HUMAN_FIRST.length),
+    [
+      'in_tag',
+      'out_tag',
+      'checked_in',
+      'signed_in_at',
+      'paid',
+      'ctp',
+      'ace_pot',
+      'udisc_name_import',
+      'udisc_username_import',
+      'udisc_pdga_number_import',
+      'round_relative_score',
+      'round_rating',
+      'event_relative_score',
+      'event_total_score',
+      'udisc_checked_in',
+      'udisc_paid',
+      'starting_hole',
+      'start_time',
+      'division',
+      'udisc_position',
+      'udisc_position_raw',
+      'hole_1', 'hole_2', 'hole_3', 'hole_4', 'hole_5', 'hole_6',
+      'hole_7', 'hole_8', 'hole_9', 'hole_10', 'hole_11', 'hole_12',
+      'hole_13', 'hole_14', 'hole_15', 'hole_16', 'hole_17', 'hole_18',
+      'udisc_ending_tag',
+      'notes',
+      'created_at',
+      'updated_at',
+      'team_position',
+      'team_position_raw'
+    ],
+    'the remaining doubles columns keep their historical relative order'
   );
-  assert.deepEqual(doubles.slice(48), [
-    'pair_key',
-    'partner_member_number',
-    'team_position',
-    'team_position_raw',
-    'weekly_points',
-    'weekly_points_status'
-  ]);
+  assert.equal(new Set(headers).size, headers.length);
+  assert.deepEqual(
+    headers.slice().sort(),
+    h.bound.WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES.slice().sort()
+  );
 });
 
 test('singles league headers are unchanged (15 columns, no league_format)', () => {
@@ -58,4 +146,32 @@ test('format-specific header accessors gate singles versus doubles', () => {
   assert.deepEqual(weekHeaders(h.bound.LEAGUE_FORMAT_DOUBLES), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
   assert.deepEqual(leagueHeaders(h.bound.LEAGUE_FORMAT_SINGLES), h.bound.LEAGUE_SHEET_HEADERS);
   assert.deepEqual(leagueHeaders(h.bound.LEAGUE_FORMAT_DOUBLES), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
+});
+
+test('readers resolve weekly fields by header name after the reorder', () => {
+  const h = loadCode();
+  const singles = h.bound.WEEKLY_RECORD_HEADERS;
+  const doubles = h.bound.WEEKLY_RECORD_HEADERS_DOUBLES;
+
+  // Position independence: the score/points/tag columns are not where they
+  // used to be, but name lookup still finds them.
+  assert.ok(singles.indexOf('score') < singles.indexOf('hole_1'));
+  assert.ok(singles.indexOf('in_tag') < singles.indexOf('hole_1'));
+  assert.ok(doubles.indexOf('pair_key') < doubles.indexOf('hole_1'));
+  assert.ok(doubles.indexOf('weekly_points') < doubles.indexOf('hole_1'));
+
+  // A new weekly row lands each value in the named column, never at a fixed
+  // index.
+  const build = h.fn('buildNewWeeklyRecord');
+  const record = build(
+    singles,
+    { member_number: 7, name: 'Ada', username: 'ada', pdga: '12345' },
+    { score: 54, in_tag: 3 },
+    null,
+    '2026-10-05T00:00:00.000Z'
+  );
+  assert.equal(record[singles.indexOf('member_number')], 7);
+  assert.equal(record[singles.indexOf('score')], 54);
+  assert.equal(record[singles.indexOf('in_tag')], 3);
+  assert.equal(record[singles.indexOf('created_at')], '2026-10-05T00:00:00.000Z');
 });

@@ -28,6 +28,23 @@ class FakeRange {
     return out;
   }
 
+  // Mirrors the real Sheets API: only cells holding a formula string return a
+  // formula, everything else returns ''. Lets migration tests prove a formula
+  // survives the column move.
+  getFormulas() {
+    const out = [];
+    for (let r = 0; r < this.numRows; r++) {
+      const sheetRow = this.sheet.rows[this.row - 1 + r] || [];
+      const line = [];
+      for (let c = 0; c < this.numCols; c++) {
+        const value = sheetRow[this.col - 1 + c];
+        line.push(typeof value === 'string' && value.charAt(0) === '=' ? value : '');
+      }
+      out.push(line);
+    }
+    return out;
+  }
+
   setValues(matrix) {
     for (let r = 0; r < this.numRows; r++) {
       const rowIndex = this.row - 1 + r;
@@ -48,6 +65,10 @@ class FakeRange {
       }
     }
     return this;
+  }
+
+  setFormula(formula) {
+    return this.setValue(formula);
   }
 
   getValue() {
