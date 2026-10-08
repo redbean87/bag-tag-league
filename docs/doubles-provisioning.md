@@ -16,7 +16,7 @@ topology. It is deterministic and safe to run repeatedly:
 | Tab | Headers | Notes |
 |-----|---------|-------|
 | `League` | 15 singles columns + `league_format` | Settings row records `league_format=doubles` |
-| `ClubMembers` | The standard 8 columns | One row per member, `member_number` preserved |
+| `ClubMembers` | The 8 singles columns + `season_points` | One row per member, `member_number` preserved; `season_points` caches the live season total |
 | `Week template` | The 54 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
 | `Week YYYY-MM-DD` | The 54 human-first weekly columns | Created on demand for a league date |
 
@@ -25,9 +25,12 @@ columns: `pair_key`, `partner_member_number`, `team_position`,
 `team_position_raw`, `weekly_points`, and `weekly_points_status`. `weekly_points`
 is computed from each committed placement when the UDisc import is committed;
 `weekly_points_status` is a retired column kept only for schema compatibility
-and is no longer read or written. Season totals are summed live from the
-committed `weekly_points` values, so there is no confirm/finalize step and no
-cached season total. Both the singles and doubles weekly headers are ordered
+and is no longer read or written. Season totals are the live sum of the
+committed `weekly_points` values; the sum is mirrored into each `ClubMembers`
+row's `season_points` column at the end of every import commit, so the roster
+tab itself always holds current totals while the live sum stays the source of
+truth. There is no confirm/finalize step. Both the singles and doubles weekly
+headers are ordered
 human-first: names, then pair linkage and score/points where they apply, then
 the remaining columns in their historical relative order. Header names and
 counts are unchanged, so every reader that resolves a column by name keeps

@@ -331,7 +331,7 @@ test('member totals are the live sum of committed rows and ignore status labels'
   assert.equal(byNumber[3].season_points, 1);
 });
 
-test('the season total is computed live and needs no cached season_points column', () => {
+test('listings compute season totals live and never create the cache column themselves', () => {
   const h = loadCode();
   const { club } = buildDoubles(h, {
     [WEEK_DATE]: [
@@ -349,11 +349,100 @@ test('the season total is computed live and needs no cached season_points column
   assert.equal(byNumber[1].season_points, 2);
   assert.equal(byNumber[2].season_points, 0.5);
 
-  // Reading totals never creates a cache column.
+  // The live listing is the check and never creates a cache column.
   assert.equal(club.rows[0].indexOf('season_points'), -1);
 });
 
-test('a roster that still carries the legacy season_points column is accepted', () => {
+// ─── Stored season_points cache mirrors the live sum after every write ──────
+
+function storedSeasonPoints(club) {
+  const hMember = club.rows[0].indexOf('member_number');
+  const hSeason = club.rows[0].indexOf('season_points');
+  const stored = {};
+  club.rows.slice(1).forEach((row) => { stored[row[hMember]] = row[hSeason]; });
+  return stored;
+}
+
+test('the import commit mirrors the live season sum into ClubMembers.season_points', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, { [WEEK_DATE]: [] });
+
+  // A bare roster has no cache column until the first points write.
+  assert.equal(club.rows[0].indexOf('season_points'), -1);
+
+  const result = commit(h, [
+    PAIR_ROW,
+    { name: 'Alice Smith', username: 'alice', position: '', position_raw: '' }
+  ]);
+  assert.equal(result.status, 'ok');
+  assert.equal(result.season_points_synced, 6, 'every roster row is refreshed');
+
+  // The column is created in place and holds the live value for every member.
+  assert.notEqual(club.rows[0].indexOf('season_points'), -1);
+  const stored = storedSeasonPoints(club);
+  assert.equal(stored[3], 2, '1st-place partner');
+  assert.equal(stored[7], 2, '1st-place partner');
+  assert.equal(stored[21], 0.5, 'solo showing-up credit');
+  assert.equal(stored[1], 0, 'a member with no committed rows is cached as 0');
+
+  const live = h.fn('sumSeasonPointsByMember')(h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES));
+  Object.keys(live).forEach((memberNumber) => {
+    assert.equal(stored[memberNumber], live[memberNumber], 'member ' + memberNumber);
+  });
+});
+
+test('a later commit refreshes the stored total rather than initializing it once', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, { [WEEK_DATE]: [], [WEEK_TWO]: [] });
+
+  commit(h, [PAIR_ROW]);
+  assert.equal(storedSeasonPoints(club)[3], 2);
+
+  // A second week changes member 3's total, so the cache must move with it.
+  commit(h, [
+    { name: 'Damon Forsythe & Brad Stevenson', usernames: 'damon31,donjoses', position: 2, position_raw: 2 },
+    { name: 'Alice Smith', username: 'alice', position: 3, position_raw: 3 }
+  ], { league_date: WEEK_TWO });
+
+  const stored = storedSeasonPoints(club);
+  assert.equal(stored[3], 3.5, '2 (week 1) + 1.5 (week 2)');
+  assert.equal(stored[7], 3.5);
+  assert.equal(stored[21], 1, '3rd place in week 2');
+
+  const live = h.fn('sumSeasonPointsByMember')(h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES));
+  assert.equal(stored[3], live[3]);
+  assert.equal(stored[7], live[7]);
+});
+
+test('a re-import keeps the stored total equal to the live sum without accumulating', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, { [WEEK_DATE]: [] });
+
+  commit(h, [PAIR_ROW]);
+  const afterFirst = storedSeasonPoints(club);
+
+  commit(h, [PAIR_ROW]);
+  assert.deepEqual(storedSeasonPoints(club), afterFirst);
+});
+
+test('the stored cache and the live member listing agree after a commit', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, { [WEEK_DATE]: [] });
+
+  commit(h, [
+    PAIR_ROW,
+    { name: 'Alice Smith', username: 'alice', position: 3, position_raw: 3 }
+  ]);
+
+  const listing = call(h, 'handleListClubMembers', { league: h.bound.LEAGUE_ID_DOUBLES });
+  const stored = storedSeasonPoints(club);
+  listing.members.forEach((member) => {
+    assert.equal(stored[member.member_number], member.season_points, 'member ' + member.member_number);
+  });
+});
+
+
+test('a roster that already carries the season_points cache column is accepted', () => {
   const h = loadCode();
   const { club } = buildDoubles(h, { [WEEK_DATE]: [] });
   club.rows[0].push('season_points');

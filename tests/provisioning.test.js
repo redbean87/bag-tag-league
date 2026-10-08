@@ -42,7 +42,7 @@ test('provisionDoublesWorkbook creates the canonical doubles tabs', () => {
 
   assert.deepEqual(
     h.fn('getSheetHeaders')(doubles.getSheetByName('ClubMembers')),
-    h.bound.CLUB_MEMBER_HEADERS
+    h.bound.CLUB_MEMBER_HEADERS_DOUBLES
   );
   assert.deepEqual(
     h.fn('getSheetHeaders')(doubles.getSheetByName('Week template')),
@@ -118,6 +118,32 @@ test('handleCreateWeeklyTab writes doubles headers for the doubles spreadsheet',
   assert.deepEqual(
     h.fn('getSheetHeaders')(doubles.getSheetByName('Week 2026-10-05')),
     h.bound.WEEKLY_RECORD_HEADERS_DOUBLES
+  );
+});
+
+test('handleCreateClubMembersTab gives doubles the season_points column and singles the 8-column schema', () => {
+  const h = loadCode();
+
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const doublesResult = h.parse(h.fn('handleCreateClubMembersTab')({
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES
+  }));
+  assert.equal(doublesResult.status, 'ok');
+  assert.equal(doublesResult.columns, h.bound.CLUB_MEMBER_HEADERS_DOUBLES.length);
+  assert.deepEqual(
+    h.fn('getSheetHeaders')(doubles.getSheetByName('ClubMembers')),
+    h.bound.CLUB_MEMBER_HEADERS_DOUBLES
+  );
+
+  const singles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID);
+  const singlesResult = h.parse(h.fn('handleCreateClubMembersTab')({
+    spreadsheetId: h.bound.SPREADSHEET_ID
+  }));
+  assert.equal(singlesResult.status, 'ok');
+  assert.equal(singlesResult.columns, h.bound.CLUB_MEMBER_HEADERS.length);
+  assert.deepEqual(
+    h.fn('getSheetHeaders')(singles.getSheetByName('ClubMembers')),
+    h.bound.CLUB_MEMBER_HEADERS
   );
 });
 
