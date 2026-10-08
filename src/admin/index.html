@@ -548,9 +548,15 @@
         : null;
     }
 
-    function getLeagueFormat() {
+    // The one capability resolver the admin page gates on. It reads the
+    // selected league's derived rules so a future format x scoring league
+    // routes without editing every card toggle.
+    function getLeagueRules() {
       var league = getSelectedLeague();
-      return league ? league.format : 'singles';
+      if (window.LeagueFormat && window.LeagueFormat.rulesForLeague) {
+        return window.LeagueFormat.rulesForLeague(league ? league.id : null);
+      }
+      return { format: 'singles', scoring: 'tags', usesTags: true, usesPoints: false, hasPairs: false };
     }
 
     function getSpreadsheetId() {
@@ -588,14 +594,15 @@
       log('Switched to league ' + leagueId);
     }
 
-    // Applies the selected league. Every gating decision reads league.format
-    // from the league record, so routing cannot follow a stale format value.
+    // Applies the selected league. Every gating decision reads the league's
+    // capability rules, so routing cannot follow a stale format value.
     function applyLeague(leagueId) {
       var league = window.LeagueFormat
         ? window.LeagueFormat.leagueById(leagueId)
         : null;
-      var format = league ? league.format : 'singles';
-      var isDoubles = format === 'doubles';
+      var rules = window.LeagueFormat && window.LeagueFormat.rulesForLeague
+        ? window.LeagueFormat.rulesForLeague(leagueId)
+        : { usesTags: true, usesPoints: false, hasPairs: false };
 
       var selector = document.getElementById('leaguePicker');
       if (selector && league) selector.value = league.id;
@@ -607,28 +614,32 @@
           : 'Managing the Singles league.';
       }
 
-      // Tags are singles-only; hide tag tooling for any non-singles format.
+      // Tag tooling follows the scoring method; it is hidden for any league
+      // that does not settle with tags.
       var tagCard = document.getElementById('tagCalcCard');
-      if (tagCard) tagCard.style.display = isDoubles ? 'none' : '';
+      if (tagCard) tagCard.style.display = rules.usesTags ? '' : 'none';
       var finalizeCard = document.getElementById('finalizeRoundCard');
-      if (finalizeCard) finalizeCard.style.display = isDoubles ? 'none' : '';
+      if (finalizeCard) finalizeCard.style.display = rules.usesTags ? '' : 'none';
 
+      // Pair provisioning follows the format, not the scoring method.
       var provisionCard = document.getElementById('doublesProvisionCard');
-      if (provisionCard) provisionCard.style.display = isDoubles ? '' : 'none';
+      if (provisionCard) provisionCard.style.display = rules.hasPairs ? '' : 'none';
 
-      // Points are doubles-only; hide the read-only results tooling for singles.
+      // Points tooling follows the scoring method.
       var pointsCard = document.getElementById('pointsCalcCard');
-      if (pointsCard) pointsCard.style.display = isDoubles ? '' : 'none';
+      if (pointsCard) pointsCard.style.display = rules.usesPoints ? '' : 'none';
 
-      // The Members view is doubles-only too, so a singles page keeps its
-      // existing layout and never renders a season-total column.
+      // The Members view is a points-season surface, so a tags-only league
+      // keeps its existing layout and never renders a season-total column.
       var membersCard = document.getElementById('membersCard');
-      if (membersCard) membersCard.style.display = isDoubles ? '' : 'none';
+      if (membersCard) membersCard.style.display = rules.usesPoints ? '' : 'none';
 
-      // Doubles provisioning state is authoritative on the server; load it
-      // whenever the doubles league is selected rather than caching a local flag.
-      if (isDoubles) {
+      // Pair provisioning state is authoritative on the server; load it
+      // whenever a pairs league is selected rather than caching a local flag.
+      if (rules.hasPairs) {
         loadDoublesProvisioningState();
+      }
+      if (rules.usesPoints) {
         loadMembers();
       }
     }
@@ -926,9 +937,9 @@
     function onActiveLeagueDateChange() {
       updateGating();
       clearStaleSectionData();
-      // Doubles results are read-only; load them as soon as a known week is
+      // Points results are read-only; load them as soon as a known week is
       // selected so the committed points are visible without a separate click.
-      if (getLeagueFormat() === 'doubles' && sheetExistsForDate(getActiveLeagueDate())) {
+      if (getLeagueRules().usesPoints && sheetExistsForDate(getActiveLeagueDate())) {
         refreshPointsPanel();
       }
     }
@@ -1449,7 +1460,7 @@
 
         log('Parsed ' + rows.length + ' rows from "' + sheetName + '"');
 
-        if (getLeagueFormat() === 'doubles') {
+        if (getLeagueRules().hasPairs) {
           parsedUdiscRows = rows;
           setUdiscImportStatus('pending', 'Matching doubles pairs against the weekly sheet...');
           await requestDoublesImportPreview(rows, leagueDate);
@@ -2449,7 +2460,7 @@
     }
 
     async function refreshPointsPanel() {
-      if (getLeagueFormat() !== 'doubles') return null;
+      if (!getLeagueRules().usesPoints) return null;
       var leagueDate = getActiveLeagueDate();
       if (!leagueDate) return null;
       try {

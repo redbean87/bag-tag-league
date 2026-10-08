@@ -59,5 +59,5 @@ test('singles provisioning controls are unchanged', () => {
   assert.match(html, /function createClubMembersTab\(\)/);
   // The provisioning card stays hidden for the singles league.
   const apply = functionBody('applyLeague');
-  assert.match(apply, /provisionCard\.style\.display = isDoubles \? '' : 'none'/);
+  assert.match(apply, /provisionCard\.style\.display = rules\.hasPairs \? '' : 'none'/);
 });

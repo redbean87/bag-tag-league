@@ -32,6 +32,10 @@ test('the picker lists real leagues, each carrying its own format', () => {
       league.format === LeagueFormat.FORMATS.SINGLES || league.format === LeagueFormat.FORMATS.DOUBLES,
       'each league needs a singles or doubles format'
     );
+    assert.ok(
+      league.scoring === LeagueFormat.SCORING.TAGS || league.scoring === LeagueFormat.SCORING.POINTS,
+      'each league needs a tags or points scoring method'
+    );
     assert.equal(typeof league.spreadsheetId, 'string');
     assert.ok(league.spreadsheetId.length > 0, 'each league needs a spreadsheet');
   }
@@ -39,6 +43,10 @@ test('the picker lists real leagues, each carrying its own format', () => {
   const formats = leagues.map((league) => league.format);
   assert.ok(formats.includes(LeagueFormat.FORMATS.SINGLES), 'expected a singles league');
   assert.ok(formats.includes(LeagueFormat.FORMATS.DOUBLES), 'expected a doubles league');
+
+  const scorings = leagues.map((league) => league.scoring);
+  assert.ok(scorings.includes(LeagueFormat.SCORING.TAGS), 'expected a tags league');
+  assert.ok(scorings.includes(LeagueFormat.SCORING.POINTS), 'expected a points league');
 });
 
 test('the first league is the default for an empty or missing storage', () => {
@@ -149,12 +157,57 @@ test('the admin UI populates the picker from the league registry', () => {
   assert.ok(actionCount > 0, 'expected action requests in the admin page');
 });
 
-test('gating reads the selected league format from its league record', () => {
+test('gating reads the selected league capability rules from its league record', () => {
   const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
 
   assert.match(html, /function applyLeague\(leagueId\)/);
   assert.match(html, /window\.LeagueFormat\.leagueById\(leagueId\)/);
-  assert.match(html, /var isDoubles = format === 'doubles'/);
+  assert.match(html, /window\.LeagueFormat\.rulesForLeague\(leagueId\)/);
+  assert.match(html, /rules\.usesTags/);
+  assert.match(html, /rules\.usesPoints/);
+  assert.match(html, /rules\.hasPairs/);
+  assert.doesNotMatch(html, /var isDoubles = format === 'doubles'/);
   assert.doesNotMatch(html, /document\.getElementById\('leagueFormat'\)/);
   assert.doesNotMatch(html, /persistFormat\(window\.localStorage/);
+});
+
+test('rulesForLeague derives capabilities from the two enums, not the league id', () => {
+  const singles = LeagueFormat.leagues().find((l) => l.format === LeagueFormat.FORMATS.SINGLES);
+  const doubles = LeagueFormat.leagues().find((l) => l.format === LeagueFormat.FORMATS.DOUBLES);
+
+  assert.deepEqual(LeagueFormat.rulesForLeague(singles.id), {
+    format: LeagueFormat.FORMATS.SINGLES,
+    scoring: LeagueFormat.SCORING.TAGS,
+    usesTags: true,
+    usesPoints: false,
+    hasPairs: false
+  });
+  assert.deepEqual(LeagueFormat.rulesForLeague(doubles.id), {
+    format: LeagueFormat.FORMATS.DOUBLES,
+    scoring: LeagueFormat.SCORING.POINTS,
+    usesTags: false,
+    usesPoints: true,
+    hasPairs: true
+  });
+});
+
+test('scoringForLeague reads the league record, matching the registry', () => {
+  for (const league of LeagueFormat.leagues()) {
+    assert.equal(LeagueFormat.scoringForLeague(league.id), league.scoring);
+  }
+});
+
+test('an unknown league or value normalizes to the registry defaults', () => {
+  const fallback = LeagueFormat.rulesForLeague('not-a-league');
+  assert.equal(fallback.format, LeagueFormat.FORMATS.SINGLES);
+  assert.equal(fallback.scoring, LeagueFormat.SCORING.TAGS);
+  assert.equal(fallback.usesTags, true);
+  assert.equal(fallback.usesPoints, false);
+  assert.equal(fallback.hasPairs, false);
+
+  // A typo degrades to the default instead of coercing into the other value.
+  assert.equal(LeagueFormat.normalizeFormat('triples'), LeagueFormat.FORMATS.SINGLES);
+  assert.equal(LeagueFormat.normalizeScoring('handicap'), LeagueFormat.SCORING.TAGS);
+  assert.equal(LeagueFormat.normalizeFormat(LeagueFormat.FORMATS.DOUBLES), LeagueFormat.FORMATS.DOUBLES);
+  assert.equal(LeagueFormat.normalizeScoring(LeagueFormat.SCORING.POINTS), LeagueFormat.SCORING.POINTS);
 });

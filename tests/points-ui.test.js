@@ -24,7 +24,7 @@ test('the points results panel is present and doubles-only', () => {
   assert.match(html, /id="btnLoadPoints" onclick="loadPoints\(\)"/);
 
   const apply = functionBody('applyLeague');
-  assert.match(apply, /pointsCard\.style\.display = isDoubles \? '' : 'none'/);
+  assert.match(apply, /pointsCard\.style\.display = rules\.usesPoints \? '' : 'none'/);
 });
 
 test('the retired lifecycle controls are gone from the panel', () => {

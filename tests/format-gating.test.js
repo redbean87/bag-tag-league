@@ -6,7 +6,7 @@ const { loadCode } = require('./helpers/load-code');
 
 const TAG_ACTIONS = ['handleCalculateTags', 'handleConfirmTags', 'handleFinalizeRound'];
 
-test('tag lifecycle handlers refuse the doubles format before opening a sheet', () => {
+test('tag lifecycle handlers refuse a points-scoring league before opening a sheet', () => {
   for (const action of TAG_ACTIONS) {
     const h = loadCode();
     const result = h.parse(h.fn(action)({
@@ -14,8 +14,8 @@ test('tag lifecycle handlers refuse the doubles format before opening a sheet', 
       spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES
     }));
 
-    assert.equal(result.status, 'error', action + ' should refuse doubles');
-    assert.match(result.message, /doubles/i, action + ' should name the doubles format');
+    assert.equal(result.status, 'error', action + ' should refuse a points-scoring league');
+    assert.match(result.message, /scoring method/i, action + ' should name the scoring method');
     assert.deepEqual(
       h.openByIdCalls,
       [],
@@ -33,7 +33,7 @@ test('tag lifecycle handlers still run for singles (routing unchanged)', () => {
 
   // No weekly tab exists in the fake, so this is the normal singles error.
   assert.equal(result.status, 'error');
-  assert.doesNotMatch(result.message, /doubles/i);
+  assert.doesNotMatch(result.message, /scoring method/i);
   assert.deepEqual(h.openByIdCalls, [h.bound.SPREADSHEET_ID]);
 });
 

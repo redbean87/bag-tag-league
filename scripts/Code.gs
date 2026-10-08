@@ -20,6 +20,15 @@ const LEAGUE_FORMAT_SINGLES = 'singles';
 const LEAGUE_FORMAT_DOUBLES = 'doubles';
 const LEAGUE_FORMATS = [LEAGUE_FORMAT_SINGLES, LEAGUE_FORMAT_DOUBLES];
 
+// Scoring methods are an independent axis from format: `format` says how a
+// score is made up (singles/doubles), `scoring` says what is settled
+// (tags/points). The capability flags (usesTags/usesPoints/hasPairs) derive
+// from these two enums, never from a league id, so a future format x scoring
+// league routes without touching the handlers that branch on them.
+const SCORING_TAGS = 'tags';
+const SCORING_POINTS = 'points';
+const SCORING_METHODS = [SCORING_TAGS, SCORING_POINTS];
+
 // Name of the doubles weekly template tab (not a dated Week sheet, so it is
 // ignored by the Week YYYY-MM-DD discovery logic).
 const WEEK_TEMPLATE_SHEET_NAME = 'Week template';
@@ -248,12 +257,14 @@ const LEAGUE_ID_SINGLES = 'b-rads-league';
 const LEAGUE_ID_DOUBLES = 'nightfliers-random-dubs';
 const DEFAULT_LEAGUE_ID = LEAGUE_ID_SINGLES;
 
-// Server-side allow-list: opaque league id -> authorized spreadsheet id. A
-// client can only ever select one of these two spreadsheets; a raw Google
-// spreadsheet id is never accepted as storage authority.
+// Server-side allow-list and league table: opaque league id -> authorized
+// spreadsheet id plus the deploy-time authoritative format and scoring. A
+// client can only ever select one of these spreadsheets; a raw Google
+// spreadsheet id is never accepted as storage authority. Routing derives the
+// capability rules from this table, never from the league id directly.
 const LEAGUE_SPREADSHEETS = [
-  { id: LEAGUE_ID_SINGLES, spreadsheetId: SPREADSHEET_ID },
-  { id: LEAGUE_ID_DOUBLES, spreadsheetId: SPREADSHEET_ID_DOUBLES }
+  { id: LEAGUE_ID_SINGLES, format: LEAGUE_FORMAT_SINGLES, scoring: SCORING_TAGS, spreadsheetId: SPREADSHEET_ID },
+  { id: LEAGUE_ID_DOUBLES, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES }
 ];
 
 /**
@@ -308,13 +319,55 @@ function resolveSpreadsheet(selector) {
 }
 
 /**
- * Resolves the league format for a requested selector.
- * The doubles league is the only doubles format; everything else is singles.
+ * Normalizes a format value against the server allow-list. An unknown value is
+ * never coerced silently: it resolves to the singles default and is logged so
+ * a typo degrades loudly instead of silently mis-routing.
+ */
+function normalizeFormat(format) {
+  if (LEAGUE_FORMATS.indexOf(format) !== -1) return format;
+  if (format !== undefined && format !== null && format !== '') {
+    Logger.log('Unknown league format "' + format + '"; defaulting to ' + LEAGUE_FORMAT_SINGLES + '.');
+  }
+  return LEAGUE_FORMAT_SINGLES;
+}
+
+/**
+ * Normalizes a scoring value against the server allow-list. An unknown value
+ * resolves to the tags default and is logged.
+ */
+function normalizeScoring(scoring) {
+  if (SCORING_METHODS.indexOf(scoring) !== -1) return scoring;
+  if (scoring !== undefined && scoring !== null && scoring !== '') {
+    Logger.log('Unknown league scoring "' + scoring + '"; defaulting to ' + SCORING_TAGS + '.');
+  }
+  return SCORING_TAGS;
+}
+
+/**
+ * Resolves the capability rules for a requested selector. The league table is
+ * the deploy-time authority for both format and scoring. Capability flags are
+ * the only thing handlers branch on, so a future format x scoring league needs
+ * no handler change.
+ */
+function getLeagueRules(selector) {
+  var record = leagueRecordById(resolveLeagueId(selector));
+  var format = normalizeFormat(record ? record.format : null);
+  var scoring = normalizeScoring(record ? record.scoring : null);
+  return {
+    format: format,
+    scoring: scoring,
+    usesTags: scoring === SCORING_TAGS,
+    usesPoints: scoring === SCORING_POINTS,
+    hasPairs: format === LEAGUE_FORMAT_DOUBLES
+  };
+}
+
+/**
+ * Resolves the league format for a requested selector through the league
+ * table. Kept for callers that only need the format string.
  */
 function resolveLeagueFormat(selector) {
-  return resolveLeagueId(selector) === LEAGUE_ID_DOUBLES
-    ? LEAGUE_FORMAT_DOUBLES
-    : LEAGUE_FORMAT_SINGLES;
+  return getLeagueRules(selector).format;
 }
 
 /**
@@ -1467,8 +1520,7 @@ function handleCreateWeeklyTab(data) {
 function handleSearchClubMembers(data) {
   const query = (data.query || '').trim();
   const leagueId = resolveLeagueId(leagueSelectorFrom(data));
-  const format = resolveLeagueFormat(leagueSelectorFrom(data));
-  const isDoubles = format === LEAGUE_FORMAT_DOUBLES;
+  const rules = getLeagueRules(leagueSelectorFrom(data));
 
   if (query.length < 2) {
     return respond('ok', 'Query too short.', { results: [], league: leagueId });
@@ -1494,9 +1546,9 @@ function handleSearchClubMembers(data) {
   const lowerQuery = query.toLowerCase();
   const results = [];
 
-  // Doubles members carry their season total (the live sum of all committed
-  // weekly points) in every search result. Singles keeps its tag-only payload.
-  const seasonTotals = isDoubles ? sumSeasonPointsByMember(spreadsheet) : null;
+  // Points members carry their season total (the live sum of all committed
+  // weekly points) in every search result; tag members keep a tag-only payload.
+  const seasonTotals = rules.usesPoints ? sumSeasonPointsByMember(spreadsheet) : null;
 
   for (let i = 1; i < playersData.length && results.length < 10; i++) {
     const row = playersData[i];
@@ -1520,8 +1572,9 @@ function handleSearchClubMembers(data) {
         udisc_username: udisc,
         pdga_number: pdga
       };
-      // Tag data is singles-only; the doubles search response stays tag-free.
-      if (!isDoubles) {
+      // Tag data belongs to tag-scoring leagues; a points-scoring search
+      // response stays tag-free and carries season_points instead.
+      if (rules.usesTags) {
         result.current_tag = row[currentTagCol];
       } else {
         // Missing totals render as 0 rather than null/NaN so the member
@@ -1550,8 +1603,8 @@ function handleSearchClubMembers(data) {
  */
 function handleListClubMembers(data) {
   const leagueId = resolveLeagueId(leagueSelectorFrom(data));
-  const format = resolveLeagueFormat(leagueSelectorFrom(data));
-  const isDoubles = format === LEAGUE_FORMAT_DOUBLES;
+  const rules = getLeagueRules(leagueSelectorFrom(data));
+  const format = rules.format;
   const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
   const playersSheet = spreadsheet.getSheetByName('ClubMembers');
 
@@ -1569,9 +1622,9 @@ function handleListClubMembers(data) {
   const currentTagCol = playersHeaders.indexOf('current_tag');
   const isActiveCol = playersHeaders.indexOf('is_active');
 
-  // One aggregation shared by every doubles member listing; it sums the
+  // One aggregation shared by every points member listing; it sums the
   // points persisted at import commit, so a committed week always counts.
-  const seasonTotals = isDoubles ? sumSeasonPointsByMember(spreadsheet) : null;
+  const seasonTotals = rules.usesPoints ? sumSeasonPointsByMember(spreadsheet) : null;
 
   const members = [];
   for (let i = 1; i < playersData.length; i++) {
@@ -1588,7 +1641,7 @@ function handleListClubMembers(data) {
       is_active: isActive
     };
 
-    if (isDoubles) {
+    if (rules.usesPoints) {
       member.season_points = seasonTotals[memberNumber] !== undefined
         ? seasonTotals[memberNumber]
         : 0;
@@ -1627,13 +1680,15 @@ function handleSubmitCheckIn(data) {
   const trimmedPdga = (pdga_number || '').trim();
 
   const leagueId = resolveLeagueId(leagueSelectorFrom(data));
-  const format = resolveLeagueFormat(leagueSelectorFrom(data));
-  // Tag collection is singles-only. Doubles ignores any client-supplied tag
-  // and never requires, validates, or persists one.
-  const isDoubles = format === LEAGUE_FORMAT_DOUBLES;
+  const rules = getLeagueRules(leagueSelectorFrom(data));
+  const format = rules.format;
+  // Tag collection belongs to tag-scoring leagues. A points-scoring league
+  // ignores any client-supplied tag and never requires, validates, or
+  // persists one.
+  const usesTags = rules.usesTags;
 
   let inTagNum = null;
-  if (!isDoubles) {
+  if (usesTags) {
     if (in_tag === undefined || in_tag === null || in_tag === '') {
       return respond('error', 'in_tag is required.');
     }
@@ -1692,7 +1747,7 @@ function handleSubmitCheckIn(data) {
     if (playerNameCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerNameCol + 1).setValue(trimmedName);
     if (playerUdiscCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerUdiscCol + 1).setValue(trimmedUdisc);
     if (playerPdgaCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerPdgaCol + 1).setValue(trimmedPdga);
-    if (!isDoubles && playerCurrentTagCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerCurrentTagCol + 1).setValue(inTagNum);
+    if (usesTags && playerCurrentTagCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerCurrentTagCol + 1).setValue(inTagNum);
     // Always update updated_at
     const updatedAtCol = playersHeaders.indexOf('updated_at');
     if (updatedAtCol !== -1) playersSheet.getRange(memberRowIndex + 1, updatedAtCol + 1).setValue(now);
@@ -1750,7 +1805,7 @@ function handleSubmitCheckIn(data) {
         newPlayer[playersHeaders.indexOf('name')] = trimmedName;
         newPlayer[playersHeaders.indexOf('udisc_username')] = trimmedUdisc;
         newPlayer[playersHeaders.indexOf('pdga_number')] = trimmedPdga;
-        if (!isDoubles) newPlayer[playersHeaders.indexOf('current_tag')] = inTagNum;
+        if (usesTags) newPlayer[playersHeaders.indexOf('current_tag')] = inTagNum;
         newPlayer[playersHeaders.indexOf('is_active')] = true;
         newPlayer[playersHeaders.indexOf('created_at')] = now;
         newPlayer[playersHeaders.indexOf('updated_at')] = now;
@@ -1766,8 +1821,8 @@ function handleSubmitCheckIn(data) {
     }
 
     // Update ClubMembers.current_tag with the tag they are checking in with.
-    // Singles only: doubles has no tag collection.
-    if (!isDoubles && !isNewMember) {
+    // Tag-scoring leagues only.
+    if (usesTags && !isNewMember) {
       const memberRowIndexForTag = playersData.indexOf(memberRow) + 1;
       playersSheet.getRange(memberRowIndexForTag, playerCurrentTagCol + 1).setValue(inTagNum);
     }
@@ -1809,7 +1864,7 @@ function handleSubmitCheckIn(data) {
   newRecord[weeklyHeaders.indexOf('player_name_snapshot')] = memberRow[playerNameCol] || trimmedName;
   newRecord[weeklyHeaders.indexOf('udisc_username_snapshot')] = memberRow[playerUdiscCol] || trimmedUdisc;
   newRecord[weeklyHeaders.indexOf('pdga_number_snapshot')] = memberRow[playerPdgaCol] || trimmedPdga;
-  if (!isDoubles) newRecord[weeklyHeaders.indexOf('in_tag')] = inTagNum;
+  if (usesTags) newRecord[weeklyHeaders.indexOf('in_tag')] = inTagNum;
   newRecord[weeklyHeaders.indexOf('checked_in')] = true;
   newRecord[weeklyHeaders.indexOf('signed_in_at')] = recordTimestamp;
   newRecord[weeklyHeaders.indexOf('paid')] = paid === true || paid === 'TRUE';
@@ -1820,18 +1875,19 @@ function handleSubmitCheckIn(data) {
 
   recordsSheet.appendRow(newRecord);
 
-  // Singles echoes the collected tag; doubles returns a tag-free payload.
-  const success = isDoubles
+  // A tag-scoring league echoes the collected tag; a points-scoring league
+  // returns a tag-free payload.
+  const success = usesTags
     ? {
         member_number: memberId,
         player_name: trimmedName,
+        in_tag: inTagNum,
         weekly_tab: mostRecentTabName,
         league: leagueId
       }
     : {
         member_number: memberId,
         player_name: trimmedName,
-        in_tag: inTagNum,
         weekly_tab: mostRecentTabName,
         league: leagueId
       };
@@ -2284,8 +2340,8 @@ function handleSavePreRoundReview(data) {
  * Inputs: league_date (required, YYYY-MM-DD), rows (required, array of parsed UDisc row objects)
  */
 function handlePreviewUdiscImport(data) {
-  if (resolveLeagueFormat(leagueSelectorFrom(data)) === LEAGUE_FORMAT_DOUBLES) {
-    return respond('error', 'Singles import preview is not available for the doubles spreadsheet.');
+  if (!getLeagueRules(leagueSelectorFrom(data)).usesTags) {
+    return respond('error', 'Tag-based UDisc import preview is not available for this league\'s scoring method.');
   }
 
   const leagueDate = data.league_date;
@@ -2897,8 +2953,8 @@ function buildDoublesRoster(clubData, headers) {
  * Inputs: league_date (required), rows (required), spreadsheetId (doubles).
  */
 function handlePreviewUdiscImportDoubles(data) {
-  if (resolveLeagueFormat(leagueSelectorFrom(data)) !== LEAGUE_FORMAT_DOUBLES) {
-    return respond('error', 'Doubles import preview is only available for the doubles spreadsheet.');
+  if (!getLeagueRules(leagueSelectorFrom(data)).hasPairs) {
+    return respond('error', 'Pair-based UDisc import preview is not available for this league\'s format.');
   }
 
   var leagueDate = data.league_date;
@@ -3764,8 +3820,8 @@ function commitDoublesPairUnderLock(context) {
  * (must be true), overrides (optional per-row, per-partner member claims).
  */
 function handleCommitUdiscImportDoubles(data) {
-  if (resolveLeagueFormat(leagueSelectorFrom(data)) !== LEAGUE_FORMAT_DOUBLES) {
-    return respond('error', 'Doubles import commit is only available for the doubles spreadsheet.');
+  if (!getLeagueRules(leagueSelectorFrom(data)).hasPairs) {
+    return respond('error', 'Pair-based UDisc import commit is not available for this league\'s format.');
   }
 
   var leagueDate = data.league_date;
@@ -3972,8 +4028,8 @@ function handleCommitUdiscImportDoubles(data) {
  * Inputs: league_date (required), rows (required), approved (must be true)
  */
 function handleCommitUdiscImport(data) {
-  if (resolveLeagueFormat(leagueSelectorFrom(data)) === LEAGUE_FORMAT_DOUBLES) {
-    return respond('error', 'Singles import commit is not available for the doubles spreadsheet.');
+  if (!getLeagueRules(leagueSelectorFrom(data)).usesTags) {
+    return respond('error', 'Tag-based UDisc import commit is not available for this league\'s scoring method.');
   }
 
   var leagueDate = data.league_date;
@@ -4246,9 +4302,9 @@ function buildMatchEntry(udiscRow, weeklyRow, matchMethod) {
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
 function handleCalculateTags(data) {
-  var format = resolveLeagueFormat(leagueSelectorFrom(data));
-  if (format === LEAGUE_FORMAT_DOUBLES) {
-    return respond('error', 'Tag operations are not available for the doubles league.');
+  var rules = getLeagueRules(leagueSelectorFrom(data));
+  if (!rules.usesTags) {
+    return respond('error', 'Tag operations are not available for this league\'s scoring method.');
   }
 
   var leagueDate = data.league_date;
@@ -4388,9 +4444,9 @@ function handleCalculateTags(data) {
  * Inputs: league_date (required, YYYY-MM-DD format)
  */
 function handleConfirmTags(data) {
-  var format = resolveLeagueFormat(leagueSelectorFrom(data));
-  if (format === LEAGUE_FORMAT_DOUBLES) {
-    return respond('error', 'Tag operations are not available for the doubles league.');
+  var rules = getLeagueRules(leagueSelectorFrom(data));
+  if (!rules.usesTags) {
+    return respond('error', 'Tag operations are not available for this league\'s scoring method.');
   }
 
   var leagueDate = data.league_date;
@@ -4518,9 +4574,9 @@ function handleConfirmTags(data) {
  * out_tag are skipped. Returns a summary of updated and skipped records.
  */
 function handleFinalizeRound(data) {
-  var format = resolveLeagueFormat(leagueSelectorFrom(data));
-  if (format === LEAGUE_FORMAT_DOUBLES) {
-    return respond('error', 'Tag operations are not available for the doubles league.');
+  var rules = getLeagueRules(leagueSelectorFrom(data));
+  if (!rules.usesTags) {
+    return respond('error', 'Tag operations are not available for this league\'s scoring method.');
   }
 
   var leagueDate = data.league_date;
@@ -4744,11 +4800,11 @@ function readDoublesPointsTab(spreadsheet, leagueDate) {
   };
 }
 
-/** Validates the shared points request shape (doubles gate + league_date). */
+/** Validates the shared points request shape (points gate + league_date). */
 function validateDoublesPointsRequest(data) {
-  var format = resolveLeagueFormat(leagueSelectorFrom(data));
-  if (format !== LEAGUE_FORMAT_DOUBLES) {
-    return { error: 'Points operations are only available for the doubles league.' };
+  var rules = getLeagueRules(leagueSelectorFrom(data));
+  if (!rules.usesPoints) {
+    return { error: 'Points operations are not available for this league\'s scoring method.' };
   }
   var leagueDate = data.league_date;
   if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
