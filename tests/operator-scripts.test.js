@@ -28,6 +28,11 @@ test('configured spreadsheet IDs default to constants', () => {
 
   assert.equal(h.fn('getConfiguredSinglesSpreadsheetId')(), h.bound.SPREADSHEET_ID);
   assert.equal(h.fn('getConfiguredDoublesSpreadsheetId')(), h.bound.SPREADSHEET_ID_DOUBLES);
+  assert.equal(
+    h.fn('getConfiguredDoublesTestSpreadsheetId')(),
+    h.bound.SPREADSHEET_ID_DOUBLES_TEST,
+    'the reset operator path must default to the test surface, never production'
+  );
 });
 
 test('configured spreadsheet IDs honor Script Properties overrides', () => {
@@ -35,9 +40,11 @@ test('configured spreadsheet IDs honor Script Properties overrides', () => {
 
   h.setScriptProperty('SINGLES_SPREADSHEET_ID', 'custom-singles');
   h.setScriptProperty('DOUBLES_SPREADSHEET_ID', 'custom-doubles');
+  h.setScriptProperty('DOUBLES_TEST_SPREADSHEET_ID', 'custom-test-doubles');
 
   assert.equal(h.fn('getConfiguredSinglesSpreadsheetId')(), 'custom-singles');
   assert.equal(h.fn('getConfiguredDoublesSpreadsheetId')(), 'custom-doubles');
+  assert.equal(h.fn('getConfiguredDoublesTestSpreadsheetId')(), 'custom-test-doubles');
 });
 
 test('provisionDoublesSpreadsheet provisions tabs and seeds the roster', () => {
@@ -134,7 +141,7 @@ test('applyDetagColumnDrops drops the tag columns without any approval property'
 // ─── Guarded test-data reset operator entry points ──────────────────────────
 
 function buildTestDoubles(h) {
-  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES_TEST);
   const club = doubles.insertSheet('ClubMembers');
   club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
   club.appendRow([3, 'Damon', 'damon31', '151236', true, 't', 't', 2]);
@@ -171,7 +178,7 @@ test('applyTestDataReset clears the doubles test spreadsheet to its minimum', ()
 
 test('the operator reset refuses a non-test spreadsheet override', () => {
   const h = loadOperator();
-  h.setScriptProperty('DOUBLES_SPREADSHEET_ID', 'not-the-test-sheet');
+  h.setScriptProperty('DOUBLES_TEST_SPREADSHEET_ID', 'not-the-test-sheet');
   const other = h.makeSpreadsheet('not-the-test-sheet');
   const club = other.insertSheet('ClubMembers');
   club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
@@ -183,4 +190,21 @@ test('the operator reset refuses a non-test spreadsheet override', () => {
   assert.equal(report.refused, true);
   assert.equal(report.reason, 'non_test');
   assert.equal(JSON.stringify(club.rows), before);
+});
+
+test('the operator reset refuses the production doubles spreadsheet', () => {
+  const h = loadOperator();
+  h.setScriptProperty('DOUBLES_TEST_SPREADSHEET_ID', h.bound.SPREADSHEET_ID_DOUBLES);
+  const production = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const club = production.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  club.appendRow([3, 'Damon', 'damon31', '151236', true, 't', 't', 2]);
+  const before = JSON.stringify(club.rows);
+
+  const report = h.fn('applyTestDataReset')();
+
+  assert.equal(report.applied, false);
+  assert.equal(report.refused, true);
+  assert.equal(report.reason, 'non_test');
+  assert.equal(JSON.stringify(club.rows), before, 'production doubles must never be reset');
 });

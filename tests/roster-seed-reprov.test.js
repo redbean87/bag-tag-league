@@ -15,10 +15,12 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { loadCode } = require('./helpers/load-code');
 
-// Builds a fully provisioned doubles test spreadsheet with a header-only
-// roster (the state a `scope: 'full'` reset leaves behind).
-function buildProvisionedDoubles(h) {
-  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+// Builds a fully provisioned doubles spreadsheet with a header-only roster
+// (the state a `scope: 'full'` reset leaves behind). Defaults to the
+// production doubles workbook; callers exercising the test-only reset pass
+// the test spreadsheet id.
+function buildProvisionedDoubles(h, spreadsheetId) {
+  const doubles = h.makeSpreadsheet(spreadsheetId || h.bound.SPREADSHEET_ID_DOUBLES);
 
   const league = doubles.insertSheet('League');
   league.appendRow(h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
@@ -67,12 +69,13 @@ function valueFor(h, club, rowIndex, header) {
 
 test('a seed-only reload restores exact source member numbers after a full reset', () => {
   const h = loadCode();
-  const { doubles, club } = buildProvisionedDoubles(h);
+  const { doubles, club } = buildProvisionedDoubles(h, h.bound.SPREADSHEET_ID_DOUBLES_TEST);
 
-  // Start with a populated roster, then wipe it with the guarded full reset.
+  // Start with a populated roster, then wipe it with the guarded full reset
+  // on the test-flagged surface.
   club.appendRow([3, 'Old', 'old', '1', true, 't', 't', 0]);
   const reset = h.fn('resetTestData')(doubles, {
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES_TEST,
     apply: true,
     scope: 'full'
   });
@@ -83,7 +86,7 @@ test('a seed-only reload restores exact source member numbers after a full reset
   const members = [member(1), member(4), member(19)];
 
   const report = h.parse(h.fn('handleSeedRoster')({
-    league: h.bound.LEAGUE_ID_DOUBLES,
+    league: h.bound.LEAGUE_ID_DOUBLES_TEST,
     members: members,
     apply: true
   }));
@@ -98,7 +101,7 @@ test('a seed-only reload restores exact source member numbers after a full reset
   assert.deepEqual(rosterNumbers(h, club), [1, 4, 19], 'member numbers must be exact, never renumbered');
   assert.deepEqual(
     h.openByIdCalls,
-    [h.bound.SPREADSHEET_ID_DOUBLES],
+    [h.bound.SPREADSHEET_ID_DOUBLES_TEST],
     'the explicit-payload reload opens only the doubles test spreadsheet, never Singles'
   );
 });
@@ -130,6 +133,28 @@ test('the seed reload is the supported path on an already-provisioned workbook',
 
   const club = doubles.getSheetByName('ClubMembers');
   assert.deepEqual(rosterNumbers(h, club).sort((a, b) => a - b), [1, 2]);
+});
+
+test('the roster seed is permitted on the production doubles spreadsheet', () => {
+  const h = loadCode();
+  const { doubles, club } = buildProvisionedDoubles(h);
+
+  const report = h.parse(h.fn('handleSeedRoster')({
+    league: h.bound.LEAGUE_ID_DOUBLES,
+    members: [member(1), member(2)],
+    apply: true
+  }));
+
+  assert.equal(report.status, 'ok');
+  assert.equal(report.refused, false);
+  assert.equal(report.applied, true);
+  assert.equal(report.inserted, 2);
+  assert.deepEqual(rosterNumbers(h, club), [1, 2]);
+  assert.deepEqual(
+    h.openByIdCalls,
+    [h.bound.SPREADSHEET_ID_DOUBLES],
+    'the production roster-fill path opens the production doubles spreadsheet only'
+  );
 });
 
 // ─── Dry run ─────────────────────────────────────────────────────────────────

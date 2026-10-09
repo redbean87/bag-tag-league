@@ -5,7 +5,10 @@ provision and inspect it. The Singles spreadsheet and its schema are never
 modified.
 
 - Singles spreadsheet (default): `SPREADSHEET_ID` in `scripts/Code.gs`
-- Doubles spreadsheet: `SPREADSHEET_ID_DOUBLES` in `scripts/Code.gs`
+- Doubles spreadsheet (production): `SPREADSHEET_ID_DOUBLES` in `scripts/Code.gs`
+  (`1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g`)
+- Doubles test spreadsheet (former proof-of-concept, test-flagged):
+  `SPREADSHEET_ID_DOUBLES_TEST` in `scripts/Code.gs`
   (`1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8`)
 
 ## What provisioning creates
@@ -90,9 +93,12 @@ Properties:
 ```js
 PropertiesService.getScriptProperties().setProperty('DOUBLES_SPREADSHEET_ID', '<id>');
 PropertiesService.getScriptProperties().setProperty('SINGLES_SPREADSHEET_ID', '<id>');
+PropertiesService.getScriptProperties().setProperty('DOUBLES_TEST_SPREADSHEET_ID', '<id>');
 ```
 
-When a property is unset the constant in `scripts/Code.gs` is used.
+`DOUBLES_TEST_SPREADSHEET_ID` is what the guarded test-data reset reads, so it
+cannot be used to point the reset at production. When a property is unset the
+constant in `scripts/Code.gs` is used.
 
 ### Deploying
 
@@ -137,9 +143,11 @@ the topology check keep working on a sheet that still carries the tag columns.
 
 ## Test-data reset
 
-The doubles spreadsheet is the worker's disposable test surface, so it needs a
-programmatic wipe that does not require a hand in the Sheets editor. The
-`resetTestData` action clears test data without touching any live spreadsheet.
+The doubles test spreadsheet is the worker's disposable test surface, so it
+needs a programmatic wipe that does not require a hand in the Sheets editor.
+The `resetTestData` action clears test data without touching any live
+spreadsheet. The production doubles spreadsheet is deliberately **not**
+flagged as a test surface, so the reset can never be pointed at it.
 
 The action is guarded by a **test-spreadsheet allow-list** derived from the
 league registry: a league record flagged `test: true` contributes its
@@ -152,7 +160,9 @@ test spreadsheet. The reset is a testing tool rather than a coordinator
 feature: the coordinator admin page renders no reset card or button. The panel
 lives in an inert `<template>` and mounts only when the page is opened with the
 non-advertised `?devTestReset=1` flag while a test league is selected, so a
-live league can never show (or use) the wipe path in the normal UI.
+live league can never show (or use) the wipe path in the normal UI. Test-flagged
+leagues are hidden from the admin league picker, so a coordinator never sees the
+test surface at all.
 
 The reset is a dry run by default. `apply: false` returns exactly which sheets
 would change and how many rows each would lose, and writes nothing. With
@@ -172,7 +182,9 @@ routing and topology stay intact.
 The web-app action `resetTestData` accepts `league`/`spreadsheetId`, `apply`,
 and `scope`; the dev-only panel's `previewTestDataReset` and
 `applyTestDataReset` entry points run the selected scope (`weekly` by default)
-against the configured doubles spreadsheet.
+against the configured test spreadsheet (the
+`DOUBLES_TEST_SPREADSHEET_ID` Script Property, defaulting to the test-flagged
+former proof-of-concept workbook).
 
 ## Re-provisioning guard
 
@@ -233,16 +245,18 @@ is deterministic by construction: explicit row payload in, exact roster out.
 `members` is required: an array of plain objects keyed by `ClubMembers` header
 name. `member_number` is required on every entry and is copied exactly. A
 missing, blank, or duplicate `member_number` is rejected before any write. The
-selector (`league`, or the deprecated `spreadsheetId`) must resolve to the
-doubles test spreadsheet.
+selector (`league`, or the deprecated `spreadsheetId`) must resolve to a
+registered doubles spreadsheet - the production doubles league or the
+test-flagged former proof-of-concept league.
 
 ### Steps
 
 1. Resolve the selector through the league allow-list; an unknown selector
    resolves to Singles.
-2. Require the resolved id to be on the test-spreadsheet allow-list. Live
-   Singles is refused with `reason: "live_singles"` and any other spreadsheet
-   with `reason: "non_test"`, before a row is read or written.
+2. Require the resolved id to be a registered doubles spreadsheet. Live
+   Singles is refused with `reason: "live_singles"` and any spreadsheet outside
+   the doubles registry with `reason: "non_doubles"`, before a row is read or
+   written.
 3. Validate the payload: must be a non-empty array, every entry an object with
    a present and unique `member_number`.
 4. Plan: index the existing `ClubMembers` rows by `member_number` and classify
@@ -278,5 +292,5 @@ doubles provisioning, roster-seed
 `member_number` preservation, the doubles provisioning-state guard, the
 disabled re-provisioning UI, the guarded test-data reset, and the seed-only
 roster reload (`member_number` exactness after a full reset, upsert
-idempotency, blank `current_tag`, the preserved `season_points` cache, and the
-test-sheet refusal).
+idempotency, blank `current_tag`, the preserved `season_points` cache, the
+production permit, and the test-sheet refusal).

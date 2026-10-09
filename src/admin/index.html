@@ -1007,7 +1007,10 @@
 
       var selected = getLeagueId();
       selector.innerHTML = '';
-      window.LeagueFormat.leagues().forEach(function(league) {
+      // Test-flagged leagues are development surfaces; they stay in the
+      // registry for the guarded test tooling but a coordinator must never see
+      // or select them, so the picker offers only selectable leagues.
+      window.LeagueFormat.selectableLeagues().forEach(function(league) {
         var option = document.createElement('option');
         option.value = league.id;
         option.textContent = league.name;
