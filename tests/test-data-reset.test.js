@@ -380,12 +380,36 @@ test('a doubles reset never writes the live singles spreadsheet', () => {
 
 // ─── Admin UI wiring (structural) ────────────────────────────────────────────
 
-test('the admin page exposes the reset only for a test league', () => {
+test('the coordinator admin page renders no reset card or button', () => {
   const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
 
-  assert.match(html, /id="testResetCard"/);
-  assert.match(html, /onclick="previewTestDataReset\(\)"/);
-  assert.match(html, /onclick="applyTestDataReset\(\)"/);
+  const open = html.indexOf('<template id="testResetDevTemplate">');
+  const close = html.indexOf('</template>', open);
+  assert.notEqual(open, -1, 'expected the inert dev reset template');
+  assert.notEqual(close, -1, 'expected the dev reset template to close');
+
+  const template = html.slice(open, close);
+  const visible = html.slice(0, open) + html.slice(close + '</template>'.length);
+
+  // The reset markup exists only inside the inert template, so the rendered
+  // page body carries no reset card or button at all.
+  assert.match(template, /id="testResetCard"/);
+  assert.match(template, /onclick="previewTestDataReset\(\)"/);
+  assert.match(template, /onclick="applyTestDataReset\(\)"/);
+  assert.doesNotMatch(visible, /id="testResetCard"/);
+  assert.doesNotMatch(visible, /id="btnPreviewTestReset"/);
+  assert.doesNotMatch(visible, /id="btnApplyTestReset"/);
+});
+
+test('the reset stays actionable only behind the dev flag for a test league', () => {
+  const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
+
+  // The action and its wiring are not left dead: both entry points still
+  // post resetTestData, and the panel mounts only for a test league when the
+  // non-advertised flag is present.
   assert.match(html, /action: 'resetTestData'/);
-  assert.match(html, /testResetCard\.style\.display = league && league\.test === true/);
+  assert.match(html, /var TEST_RESET_DEV_FLAG = 'devTestReset';/);
+  assert.match(html, /function testResetDevEnabled\(\)/);
+  assert.match(html, /function applyTestResetVisibility\(league\)/);
+  assert.match(html, /league && league\.test === true && testResetDevEnabled\(\)/);
 });

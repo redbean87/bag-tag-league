@@ -140,8 +140,11 @@ league allow-list (an unknown selector always resolves to Singles), then the
 resolved id is checked against that list before a single row is read or
 written. Live Singles is refused with a `live_singles` reason and any other
 spreadsheet with a `non_test` reason, so no sheet write can ever land outside a
-test spreadsheet. The admin card is shown only for a league the registry flags
-as a test surface.
+test spreadsheet. The reset is a testing tool rather than a coordinator
+feature: the coordinator admin page renders no reset card or button. The panel
+lives in an inert `<template>` and mounts only when the page is opened with the
+non-advertised `?devTestReset=1` flag while a test league is selected, so a
+live league can never show (or use) the wipe path in the normal UI.
 
 The reset is a dry run by default. `apply: false` returns exactly which sheets
 would change and how many rows each would lose, and writes nothing. With
@@ -158,9 +161,9 @@ Two scopes are available:
 The header row and the `League` settings (including the `league_format` and
 `scoring` metadata) are never removed, so routing and topology stay intact.
 The web-app action `resetTestData` accepts `league`/`spreadsheetId`, `apply`,
-and `scope`; the operator entry points `previewTestDataReset` and
-`applyTestDataReset` always run `full` scope against the configured doubles
-spreadsheet.
+and `scope`; the dev-only panel's `previewTestDataReset` and
+`applyTestDataReset` entry points run the selected scope (`weekly` by default)
+against the configured doubles spreadsheet.
 
 ## Re-provisioning guard
 
