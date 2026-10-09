@@ -115,7 +115,7 @@ test('ensureLeagueSheetForFormat adds both metadata columns to an existing 15-co
   assert.equal(leagueScoringValue(league), h.bound.SCORING_POINTS);
 });
 
-test('ensureLeagueSheetForFormat extends an existing bare singles sheet to the 17-column schema', () => {
+test('ensureLeagueSheetForFormat extends an existing bare singles sheet to the settings schema', () => {
   const h = loadCode();
   const spreadsheet = h.makeSpreadsheet('existing-singles');
   const league = spreadsheet.insertSheet('League');
@@ -229,7 +229,7 @@ test('saving doubles league settings preserves league_format', () => {
   assert.equal(loaded.settings.scoring, h.bound.SCORING_POINTS);
 });
 
-test('singles legacy 12-column League migration extends to the 17-column schema', () => {
+test('singles legacy 12-column League migration extends to the settings schema', () => {
   const OLD_LEAGUE_HEADERS = [
     'league_name', 'description', 'location', 'schedule', 'contact_information',
     'entry_fee', 'ace_pot_contribution', 'ace_pot_total',
@@ -252,8 +252,8 @@ test('singles legacy 12-column League migration extends to the 17-column schema'
 
   assert.equal(result.status, 'ok');
   assert.equal(result.migrated, true);
-  // Decided 2026-10-08: singles extends to the 17-column schema, so it now
-  // records its format and scoring like doubles.
+  // Decided 2026-10-08: singles extends to the same settings schema, so it
+  // now records its format and scoring like doubles.
   assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
   assert.equal(leagueFormatValue(league), h.bound.LEAGUE_FORMAT_SINGLES);
   assert.equal(leagueScoringValue(league), h.bound.SCORING_TAGS);

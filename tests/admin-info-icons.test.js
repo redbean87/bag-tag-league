@@ -35,25 +35,22 @@ function infoPanels() {
   return panels;
 }
 
-// The descriptive strings that used to sit inline on the cards. Each must
-// survive verbatim, and only behind an info icon.
+// The descriptive strings that stay constant regardless of the selected
+// league. Each must survive verbatim, and only behind an info icon. Help text
+// that varies by league (points table, roster template size, provisioning
+// wording) is rendered from the league record by renderLeagueCopy and is
+// covered by tests/league-copy-data-driven.test.js.
 const DESCRIPTIVE_STRINGS = [
   'Choose which league you are managing.',
   'the first league remains the default.',
   'Configure league settings',
   'Format and scoring are set when a league is provisioned',
-  'Doubles season totals',
-  'Doubles members with their <strong>Season Total</strong>',
   'Select a date to work with. Dates with existing sheets will unlock the workflow.',
-  'Create a new tab in the spreadsheet for the Active League Date.',
-  '<code>Week YYYY-MM-DD</code> with the standard 48-column roster template.',
   'Display a QR code that players can scan to open the sign-in page on their phone.',
   'Review participating players and calculate ace pot and CTP totals.',
   'Upload a UDisc <code>Event results</code> xlsx export',
   'Calculate tag assignments for all players in a weekly league.',
   'Propagate <code>out_tag</code> values from the weekly sheet',
-  'Doubles weekly points: 1st=2, 2nd=1.5, 3rd=1',
-  'Create the League (with <code>league_format=doubles</code>)',
   'Clear test data from the doubles test spreadsheet.'
 ];
 
@@ -103,7 +100,11 @@ test('the summary hints were folded into the info panels', () => {
   assert.doesNotMatch(html, /class="summary-hint"/);
   const panelText = infoPanels().map((panel) => panel.body).join('\n');
   assert.ok(panelText.includes('Configure league settings'));
-  assert.ok(panelText.includes('Doubles season totals'));
+
+  // League-varying copy is no longer a static literal: it is rendered from
+  // the selected league by renderLeagueCopy.
+  assert.doesNotMatch(html, /Doubles season totals/);
+  assert.match(html, /function renderLeagueCopy\(league, rules, settings\)/);
 });
 
 test('toggling opens one panel, marks it expanded, and Escape closes it', () => {

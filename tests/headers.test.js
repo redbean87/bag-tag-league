@@ -128,17 +128,19 @@ test('the singles League base columns stay 15 and carry no metadata', () => {
   assert.ok(!h.bound.LEAGUE_SHEET_HEADERS.includes('scoring'));
 });
 
-test('both League schemas extend the base with league_format and scoring', () => {
+test('both League schemas extend the base with metadata and points settings', () => {
   const h = loadCode();
   const extended = h.bound.LEAGUE_SHEET_HEADERS_DOUBLES;
   const base = h.bound.LEAGUE_SHEET_HEADERS;
 
-  // Decided 2026-10-08: singles sheets extend to 17 columns, so both formats
-  // carry the same two metadata columns. 15 base + 2 metadata = 17.
-  assert.equal(extended.length, base.length + 2);
+  // Base settings plus the format/scoring metadata and the per-league points
+  // table (points_by_place + points_participation).
+  assert.equal(extended.length, base.length + 2 + 2);
   assert.deepEqual(extended.slice(0, base.length), base);
-  assert.deepEqual(extended.slice(base.length), ['league_format', 'scoring']);
-  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 17);
+  assert.deepEqual(extended.slice(base.length), [
+    'league_format', 'scoring', 'points_by_place', 'points_participation'
+  ]);
+  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 19);
 });
 
 test('format-specific header accessors gate singles versus doubles', () => {

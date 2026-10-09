@@ -391,6 +391,24 @@
             <label for="ctp_contribution">CTP Contribution</label>
             <input type="number" id="ctp_contribution" step="0.01" min="0" placeholder="">
           </div>
+
+          <div id="pointsSettingsFields" style="display:none;">
+            <h3 style="font-size:1rem; margin-bottom:0.75rem; margin-top:1rem; color:#555;">Points</h3>
+            <p class="help-text">
+              The per-league points table. Blank uses the default
+              <code>1:2,2:1.5,3:1</code> with a <code>0.5</code> participation
+              credit. A league that pays differently overrides it here.
+            </p>
+            <div class="field-group">
+              <label for="points_by_place">Points by Place</label>
+              <input type="text" id="points_by_place" placeholder="1:2,2:1.5,3:1">
+            </div>
+            <div class="field-group">
+              <label for="points_participation">Participation Points</label>
+              <input type="number" id="points_participation" step="0.01" min="0" placeholder="0.5">
+            </div>
+          </div>
+
           <button type="submit" id="btnSaveLeague">Save Settings</button>
         </form>
         <div id="leagueSaveResult" class="status hidden"></div>
@@ -405,14 +423,7 @@
         <h2>Members</h2>
       </div>
       <button type="button" class="info-toggle" aria-expanded="false" aria-controls="membersCardInfo" aria-label="About Members" onclick="toggleCardInfo(event, 'membersCardInfo')">i</button>
-      <div class="card-info" id="membersCardInfo" role="note" hidden onclick="event.preventDefault(); event.stopPropagation()">
-        <p class="help-text">Doubles season totals</p>
-        <p class="help-text">
-          Doubles members with their <strong>Season Total</strong>: the sum of
-          each member's points for every week played. A member with no points yet
-          shows 0.
-        </p>
-      </div>
+      <div class="card-info" id="membersCardInfo" role="note" hidden onclick="event.preventDefault(); event.stopPropagation()"></div>
     </summary>
     <div class="card-body">
       <button type="button" id="btnLoadMembers" onclick="loadMembers()">Refresh Members</button>
@@ -443,12 +454,7 @@
       <h2>Create League Day</h2>
       <button type="button" class="info-toggle" aria-expanded="false" aria-controls="createLeagueDayInfo" aria-label="About Create League Day" onclick="toggleCardInfo(event, 'createLeagueDayInfo')">i</button>
     </div>
-    <div class="card-info" id="createLeagueDayInfo" role="note" hidden>
-      <p class="help-text">
-        Create a new tab in the spreadsheet for the Active League Date. The tab will be named
-        <code>Week YYYY-MM-DD</code> with the standard 48-column roster template.
-      </p>
-    </div>
+    <div class="card-info" id="createLeagueDayInfo" role="note" hidden></div>
     <div id="createLeagueDaySheetExists" style="display:none;"></div>
     <form id="createForm" onsubmit="createWeeklyTab(event)" style="display:none;">
       <button type="submit" id="btnCreate">Create League Day</button>
@@ -617,17 +623,7 @@
         <h2>Points Results</h2>
         <button type="button" class="info-toggle" aria-expanded="false" aria-controls="pointsCalcInfo" aria-label="About Points Results" onclick="toggleCardInfo(event, 'pointsCalcInfo')">i</button>
       </div>
-      <div class="card-info" id="pointsCalcInfo" role="note" hidden>
-        <p class="help-text">
-          Doubles weekly points: 1st=2, 2nd=1.5, 3rd=1, every other
-          participant=0.5. Both partners receive the same value and a solo
-          receives the full value. Points are computed from the committed
-          placement when the UDisc import is committed, and this panel is a
-          read-only view of those committed results. Season totals are summed
-          live from them, so there is nothing to confirm or finalize. Tag data
-          is never touched.
-        </p>
-      </div>
+      <div class="card-info" id="pointsCalcInfo" role="note" hidden></div>
       <button type="button" id="btnLoadPoints" onclick="loadPoints()">Load Results</button>
       <div id="pointsPreview" style="display:none;"></div>
       <div id="pointsResult" class="status hidden"></div>
@@ -640,18 +636,11 @@
        provisioning, so no separate club-members card is rendered. -->
   <div class="card" id="doublesProvisionCard" style="display:none;">
     <div class="card-header">
-      <h2>Doubles Provisioning</h2>
+      <h2 id="provisionCardTitle">League Provisioning</h2>
       <button type="button" class="info-toggle" aria-expanded="false" aria-controls="doublesProvisionInfo" aria-label="About Doubles Provisioning" onclick="toggleCardInfo(event, 'doublesProvisionInfo')">i</button>
     </div>
-    <div class="card-info" id="doublesProvisionInfo" role="note" hidden>
-      <p class="help-text">
-        Create the League (with <code>league_format=doubles</code>), ClubMembers,
-        and Week template tabs in the Doubles spreadsheet, and seed its roster
-        from the Singles league. Safe to run repeatedly; the Singles
-        spreadsheet is never written.
-      </p>
-    </div>
-    <button type="button" id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet()">Provision Doubles Spreadsheet</button>
+    <div class="card-info" id="doublesProvisionInfo" role="note" hidden></div>
+    <button type="button" id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet()">Provision Spreadsheet</button>
     <div id="doublesProvisionResult" class="status hidden"></div>
   </div>
 
@@ -744,6 +733,160 @@
     function getSpreadsheetId() {
       var league = getSelectedLeague();
       return league ? league.spreadsheetId : '';
+    }
+
+    // ─── League-varying copy ──────────────────────────────────────────────
+    // The card help text is derived from the selected league's capability
+    // rules and loaded settings, so a differing league needs no code edit.
+    // `cachedLeagueSettings` is the last getLeagueSettings payload (its
+    // points table, weekly column count, and league name feed the copy).
+    var cachedLeagueSettings = null;
+
+    // The format word for copy that names what a league settles with. Derived
+    // from the capability, never from a second hardcoded singles/doubles flag.
+    function formatLabel(rules) {
+      return rules && rules.hasPairs ? 'Doubles' : 'Singles';
+    }
+
+    function ordinalLabel(place) {
+      if (place === 1) return '1st';
+      if (place === 2) return '2nd';
+      if (place === 3) return '3rd';
+      return place + 'th';
+    }
+
+    // Parses the compact "place:value,..." setting. Returns null when blank or
+    // malformed so the caller can fall back to the default table.
+    function parsePointsSetting(raw) {
+      if (raw === '' || raw === null || raw === undefined) return null;
+      var text = String(raw).trim();
+      if (text === '') return null;
+      var map = {};
+      var entries = text.split(',');
+      for (var i = 0; i < entries.length; i++) {
+        var parts = entries[i].trim().split(':');
+        if (parts.length !== 2) return null;
+        var place = parseInt(parts[0], 10);
+        var value = Number(parts[1]);
+        if (isNaN(place) || place < 1 || String(place) !== parts[0].trim() || isNaN(value) || value < 0) return null;
+        map[place] = value;
+      }
+      return map;
+    }
+
+    // Renders a points table as readable copy; the defaults produce exactly
+    // "1st=2, 2nd=1.5, 3rd=1, every other participant=0.5".
+    function formatPointsCopy(byPlace, participation) {
+      var places = Object.keys(byPlace).map(function(key) {
+        return parseInt(key, 10);
+      }).sort(function(a, b) { return a - b; });
+      if (places.length === 0) return 'every participant=' + participation;
+      var parts = places.map(function(place) {
+        return ordinalLabel(place) + '=' + byPlace[place];
+      });
+      return parts.join(', ') + ', every other participant=' + participation;
+    }
+
+    function pointsCopyFromSettings(settings) {
+      var DEFAULT_BY_PLACE = { 1: 2, 2: 1.5, 3: 1 };
+      var DEFAULT_PARTICIPATION = 0.5;
+      var byPlace = parsePointsSetting(settings && settings.points_by_place);
+      if (!byPlace || Object.keys(byPlace).length === 0) byPlace = DEFAULT_BY_PLACE;
+      var rawParticipation = settings ? settings.points_participation : '';
+      var participation = (rawParticipation === '' || rawParticipation === null || rawParticipation === undefined)
+        ? DEFAULT_PARTICIPATION
+        : Number(rawParticipation);
+      if (isNaN(participation) || participation < 0) participation = DEFAULT_PARTICIPATION;
+      return formatPointsCopy(byPlace, participation);
+    }
+
+    // The roster seed for a pairs league comes from a tags-scoring league.
+    // Prefer the tags league; fall back to any other registered league.
+    function sourceLeagueFor(league) {
+      if (!window.LeagueFormat) return null;
+      var leagues = window.LeagueFormat.leagues();
+      var i;
+      for (i = 0; i < leagues.length; i++) {
+        if (league && leagues[i].id === league.id) continue;
+        if (leagues[i].scoring === 'tags') return leagues[i];
+      }
+      for (i = 0; i < leagues.length; i++) {
+        if (league && leagues[i].id === league.id) continue;
+        return leagues[i];
+      }
+      return null;
+    }
+
+    // Provisioning copy derived from the selected league's registry record.
+    // The card is pairs-only, so its league name and format come from the
+    // record rather than a hardcoded "Doubles" label.
+    function provisionCopy(league, rules) {
+      league = league || getSelectedLeague();
+      rules = rules || getLeagueRules();
+      var name = league ? league.name : 'this league';
+      var formatName = league ? league.format : (rules.hasPairs ? 'doubles' : 'singles');
+      var source = sourceLeagueFor(league);
+      var sourceName = source ? source.name : 'the Singles league';
+      return {
+        title: name + ' Provisioning',
+        help: 'Create the League (with <code>league_format=' + formatName + '</code>), ClubMembers, ' +
+          'and Week template tabs in the ' + name + ' spreadsheet, and seed its roster from the ' +
+          sourceName + ' roster. Safe to run repeatedly; the ' + sourceName + ' spreadsheet is never written.',
+        idleButton: 'Provision ' + name + ' Spreadsheet',
+        provisionedButton: name + ' Provisioned',
+        pendingStatus: 'Provisioning ' + name + ' spreadsheet...',
+        provisionedStatus: '<strong>' + name + ' provisioned.</strong> Re-provisioning is disabled.',
+        successStatus: '<strong>' + name + ' spreadsheet provisioned.</strong> Roster seeded: ',
+        logProvisioned: name + ' spreadsheet is already provisioned',
+        logNotProvisioned: name + ' spreadsheet is not provisioned',
+        logProvisioning: 'Provisioning ' + name + ' spreadsheet',
+        logSuccess: 'SUCCESS: ' + name + ' provisioned; seeded ',
+        logAlready: name + ' already provisioned; no action taken'
+      };
+    }
+
+    // Renders every league-varying help panel from the selected league's
+    // record, capability rules, and loaded settings. Called on league change
+    // and again when the settings payload arrives.
+    function renderLeagueCopy(league, rules, settings) {
+      var label = formatLabel(rules);
+
+      var members = document.getElementById('membersCardInfo');
+      if (members) {
+        members.innerHTML = '<p class="help-text">' + label + ' season totals</p>' +
+          '<p class="help-text">' + label + ' members with their <strong>Season Total</strong>: the sum of ' +
+          "each member's points for every week played. A member with no points yet shows 0.</p>";
+      }
+
+      var points = document.getElementById('pointsCalcInfo');
+      if (points) {
+        points.innerHTML = '<p class="help-text">' + label + ' weekly points: ' +
+          pointsCopyFromSettings(settings) +
+          '. Both partners receive the same value and a solo receives the full value. Points are ' +
+          'computed from the committed placement when the UDisc import is committed, and this panel is ' +
+          'a read-only view of those committed results. Season totals are summed live from them, so ' +
+          'there is nothing to confirm or finalize. Tag data is never touched.</p>';
+      }
+
+      var createInfo = document.getElementById('createLeagueDayInfo');
+      if (createInfo) {
+        var columns = settings && settings.weekly_columns;
+        var template = columns
+          ? ' with the standard ' + columns + '-column roster template'
+          : '';
+        createInfo.innerHTML = '<p class="help-text">Create a new tab in the spreadsheet for the ' +
+          'Active League Date. The tab will be named <code>Week YYYY-MM-DD</code>' + template + '.</p>';
+      }
+
+      var copy = provisionCopy(league, rules);
+      var provisionTitle = document.getElementById('provisionCardTitle');
+      if (provisionTitle) provisionTitle.textContent = copy.title;
+      var provisionInfo = document.getElementById('doublesProvisionInfo');
+      if (provisionInfo) provisionInfo.innerHTML = '<p class="help-text">' + copy.help + '</p>';
+      var provisionBtn = document.getElementById('btnProvisionDoubles');
+      if (provisionBtn && provisionBtn.dataset.provisioned !== 'true') {
+        provisionBtn.textContent = copy.idleButton;
+      }
     }
 
     // ─── Card info icons ──────────────────────────────────────────────────
@@ -907,6 +1050,11 @@
 
       renderLeagueBadges(league, rules);
       setLeagueMismatch('');
+      // Every league-varying help panel and the points settings fields are
+      // re-rendered from this league's record and rules.
+      renderLeagueCopy(league, rules, cachedLeagueSettings);
+      var pointsFields = document.getElementById('pointsSettingsFields');
+      if (pointsFields) pointsFields.style.display = rules.usesPoints ? '' : 'none';
 
       // Tag tooling follows the scoring method; it is hidden for any league
       // that does not settle with tags.
@@ -1041,21 +1189,22 @@
     function applyDoublesProvisioningState(state) {
       var btn = document.getElementById('btnProvisionDoubles');
       if (!btn || !state) return;
+      var copy = provisionCopy();
       var provisioned = !!state.provisioned;
       btn.dataset.provisioned = provisioned ? 'true' : 'false';
       btn.disabled = provisioned;
       if (provisioned) {
-        btn.textContent = 'Doubles Provisioned';
-        setDoublesProvisionStatus('ok', '<strong>Doubles provisioned.</strong> Re-provisioning is disabled.');
+        btn.textContent = copy.provisionedButton;
+        setDoublesProvisionStatus('ok', copy.provisionedStatus);
       } else if (state.league_format_matches === false || state.scoring_matches === false) {
         // The sheet exists but does not record the registry's format and
         // scoring. Provisioning is what backfills the metadata columns.
-        btn.textContent = 'Provision Doubles Spreadsheet';
+        btn.textContent = copy.idleButton;
         setDoublesProvisionStatus('error',
           '<strong>Configuration mismatch.</strong> The League sheet does not record ' +
           'this league\'s format and scoring. Provision to backfill the metadata columns.');
       } else {
-        btn.textContent = 'Provision Doubles Spreadsheet';
+        btn.textContent = copy.idleButton;
         setDoublesProvisionStatus('hidden', '');
       }
     }
@@ -1067,7 +1216,7 @@
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getDoublesProvisioningState', spreadsheetId: getSpreadsheetId() })
+          body: JSON.stringify({ action: 'getProvisioningState', spreadsheetId: getSpreadsheetId() })
         });
         var data = await response.json();
 
@@ -1077,9 +1226,10 @@
           return;
         }
         applyDoublesProvisioningState(data.state);
+        var copy = provisionCopy();
         log(data.state && data.state.provisioned
-          ? 'Doubles spreadsheet is already provisioned'
-          : 'Doubles spreadsheet is not provisioned');
+          ? copy.logProvisioned
+          : copy.logNotProvisioned);
       } catch (err) {
         setDoublesProvisionStatus('error', '<strong>Request failed:</strong> ' + err.message);
         log('FAILED to load doubles provisioning state: ' + err.message);
@@ -1088,12 +1238,13 @@
 
     async function provisionDoublesSpreadsheet() {
       var btn = document.getElementById('btnProvisionDoubles');
+      var copy = provisionCopy();
       if (btn) {
         btn.disabled = true;
         btn.textContent = 'Provisioning...';
       }
-      setDoublesProvisionStatus('pending', 'Provisioning doubles spreadsheet...');
-      log('Provisioning doubles spreadsheet');
+      setDoublesProvisionStatus('pending', copy.pendingStatus);
+      log(copy.logProvisioning);
 
       var provisioned = false;
 
@@ -1101,7 +1252,7 @@
         var response = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'provisionDoubles', spreadsheetId: getSpreadsheetId() })
+          body: JSON.stringify({ action: 'provisionLeague', spreadsheetId: getSpreadsheetId() })
         });
         var data = await response.json();
 
@@ -1110,15 +1261,14 @@
           applyDoublesProvisioningState({ provisioned: true });
           var seed = data.roster_seed || {};
           setDoublesProvisionStatus('ok',
-            '<strong>Doubles spreadsheet provisioned.</strong> Roster seeded: ' +
-            (seed.seeded || 0) + ' member(s).');
-          log('SUCCESS: Doubles provisioned; seeded ' + (seed.seeded || 0) + ' member(s)');
+            copy.successStatus + (seed.seeded || 0) + ' member(s).');
+          log(copy.logSuccess + (seed.seeded || 0) + ' member(s)');
           await loadLeagueSettings();
         } else if (data.status === 'already_provisioned') {
           // Another admin provisioned it between the state read and the click.
           provisioned = true;
           applyDoublesProvisioningState(data.state || { provisioned: true });
-          log('Doubles already provisioned; no action taken');
+          log(copy.logAlready);
         } else {
           setDoublesProvisionStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
@@ -1129,7 +1279,7 @@
       } finally {
         if (btn && !provisioned) {
           btn.disabled = false;
-          btn.textContent = 'Provision Doubles Spreadsheet';
+          btn.textContent = copy.idleButton;
         }
       }
     }
@@ -1459,6 +1609,10 @@
         setLeagueMismatch('');
 
         if (data.state === 'missing') {
+          // Keep the capability-derived column count available so the create
+          // card copy stays accurate even before a settings row exists.
+          cachedLeagueSettings = { weekly_columns: data.weekly_columns };
+          renderLeagueCopy(getSelectedLeague(), getLeagueRules(), cachedLeagueSettings);
           document.getElementById('leagueMissing').style.display = '';
           document.getElementById('leagueForm').style.display = 'none';
           log('League sheet not found — create prompt shown');
@@ -1470,6 +1624,8 @@
 
         if (data.state === 'ok' && data.settings) {
           var s = data.settings;
+          s.weekly_columns = data.weekly_columns;
+          cachedLeagueSettings = s;
           document.getElementById('league_name').value = s.league_name || '';
           document.getElementById('description').value = s.description || '';
           document.getElementById('location').value = s.location || '';
@@ -1479,10 +1635,15 @@
           document.getElementById('ace_pot_contribution').value = s.ace_pot_contribution !== undefined && s.ace_pot_contribution !== '' ? s.ace_pot_contribution : '';
           document.getElementById('ace_pot_current_total').value = s.ace_pot_current_total !== undefined && s.ace_pot_current_total !== '' ? s.ace_pot_current_total : '';
           document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
+          document.getElementById('points_by_place').value = s.points_by_place !== undefined && s.points_by_place !== '' ? s.points_by_place : '';
+          document.getElementById('points_participation').value = s.points_participation !== undefined && s.points_participation !== '' ? s.points_participation : '';
           applyLeagueSettingsMismatch(s);
+          renderLeagueCopy(getSelectedLeague(), getLeagueRules(), s);
           log('League settings loaded');
         } else {
+          cachedLeagueSettings = { weekly_columns: data.weekly_columns };
           setLeagueMismatch('');
+          renderLeagueCopy(getSelectedLeague(), getLeagueRules(), cachedLeagueSettings);
           log('League sheet exists but has no settings row');
         }
       } catch (err) {
@@ -1546,7 +1707,9 @@
         entry_fee: document.getElementById('entry_fee').value,
         ace_pot_contribution: document.getElementById('ace_pot_contribution').value,
         ace_pot_current_total: document.getElementById('ace_pot_current_total').value,
-        ctp_contribution: document.getElementById('ctp_contribution').value
+        ctp_contribution: document.getElementById('ctp_contribution').value,
+        points_by_place: document.getElementById('points_by_place').value.trim(),
+        points_participation: document.getElementById('points_participation').value
       };
 
       log('Saving league settings');
