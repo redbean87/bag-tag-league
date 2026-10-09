@@ -358,3 +358,67 @@ test('doPost routes the seedRoster action', () => {
   assert.equal(result.inserted, 1);
   assert.equal(result.applied, false);
 });
+
+// ─── A partial payload never blanks stored identity ──────────────────────────
+
+test('a reseed payload that omits or blanks PDGA preserves the stored PDGA', () => {
+  const h = loadCode();
+
+  // Omitted entirely, then explicitly blank: both must keep the stored value.
+  [undefined, ''].forEach((pdga) => {
+    const { doubles, club } = buildProvisionedDoubles(h);
+    club.appendRow([1, 'Damon Forsythe', 'damon31', '151236', true, 't', 't', 0]);
+
+    const report = h.parse(h.fn('handleSeedRoster')({
+      league: h.bound.LEAGUE_ID_DOUBLES,
+      members: [member(1, { name: 'Damon Forsythe', udisc_username: 'damon31', pdga_number: pdga })],
+      apply: true
+    }));
+
+    assert.equal(report.status, 'ok', 'pdga ' + JSON.stringify(pdga));
+    assert.equal(report.updated, 0, 'a blank PDGA must not count as a change');
+    assert.equal(report.unchanged, 1);
+    assert.equal(valueFor(h, club, 1, 'pdga_number'), '151236', 'stored PDGA must survive');
+  });
+});
+
+test('a reseed that changes name but omits PDGA updates only the name', () => {
+  const h = loadCode();
+  const { doubles, club } = buildProvisionedDoubles(h);
+  club.appendRow([1, 'Old Name', 'damon31', '151236', true, 't', 't', 0]);
+
+  const report = h.parse(h.fn('handleSeedRoster')({
+    league: h.bound.LEAGUE_ID_DOUBLES,
+    members: [member(1, { name: 'Damon Forsythe', udisc_username: 'damon31', pdga_number: '' })],
+    apply: true
+  }));
+
+  assert.equal(report.status, 'ok');
+  assert.equal(report.updated, 1);
+  assert.deepEqual(report.results[0].changed_fields, ['name']);
+  assert.equal(valueFor(h, club, 1, 'name'), 'Damon Forsythe');
+  assert.equal(valueFor(h, club, 1, 'pdga_number'), '151236', 'stored PDGA must survive');
+});
+
+test('a new member seeded with blank identity fields lands blank without erroring', () => {
+  const h = loadCode();
+  const { doubles, club } = buildProvisionedDoubles(h);
+
+  const report = h.parse(h.fn('handleSeedRoster')({
+    league: h.bound.LEAGUE_ID_DOUBLES,
+    members: [{
+      member_number: 9,
+      name: 'Blank Slate',
+      udisc_username: '',
+      pdga_number: '',
+      is_active: true
+    }],
+    apply: true
+  }));
+
+  assert.equal(report.status, 'ok');
+  assert.equal(report.inserted, 1);
+  assert.equal(valueFor(h, club, 1, 'name'), 'Blank Slate');
+  assert.equal(valueFor(h, club, 1, 'udisc_username'), '');
+  assert.equal(valueFor(h, club, 1, 'pdga_number'), '');
+});

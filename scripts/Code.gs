@@ -1442,9 +1442,12 @@ function normalizeRosterSeedMembers(members) {
 /**
  * Maps one explicit member payload object onto the target ClubMembers header
  * order. Values are copied by header name: an unknown payload key is ignored
- * and a target header absent from the payload lands blank, so the payload is
- * the whole row definition. `current_tag` is always blank; `season_points` is
- * blank for a new row (an update preserves the existing cache).
+ * and a target header absent from the payload lands blank, so a new row's
+ * payload is its whole definition. `current_tag` is always blank;
+ * `season_points` is blank for a new row (an update preserves the existing
+ * cache). On an update, an omitted or empty identity field preserves the
+ * stored value instead of blanking it, so a partial re-seed can never wipe
+ * roster detail; only a non-empty payload value replaces it.
  */
 function mapRosterSeedRow(member, targetHeaders) {
   var row = new Array(targetHeaders.length).fill('');
@@ -1460,13 +1463,29 @@ function mapRosterSeedRow(member, targetHeaders) {
 }
 
 /**
+ * The value a roster-seed update writes for one ClubMembers header. A payload
+ * field that is omitted or empty preserves the stored value, so a partial
+ * re-seed can never blank the roster; only a non-empty payload value replaces
+ * it. `current_tag` and `season_points` are handled by the caller and never
+ * reach this helper.
+ */
+function rosterSeedUpdateValue(mappedValue, existingValue) {
+  if (mappedValue === '' || mappedValue === null || mappedValue === undefined) {
+    return existingValue;
+  }
+  return mappedValue;
+}
+
+/**
  * Pure planner for the seed-only roster reload. Compares the explicit member
  * payload against the current ClubMembers rows by `member_number` and
  * classifies each member as an insert (new number), an update (existing number
- * with a changed identity field), or unchanged. Identity fields are compared
- * by header name; `current_tag` is compared as blank and `season_points` is
- * excluded, so re-seeding an unchanged payload writes nothing and never
- * disturbs the points cache.
+ * with a changed identity field), or unchanged. For an existing row an omitted
+ * or empty identity field preserves the stored value rather than blanking it,
+ * so a partial re-seed can never wipe roster detail and only a non-empty
+ * payload value replaces it; `current_tag` is compared as blank and
+ * `season_points` is excluded, so re-seeding an unchanged payload writes
+ * nothing and never disturbs the points cache.
  *
  * Writes nothing. Returns { ok: true, headers, inserts, updates, unchanged,
  * results } or { ok: false, error }.
@@ -1513,10 +1532,21 @@ function planRosterSeed(doublesSpreadsheet, members) {
       continue;
     }
 
+    // A partial payload must never blank stored roster detail: an identity
+    // field the payload omits or leaves empty keeps its stored value and only
+    // a non-empty payload value replaces it. `current_tag` is the one field
+    // that always lands blank and the derived `season_points` cache is never
+    // written (both are handled above). changed_fields is computed from the
+    // value actually written, so an all-blank payload stays a true no-op.
+    var updatedRow = existing.values.slice();
     var changedFields = [];
     for (var c = 0; c < headers.length; c++) {
       if (ROSTER_SEED_PRESERVE_HEADERS.indexOf(headers[c]) !== -1) continue;
-      if (existing.values[c] !== mapped[c]) changedFields.push(headers[c]);
+      var writeValue = ROSTER_SEED_BLANK_HEADERS.indexOf(headers[c]) !== -1
+        ? ''
+        : rosterSeedUpdateValue(mapped[c], existing.values[c]);
+      if (existing.values[c] !== writeValue) changedFields.push(headers[c]);
+      updatedRow[c] = writeValue;
     }
 
     if (changedFields.length === 0) {
@@ -1525,13 +1555,6 @@ function planRosterSeed(doublesSpreadsheet, members) {
       continue;
     }
 
-    // Overwrite every identity field but keep derived columns (season_points)
-    // from the existing row, so an update can never blank the points cache.
-    var updatedRow = existing.values.slice();
-    for (var c2 = 0; c2 < headers.length; c2++) {
-      if (ROSTER_SEED_PRESERVE_HEADERS.indexOf(headers[c2]) !== -1) continue;
-      updatedRow[c2] = mapped[c2];
-    }
     updates.push({ member_number: number, row_index: existing.row_index, row: updatedRow });
     results.push({ member_number: number, action: 'update', changed_fields: changedFields });
   }
@@ -3270,11 +3293,14 @@ function handleSubmitCheckIn(data) {
       return respond('error', 'Selected member not found or is inactive. Please try again.');
     }
 
-    // Update editable profile fields on the existing member record
+    // Update editable profile fields on the existing member record. A stored
+    // identity field is only replaced by a non-empty submitted value: a blank
+    // name, UDisc username, or PDGA number leaves the stored value intact, so a
+    // returning player's check-in can never wipe roster detail.
     const now = new Date().toISOString();
-    if (playerNameCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerNameCol + 1).setValue(trimmedName);
-    if (playerUdiscCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerUdiscCol + 1).setValue(trimmedUdisc);
-    if (playerPdgaCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerPdgaCol + 1).setValue(trimmedPdga);
+    if (playerNameCol !== -1 && trimmedName !== '') playersSheet.getRange(memberRowIndex + 1, playerNameCol + 1).setValue(trimmedName);
+    if (playerUdiscCol !== -1 && trimmedUdisc !== '') playersSheet.getRange(memberRowIndex + 1, playerUdiscCol + 1).setValue(trimmedUdisc);
+    if (playerPdgaCol !== -1 && trimmedPdga !== '') playersSheet.getRange(memberRowIndex + 1, playerPdgaCol + 1).setValue(trimmedPdga);
     // The roster tag is never written at check-in; it updates only at
     // end-of-night finalization.
     // Always update updated_at
