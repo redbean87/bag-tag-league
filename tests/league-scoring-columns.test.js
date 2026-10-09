@@ -243,15 +243,46 @@ test('the League header builder carries both metadata columns for any pair', () 
     [h.bound.LEAGUE_FORMAT_SINGLES, h.bound.SCORING_POINTS]
   ]) {
     const headers = leagueHeaders(pair[0], pair[1]);
-    assert.equal(headers.length, 22);
+    assert.equal(headers.length, 24);
     assert.ok(headers.includes('league_format'));
     assert.ok(headers.includes('scoring'));
     assert.ok(headers.includes('points_by_place'));
     assert.ok(headers.includes('points_participation'));
-    assert.ok(headers.includes('payout_by_place'));
+    assert.ok(headers.includes('payout_contribution'));
+    assert.ok(headers.includes('payout_second_amount'));
+    assert.ok(headers.includes('payout_second_min_players'));
     assert.ok(headers.includes('entry_fee_explanation'));
     assert.ok(headers.includes('entry_fee_breakdown'));
   }
+});
+
+test('inspectSpreadsheetTopology accepts a pre-payout-pool doubles League', () => {
+  const h = loadCode();
+  const spreadsheet = h.makeSpreadsheet('legacy-payout');
+  const legacyHeaders = h.bound.LEAGUE_SHEET_HEADERS
+    .concat(h.bound.LEAGUE_SHEET_METADATA_HEADERS)
+    .concat(h.bound.LEAGUE_POINTS_HEADERS)
+    .concat(h.bound.LEGACY_PAYOUT_HEADERS)
+    .concat(h.bound.LEAGUE_EXPLANATION_HEADERS)
+    .concat(h.bound.LEAGUE_BREAKDOWN_HEADERS);
+  const league = addLeague(h, spreadsheet, legacyHeaders);
+  const row = new Array(legacyHeaders.length).fill('');
+  row[legacyHeaders.indexOf('league_format')] = h.bound.LEAGUE_FORMAT_DOUBLES;
+  row[legacyHeaders.indexOf('scoring')] = h.bound.SCORING_POINTS;
+  row[legacyHeaders.indexOf('payout_by_place')] = '1:2,2:5';
+  league.appendRow(row);
+
+  const report = h.fn('inspectSpreadsheetTopology')(
+    spreadsheet,
+    h.bound.LEAGUE_FORMAT_DOUBLES,
+    h.bound.SCORING_POINTS
+  );
+
+  // The retired flat payout column is still a known layout, brought current by
+  // the next settings save.
+  assert.equal(report.league.headers_match, true);
+  assert.equal(report.league.league_format_matches, true);
+  assert.equal(report.league.scoring_matches, true);
 });
 
 test('inspectSpreadsheetTopology accepts a pre-migration bare singles League', () => {

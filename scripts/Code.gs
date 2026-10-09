@@ -340,12 +340,23 @@ const LEAGUE_SHEET_METADATA_HEADERS = ['league_format', 'scoring'];
 // DEFAULT_POINTS_PARTICIPATION, so an un-migrated sheet keeps today's output.
 const LEAGUE_POINTS_HEADERS = ['points_by_place', 'points_participation'];
 
-// Per-league weekly payout amounts appended after the points settings. Like
-// the points table this is a compact "place:value,..." list; each value is the
-// per-player dollar amount for that placement, so a second-place value can
-// carry an entry-fee refund. Blank means the league pays no weekly money and
-// the app shows no payout figures, keeping today's output byte-identical.
-const LEAGUE_PAYOUT_HEADERS = ['payout_by_place'];
+// Per-league weekly payout pool appended after the points settings. The pool is
+// built from a per-player contribution (payout_contribution); a fixed
+// second-place share (payout_second_amount) comes out of it only when at least
+// payout_second_min_players players show, and the winning team takes the
+// remainder (or the whole pool below the threshold). A blank or non-positive
+// contribution means the league pays no weekly money and the app shows no
+// payout figures, keeping today's output byte-identical.
+const LEAGUE_PAYOUT_HEADERS = [
+  'payout_contribution',
+  'payout_second_amount',
+  'payout_second_min_players'
+];
+
+// The single flat weekly-payout column this schema retires. A sheet that still
+// carries it is migrated in place to LEAGUE_PAYOUT_HEADERS, so the app never
+// runs two payout mechanisms at once.
+const LEGACY_PAYOUT_HEADERS = ['payout_by_place'];
 
 // League-level explanation of what the entry fee pays for, shown beside the
 // check-in payment options. A blank value falls back to
@@ -362,13 +373,14 @@ const LEAGUE_EXPLANATION_HEADERS = ['entry_fee_explanation'];
 const LEAGUE_BREAKDOWN_HEADERS = ['entry_fee_breakdown'];
 
 // Shown whenever a league has not written its own explanation. It describes
-// the money this app's league actually collects: the weekly winning team gets
-// paid, the second-place team gets its entry fee back, and the season is paid
-// out from points.
-const DEFAULT_ENTRY_FEE_EXPLANATION = 'Your entry fee pays the weekly winning team, the second-place team their money back, and the season payout from points.';
+// the money this app's league actually collects: the entry fee builds the
+// weekly payout pool and pays the season payout, second place takes its share
+// back when enough players show, and below that the winning team takes the
+// whole pool.
+const DEFAULT_ENTRY_FEE_EXPLANATION = 'Your entry fee builds the weekly payout pool and pays the season payout. Second place takes its share back when enough players show; otherwise the winning team takes the whole pool.';
 
 // The settings columns this writer owns: the points table, the weekly payout
-// table, the money explanation, and the itemised entry-fee breakdown. Kept
+// pool, the money explanation, and the itemised entry-fee breakdown. Kept
 // together so the save path appends all of them to a pre-settings sheet in one
 // place.
 const LEAGUE_SETTINGS_HEADERS = LEAGUE_POINTS_HEADERS
@@ -602,14 +614,131 @@ function resolvePointsRules(leagueSettings) {
 }
 
 /**
- * Resolves the effective weekly payout table from League settings. A blank or
- * absent table yields an empty map so a league that pays no weekly money shows
- * no payout figures and its output stays byte-identical. Returns { byPlace }.
+ * Parses a stored numeric setting. Blank, missing, or malformed values return
+ * null so the caller can apply its own default; a non-negative number is
+ * returned as a Number.
+ */
+function parseNonNegativeSetting(raw) {
+  if (raw === '' || raw === null || raw === undefined) return null;
+  var value = Number(raw);
+  if (isNaN(value) || value < 0) return null;
+  return value;
+}
+
+/**
+ * Resolves the weekly payout pool rule from League settings. A blank or
+ * non-positive per-player contribution means the league pays no weekly money:
+ * the pool is 0, `configured` is false, and read-only output stays
+ * byte-identical. When configured, `secondAmount` is the team-level
+ * second-place share (blank/zero means no second-place share) and
+ * `secondMinPlayers` is the minimum participant count for that share to be
+ * paid (blank means no threshold). Returns
+ * { configured, contribution, secondAmount, secondMinPlayers }.
  */
 function resolvePayoutRules(leagueSettings) {
   var settings = leagueSettings || {};
-  var parsed = parsePointsByPlace(settings.payout_by_place);
-  return { byPlace: parsed.ok ? parsed.byPlace : {} };
+  var contribution = parseNonNegativeSetting(settings.payout_contribution);
+  if (contribution === null || contribution <= 0) {
+    return { configured: false, contribution: 0, secondAmount: 0, secondMinPlayers: 0 };
+  }
+  var secondAmount = parseNonNegativeSetting(settings.payout_second_amount);
+  var secondMinPlayers = parseNonNegativeSetting(settings.payout_second_min_players);
+  return {
+    configured: true,
+    contribution: contribution,
+    secondAmount: secondAmount === null ? 0 : secondAmount,
+    secondMinPlayers: secondMinPlayers === null ? 0 : secondMinPlayers
+  };
+}
+
+/**
+ * Best-effort conversion of a legacy flat payout_by_place table into the weekly
+ * pool fields. The legacy table stored a per-player dollar amount per
+ * placement; the pool model stores a per-player contribution plus a team-level
+ * second-place share. The place-1 amount carries over as the per-player
+ * contribution, the place-2 amount (paid to each member of the second-place
+ * team) doubles to a two-player second-place share, and the legacy model had no
+ * threshold so the minimum is 0. Returns {} for a blank or malformed table.
+ */
+function migratedPayoutFields(legacyRaw) {
+  var parsed = parsePointsByPlace(legacyRaw);
+  var byPlace = parsed.ok ? parsed.byPlace : {};
+  var hasFirst = byPlace[1] !== undefined;
+  var hasSecond = byPlace[2] !== undefined;
+  if (!hasFirst && !hasSecond) return {};
+  return {
+    payout_contribution: hasFirst ? byPlace[1] : '',
+    payout_second_amount: hasSecond ? byPlace[2] * 2 : '',
+    payout_second_min_players: 0
+  };
+}
+
+/**
+ * Returns a copy of a header-keyed settings object with a legacy
+ * payout_by_place value carried into the weekly pool fields, without touching
+ * the sheet. Read paths use it so an un-migrated sheet still resolves the
+ * retired table into the pool rule and the admin form shows migrated values.
+ * The legacy key is removed either way, so no payout logic ever sees it. A
+ * sheet that already carries the pool fields is returned untouched.
+ */
+function settingsWithMigratedPayout(settings) {
+  var source = settings || {};
+  var copy = {};
+  for (var key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) copy[key] = source[key];
+  }
+  var hasLegacy = copy.payout_by_place !== undefined && copy.payout_by_place !== '';
+  var poolBlank = (copy.payout_contribution === undefined || copy.payout_contribution === '') &&
+    (copy.payout_second_amount === undefined || copy.payout_second_amount === '') &&
+    (copy.payout_second_min_players === undefined || copy.payout_second_min_players === '');
+  if (hasLegacy && poolBlank) {
+    var fields = migratedPayoutFields(copy.payout_by_place);
+    for (var field in fields) {
+      if (Object.prototype.hasOwnProperty.call(fields, field)) copy[field] = fields[field];
+    }
+  }
+  delete copy.payout_by_place;
+  return copy;
+}
+
+/**
+ * Retires the legacy flat payout_by_place column in place, replacing it with the
+ * three weekly pool columns and carrying the stored value across with
+ * migratedPayoutFields. Idempotent: a sheet without the legacy column is
+ * untouched. Returns true when a migration happened.
+ */
+function migrateLeaguePayoutSettings(sheet) {
+  if (!sheet) return false;
+  var headers = getSheetHeaders(sheet);
+  var legacyCol = headers.indexOf('payout_by_place');
+  if (legacyCol === -1) return false;
+
+  var allData = sheet.getDataRange().getValues();
+  var row = allData.length >= 2 ? allData[1] : [];
+  var fields = migratedPayoutFields(row[legacyCol]);
+
+  var newHeaders = [];
+  var newRow = [];
+  for (var i = 0; i < headers.length; i++) {
+    if (i === legacyCol) {
+      newHeaders.push('payout_contribution', 'payout_second_amount', 'payout_second_min_players');
+      newRow.push(
+        fields.payout_contribution === undefined ? '' : fields.payout_contribution,
+        fields.payout_second_amount === undefined ? '' : fields.payout_second_amount,
+        fields.payout_second_min_players === undefined ? '' : fields.payout_second_min_players
+      );
+    } else {
+      newHeaders.push(headers[i]);
+      newRow.push(row[i] === undefined ? '' : row[i]);
+    }
+  }
+
+  sheet.getRange(1, 1, 1, newHeaders.length).setValues([newHeaders]);
+  sheet.getRange(1, 1, 1, newHeaders.length).setFontWeight('bold');
+  if (allData.length >= 2) {
+    sheet.getRange(2, 1, 1, newRow.length).setValues([newRow]);
+  }
+  return true;
 }
 
 /**
@@ -737,7 +866,9 @@ function getLeagueRules(selector, leagueSettings) {
 
 /**
  * Reads the League settings row into a header-keyed object. Returns {} when the
- * sheet is missing, empty, or has no settings row, so the defaults apply.
+ * sheet is missing, empty, or has no settings row, so the defaults apply. A
+ * legacy payout_by_place value is carried into the weekly pool fields so the
+ * pool rule resolves even before the sheet is migrated on its next write.
  */
 function readLeagueSettingsRow(sheet) {
   if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < 1) return {};
@@ -750,7 +881,7 @@ function readLeagueSettingsRow(sheet) {
     var value = row[i];
     settings[headers[i]] = (value === null || value === undefined) ? '' : value;
   }
-  return settings;
+  return settingsWithMigratedPayout(settings);
 }
 
 /**
@@ -1012,13 +1143,16 @@ function ensureLeagueMetadataValues(sheet, format, scoring) {
 }
 
 /**
- * Appends any missing League settings columns (format, scoring, and the
- * per-league points table) to the right of the existing header row. Idempotent
- * and non-destructive: existing columns and their data are never moved. Used by
- * provisioning and by the settings save so a pre-settings sheet gains the
- * points columns without a separate migration.
+ * Appends any missing League settings columns (format, scoring, the per-league
+ * points table, and the weekly payout pool) to the right of the existing header
+ * row. First retires any legacy flat payout column in place, so a payout sheet
+ * is never left running two mechanisms. Idempotent and non-destructive:
+ * existing columns and their data are never moved. Used by provisioning and by
+ * the settings save so a pre-settings sheet gains the settings columns without
+ * a separate migration.
  */
 function ensureLeagueSettingsColumns(sheet, headers) {
+  migrateLeaguePayoutSettings(sheet);
   var expected = headers || LEAGUE_SHEET_HEADERS_EXTENDED;
   var lastColumn = Math.max(sheet.getLastColumn(), 1);
   var current = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
@@ -1730,7 +1864,9 @@ function readLeagueScoring(sheet) {
  * metadata and the per-league points settings; the pre-migration layouts (bare
  * 15-column singles, 16-column doubles, and the 17-column metadata-only
  * schema) are also accepted as "known but un-migrated" so the topology check
- * does not fail on a sheet the settings save has not extended yet.
+ * does not fail on a sheet the settings save has not extended yet. The layouts
+ * that still carry the retired flat payout_by_place column are accepted too,
+ * because the payout migration runs on the next settings write.
  */
 function leagueHeadersMatch(headers, format, scoring) {
   var rules = rulesForEnums(format, scoring);
@@ -1740,10 +1876,16 @@ function leagueHeadersMatch(headers, format, scoring) {
       arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(['league_format']))) return true;
   if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS))) return true;
   if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS).concat(LEAGUE_POINTS_HEADERS))) return true;
-  // A sheet provisioned before the money explanation existed carries every
-  // settings column but this one; it is still a known layout, brought current
+  // Pre-payout-pool layouts: the settings row ends at the retired flat table
+  // (optional money explanation and breakdown), still known and brought current
   // by the next provision or settings save.
-  if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS).concat(LEAGUE_POINTS_HEADERS).concat(LEAGUE_PAYOUT_HEADERS))) return true;
+  var legacyPayout = LEAGUE_SHEET_HEADERS
+    .concat(LEAGUE_SHEET_METADATA_HEADERS)
+    .concat(LEAGUE_POINTS_HEADERS)
+    .concat(LEGACY_PAYOUT_HEADERS);
+  if (arraysEqual(headers, legacyPayout)) return true;
+  if (arraysEqual(headers, legacyPayout.concat(LEAGUE_EXPLANATION_HEADERS))) return true;
+  if (arraysEqual(headers, legacyPayout.concat(LEAGUE_EXPLANATION_HEADERS).concat(LEAGUE_BREAKDOWN_HEADERS))) return true;
   return false;
 }
 
@@ -3362,9 +3504,13 @@ function handleGetLeagueSettings(data) {
     settings[key] = (val === null || val === undefined) ? '' : val;
   }
 
+  // An un-migrated sheet still carries the retired flat payout table; hand the
+  // admin form the pool fields it was carried into so a plain save keeps them.
+  const migratedSettings = settingsWithMigratedPayout(settings);
+
   return respond('ok', 'League settings loaded.', {
     state: 'ok',
-    settings: settings,
+    settings: migratedSettings,
     weekly_columns: weeklyColumns
   });
 }
@@ -3425,7 +3571,8 @@ function handleSaveLeagueSettings(data) {
   const numericFields = [
     'entry_fee', 'ace_pot_contribution', 'ace_pot_current_total',
     'ace_pot_calculated_total', 'ace_pot_total',
-    'ctp_contribution', 'ctp_calculated_total', 'ctp_total'
+    'ctp_contribution', 'ctp_calculated_total', 'ctp_total',
+    'payout_contribution', 'payout_second_amount', 'payout_second_min_players'
   ];
   for (const field of numericFields) {
     const raw = settings[field];
@@ -3470,16 +3617,11 @@ function handleSaveLeagueSettings(data) {
     }
   }
 
-  // Validate the weekly payout table. Blank is allowed (the league pays no
-  // weekly money); a populated value must parse cleanly and carry only
-  // non-negative per-player amounts, so a stored payout can never pay a
-  // negative amount or produce NaN at read time.
-  if (settings.payout_by_place !== '' && settings.payout_by_place !== null && settings.payout_by_place !== undefined) {
-    const parsedPayout = parsePointsByPlace(settings.payout_by_place);
-    if (!parsedPayout.ok) {
-      return respond('error', 'Field "payout_by_place" is invalid: ' + parsedPayout.error);
-    }
-  }
+  // Validate the weekly payout pool. Blank is allowed (the league pays no
+  // weekly money); a populated value must carry only non-negative numbers, so a
+  // stored payout can never pay a negative amount or produce NaN at read time.
+  // The pool fields are numericFields above; a legacy payout_by_place value is
+  // retired, not validated, because the settings form no longer offers it.
 
   // Validate the itemised entry-fee breakdown. Blank is allowed (the league
   // itemises nothing); a populated value must parse cleanly so the stored
@@ -6362,19 +6504,93 @@ function doublesPointsForPosition(positionRaw, rules) {
   return points.participation;
 }
 
+/** Rounds a dollar amount to cents so float drift never reaches the UI. */
+function roundCurrency(amount) {
+  return Math.round((Number(amount) || 0) * 100) / 100;
+}
+
 /**
- * Pure payout rule for a points league: the per-player dollar amount for a
- * placement found in the league's payout table, or 0 when the league pays
- * nothing for that place (including a blank/DNF placement). `rules` is the
- * getLeagueRules() object; its `.payout` table is per-league.
+ * Applies the weekly pool rule to the grouped teams and returns the payout
+ * summary. The pool is the per-player contribution times the participant count.
+ * When the league pays no weekly money every figure is zero and the caller
+ * renders nothing. With at least `secondMinPlayers` participants the fixed
+ * second-place share comes out of the pool and the winning team(s) take the
+ * remainder; below the threshold the winners take the whole pool. Each
+ * position's share is split evenly per player across the teams at that
+ * position, and every pair carries its own per-player and per-team figures.
+ * `rules` is the getLeagueRules() object; its `.payout` rule is per-league.
  */
-function payoutForPosition(positionRaw, rules) {
-  var byPlace = (rules && rules.payout && rules.payout.byPlace) ? rules.payout.byPlace : {};
-  var place = parseInt(positionRaw, 10);
-  if (!isNaN(place) && byPlace[place] !== undefined) {
-    return byPlace[place];
+function applyWeeklyPayout(pairs, playerCount, rules) {
+  var payout = (rules && rules.payout) ? rules.payout : {};
+  var configured = !!payout.configured;
+  var contribution = configured ? payout.contribution : 0;
+  var pool = configured ? roundCurrency(contribution * playerCount) : 0;
+
+  for (var i = 0; i < pairs.length; i++) {
+    pairs[i].payout_per_player = 0;
+    pairs[i].payout_total = 0;
   }
-  return 0;
+
+  if (!configured) {
+    return {
+      configured: false,
+      contribution: 0,
+      second_amount: 0,
+      second_min_players: 0,
+      players: playerCount,
+      pool: 0,
+      second_paid: false,
+      second_total: 0,
+      winners_total: 0,
+      total: 0
+    };
+  }
+
+  var secondPaid = payout.secondAmount > 0 && playerCount >= payout.secondMinPlayers;
+  var secondTotal = secondPaid ? roundCurrency(payout.secondAmount) : 0;
+  if (secondTotal > pool) secondTotal = pool;
+  var winnersTotal = roundCurrency(pool - secondTotal);
+
+  var winners = [];
+  var seconds = [];
+  for (var p = 0; p < pairs.length; p++) {
+    var place = parseInt(pairs[p].place_raw, 10);
+    if (place === 1) winners.push(pairs[p]);
+    else if (place === 2) seconds.push(pairs[p]);
+  }
+
+  var winnerPlayers = 0;
+  for (var w = 0; w < winners.length; w++) winnerPlayers += winners[w].members.length;
+  var secondPlayers = 0;
+  for (var s = 0; s < seconds.length; s++) secondPlayers += seconds[s].members.length;
+
+  if (winnerPlayers > 0 && winnersTotal > 0) {
+    var winnerPerPlayer = winnersTotal / winnerPlayers;
+    for (var wi = 0; wi < winners.length; wi++) {
+      winners[wi].payout_per_player = roundCurrency(winnerPerPlayer);
+      winners[wi].payout_total = roundCurrency(winnerPerPlayer * winners[wi].members.length);
+    }
+  }
+  if (secondPlayers > 0 && secondTotal > 0) {
+    var secondPerPlayer = secondTotal / secondPlayers;
+    for (var si = 0; si < seconds.length; si++) {
+      seconds[si].payout_per_player = roundCurrency(secondPerPlayer);
+      seconds[si].payout_total = roundCurrency(secondPerPlayer * seconds[si].members.length);
+    }
+  }
+
+  return {
+    configured: true,
+    contribution: contribution,
+    second_amount: payout.secondAmount,
+    second_min_players: payout.secondMinPlayers,
+    players: playerCount,
+    pool: pool,
+    second_paid: secondPaid,
+    second_total: secondTotal,
+    winners_total: winnersTotal,
+    total: roundCurrency(winnersTotal + secondTotal)
+  };
 }
 
 /**
@@ -6508,7 +6724,7 @@ function pointsSummary(rows) {
  * is its own group. Each group carries the shared place and points so the
  * table reads Pair / Place / Points from one deterministic source.
  */
-function groupDoublesPointsPairs(rows, rules) {
+function groupDoublesPointsPairs(rows) {
   var order = [];
   var map = {};
   for (var i = 0; i < rows.length; i++) {
@@ -6541,9 +6757,8 @@ function groupDoublesPointsPairs(rows, rules) {
       if (points === null) points = member.points;
     }
 
-    // The per-player payout is the same for every member of a placed team; a
+    // Payout figures are assigned by applyWeeklyPayout from the pool rule; a
     // keyless solo row is its own team of one.
-    var perPlayerPayout = payoutForPosition(positionRaw, rules);
     pairs.push({
       pair_key: map[order[g]].pair_key,
       label: names.join(' / '),
@@ -6552,8 +6767,8 @@ function groupDoublesPointsPairs(rows, rules) {
       place_raw: positionRaw,
       has_position: hasPosition,
       points: points === null ? 0 : points,
-      payout_per_player: perPlayerPayout,
-      payout_total: perPlayerPayout * members.length
+      payout_per_player: 0,
+      payout_total: 0
     });
   }
   return pairs;
@@ -6580,10 +6795,8 @@ function handleCalculatePoints(data) {
   var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate, rules);
   if (tab.error) return respond('error', tab.error);
 
-  var pairs = groupDoublesPointsPairs(tab.rows, rules);
-  var payoutByPlace = (rules.payout && rules.payout.byPlace) ? rules.payout.byPlace : {};
-  var payoutTotal = 0;
-  for (var p = 0; p < pairs.length; p++) payoutTotal += pairs[p].payout_total;
+  var pairs = groupDoublesPointsPairs(tab.rows);
+  var payout = applyWeeklyPayout(pairs, tab.rows.length, rules);
 
   return respond('ok', 'Points results loaded. No writes were made.', {
     format: LEAGUE_FORMAT_DOUBLES,
@@ -6594,11 +6807,7 @@ function handleCalculatePoints(data) {
     warnings: tab.warnings,
     players: tab.rows.map(pointsRowResponse),
     pairs: pairs,
-    payout: {
-      by_place: payoutByPlace,
-      configured: Object.keys(payoutByPlace).length > 0,
-      total: payoutTotal
-    },
+    payout: payout,
     summary: pointsSummary(tab.rows)
   });
 }

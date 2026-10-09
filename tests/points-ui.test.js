@@ -51,6 +51,15 @@ test('the results view renders committed points, warnings, and no lifecycle stat
   assert.doesNotMatch(render, /pointsStatusLabel|week_state|stored_status|voided/);
 });
 
+test('the results view renders the weekly pool and a note when second place is unpaid', () => {
+  const render = functionBody('renderPointsResults');
+  assert.match(render, /payout\.pool/);
+  assert.match(render, /payout\.second_paid/);
+  assert.match(render, /Second place is not paid:/);
+  assert.match(render, /payout\.winners_total/);
+  assert.match(render, /payout\.second_min_players/);
+});
+
 test('the points panel resets when the active date or league changes', () => {
   const clear = functionBody('clearStaleSectionData');
   assert.match(clear, /pointsPreview/);

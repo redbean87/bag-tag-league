@@ -96,105 +96,171 @@ function call(h, action, extra) {
   return h.parse(h.fn(action)(payload));
 }
 
-// ─── Payout helpers (pure) ───────────────────────────────────────────────────
+// ─── Payout pool helpers (pure) ──────────────────────────────────────────────
 
-test('resolvePayoutRules parses the compact table and blanks to an empty map', () => {
+test('resolvePayoutRules reads the pool rule and blanks to unconfigured', () => {
   const h = loadCode();
   const resolve = h.fn('resolvePayoutRules');
 
-  assert.deepEqual(resolve({ payout_by_place: '1:2,2:5' }), { byPlace: { 1: 2, 2: 5 } });
-  assert.deepEqual(resolve({ payout_by_place: '' }), { byPlace: {} });
-  assert.deepEqual(resolve({}), { byPlace: {} });
-  assert.deepEqual(resolve(null), { byPlace: {} });
+  assert.deepEqual(
+    resolve({ payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 }),
+    { configured: true, contribution: 3, secondAmount: 10, secondMinPlayers: 10 }
+  );
+  assert.deepEqual(
+    resolve({ payout_contribution: '' }),
+    { configured: false, contribution: 0, secondAmount: 0, secondMinPlayers: 0 }
+  );
+  assert.deepEqual(
+    resolve({ payout_contribution: 0 }),
+    { configured: false, contribution: 0, secondAmount: 0, secondMinPlayers: 0 }
+  );
+  assert.deepEqual(resolve({}), { configured: false, contribution: 0, secondAmount: 0, secondMinPlayers: 0 });
+  assert.deepEqual(resolve(null), { configured: false, contribution: 0, secondAmount: 0, secondMinPlayers: 0 });
+
+  // A contribution without a second-place amount pays the winners everything.
+  assert.deepEqual(
+    resolve({ payout_contribution: 3 }),
+    { configured: true, contribution: 3, secondAmount: 0, secondMinPlayers: 0 }
+  );
 });
 
-test('payoutForPosition pays the placed amount and nothing otherwise', () => {
-  const h = loadCode();
-  const payout = h.fn('payoutForPosition');
-  const rules = { payout: { byPlace: { 1: 2, 2: 5 } } };
+// ─── The October 5 case: a small field takes the whole pool ──────────────────
 
-  assert.equal(payout(1, rules), 2);
-  assert.equal(payout(2, rules), 5);
-  assert.equal(payout(4, rules), 0, 'an unpaid place pays nothing');
-  assert.equal(payout('', rules), 0, 'a blank placement pays nothing');
-  assert.equal(payout(1), 0, 'no configured table pays nothing');
-});
-
-// ─── Payout figures for the real October 5 placements ────────────────────────
-
-test('the October 5 placements pay winner 2 each and second 5 each', () => {
+test('the October 5 field of 7 builds a $21 pool and pays the winners everything', () => {
   const h = loadCode();
   buildDoubles(h, {
-    leagueSettings: { payout_by_place: '1:2,2:5' },
+    leagueSettings: { payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 },
     weekRows: octoberFifthRows(h)
   });
 
   const result = call(h, 'handleCalculatePoints');
   assert.equal(result.status, 'ok');
   assert.equal(result.payout.configured, true);
-  assert.deepEqual(result.payout.by_place, { 1: 2, 2: 5 });
-  assert.equal(result.payout.total, 24, '4 winner + 10 + 10 second = 24');
+  assert.equal(result.payout.contribution, 3);
+  assert.equal(result.payout.players, 7);
+  assert.equal(result.payout.pool, 21, '7 players x $3');
+  assert.equal(result.payout.second_paid, false, 'below the threshold second place is not paid');
+  assert.equal(result.payout.second_total, 0);
+  assert.equal(result.payout.winners_total, 21, 'the winners take the whole pool');
+  assert.equal(result.payout.total, 21);
 
   const byPair = {};
   result.pairs.forEach((pair) => { byPair[pair.pair_key] = pair; });
 
   assert.equal(byPair['dubs:p1'].place, '1');
-  assert.equal(byPair['dubs:p1'].payout_per_player, 2);
-  assert.equal(byPair['dubs:p1'].payout_total, 4, 'two winners at 2 each');
+  assert.equal(byPair['dubs:p1'].payout_per_player, 10.5);
+  assert.equal(byPair['dubs:p1'].payout_total, 21, 'two winners split the $21 pool');
 
-  // Both tied-second pairs pay the same refund amount per member.
-  assert.equal(byPair['dubs:p2'].place, 'T2');
-  assert.equal(byPair['dubs:p2'].payout_per_player, 5);
-  assert.equal(byPair['dubs:p2'].payout_total, 10);
-  assert.equal(byPair['dubs:p3'].payout_per_player, 5);
-  assert.equal(byPair['dubs:p3'].payout_total, 10);
-
-  // The 4th-place solo is not in the payout table.
-  assert.equal(byPair[''].payout_per_player, 0);
-  assert.equal(byPair[''].payout_total, 0);
+  // The tied-second pairs and the solo are unpaid below the threshold.
+  for (const key of ['dubs:p2', 'dubs:p3', '']) {
+    assert.equal(byPair[key].payout_per_player, 0, key);
+    assert.equal(byPair[key].payout_total, 0, key);
+  }
 });
 
-test('a league with no payout table pays nothing and stays byte-identical', () => {
+// ─── A full field pays second place out of the pool ──────────────────────────
+
+/** Builds `teamCount` two-player teams in placement order: pair 1 first. */
+function fieldRows(h, teamCount) {
+  const rows = [];
+  let member = 1;
+  for (let team = 1; team <= teamCount; team++) {
+    const pairKey = 'dubs:p' + team;
+    rows.push(makeWeekRow(h, place(member, 'Player ' + member, pairKey, team, String(team))));
+    member++;
+    rows.push(makeWeekRow(h, place(member, 'Player ' + member, pairKey, team, String(team))));
+    member++;
+  }
+  return rows;
+}
+
+test('a 10-player field builds a $30 pool, pays second $10 and winners $20', () => {
   const h = loadCode();
   buildDoubles(h, {
-    leagueSettings: { payout_by_place: '' },
+    leagueSettings: { payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 },
+    weekRows: fieldRows(h, 5)
+  });
+
+  const result = call(h, 'handleCalculatePoints');
+  assert.equal(result.payout.players, 10);
+  assert.equal(result.payout.pool, 30);
+  assert.equal(result.payout.second_paid, true);
+  assert.equal(result.payout.second_total, 10);
+  assert.equal(result.payout.winners_total, 20);
+  assert.equal(result.payout.total, 30);
+
+  const byPair = {};
+  result.pairs.forEach((pair) => { byPair[pair.pair_key] = pair; });
+  assert.equal(byPair['dubs:p1'].payout_per_player, 10);
+  assert.equal(byPair['dubs:p1'].payout_total, 20);
+  assert.equal(byPair['dubs:p2'].payout_per_player, 5);
+  assert.equal(byPair['dubs:p2'].payout_total, 10);
+  assert.equal(byPair['dubs:p3'].payout_total, 0);
+});
+
+test('the second-place threshold is inclusive at exactly ten players', () => {
+  const below = loadCode();
+  buildDoubles(below, {
+    leagueSettings: { payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 },
+    weekRows: fieldRows(below, 4).concat([
+      makeWeekRow(below, place(9, 'Edge Nine', 'dubs:p5', 5, '5'))
+    ])
+  });
+  const nine = call(below, 'handleCalculatePoints');
+  assert.equal(nine.payout.players, 9);
+  assert.equal(nine.payout.pool, 27);
+  assert.equal(nine.payout.second_paid, false, 'nine players is below the threshold');
+  assert.equal(nine.payout.winners_total, 27);
+
+  const at = loadCode();
+  buildDoubles(at, {
+    leagueSettings: { payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 },
+    weekRows: fieldRows(at, 5)
+  });
+  const ten = call(at, 'handleCalculatePoints');
+  assert.equal(ten.payout.players, 10);
+  assert.equal(ten.payout.second_paid, true, 'ten players meets the threshold');
+  assert.equal(ten.payout.second_total, 10);
+  assert.equal(ten.payout.winners_total, 20);
+});
+
+test('a league with no weekly payout configured stays silent', () => {
+  const h = loadCode();
+  buildDoubles(h, {
+    leagueSettings: { payout_contribution: '', payout_second_amount: '', payout_second_min_players: '' },
     weekRows: octoberFifthRows(h)
   });
 
   const result = call(h, 'handleCalculatePoints');
   assert.equal(result.status, 'ok');
   assert.equal(result.payout.configured, false);
-  assert.deepEqual(result.payout.by_place, {});
+  assert.equal(result.payout.pool, 0);
   assert.equal(result.payout.total, 0);
+  assert.equal(result.payout.second_paid, false);
   for (const pair of result.pairs) {
     assert.equal(pair.payout_per_player, 0);
     assert.equal(pair.payout_total, 0);
   }
 });
 
-test('the payout table is per-league and overridable', () => {
+test('the pool rule is per-league and overridable', () => {
   const h = loadCode();
   buildDoubles(h, {
-    leagueSettings: { payout_by_place: '1:10,2:10,3:3' },
-    weekRows: [
-      makeWeekRow(h, place(1, 'Damon Forsythe', 'dubs:p1', 1, '1')),
-      makeWeekRow(h, place(2, 'Brad Stevenson', 'dubs:p1', 1, '1')),
-      makeWeekRow(h, place(3, 'Brian Corlew', 'dubs:p2', 3, '3')),
-      makeWeekRow(h, place(4, 'Cortez Ashley', 'dubs:p2', 3, '3'))
-    ]
+    leagueSettings: { payout_contribution: 5, payout_second_amount: 20, payout_second_min_players: 4 },
+    weekRows: fieldRows(h, 3)
   });
 
   const result = call(h, 'handleCalculatePoints');
-  const byPair = {};
-  result.pairs.forEach((pair) => { byPair[pair.pair_key] = pair; });
-  assert.equal(byPair['dubs:p1'].payout_total, 20);
-  assert.equal(byPair['dubs:p2'].payout_total, 6);
-  assert.equal(result.payout.total, 26);
+  assert.equal(result.payout.players, 6);
+  assert.equal(result.payout.pool, 30);
+  assert.equal(result.payout.second_paid, true);
+  assert.equal(result.payout.second_total, 20);
+  assert.equal(result.payout.winners_total, 10);
 });
 
 // ─── Settings validation and persistence ─────────────────────────────────────
 
-test('handleSaveLeagueSettings stores the payout table and reads it back', () => {
+test('handleSaveLeagueSettings stores the pool rule and reads it back', () => {
   const h = loadCode();
   const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
   h.fn('handleCreateLeagueSheet')({ spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES });
@@ -202,57 +268,61 @@ test('handleSaveLeagueSettings stores the payout table and reads it back', () =>
 
   const saved = h.parse(h.fn('handleSaveLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
-    settings: { payout_by_place: '1:2,2:5' }
+    settings: { payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 }
   }));
   assert.equal(saved.status, 'ok');
-  assert.equal(saved.settings.payout_by_place, '1:2,2:5');
+  assert.equal(saved.settings.payout_contribution, 3);
+  assert.equal(saved.settings.payout_second_amount, 10);
+  assert.equal(saved.settings.payout_second_min_players, 10);
 
   const loaded = h.parse(h.fn('handleGetLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES
   }));
-  assert.equal(loaded.settings.payout_by_place, '1:2,2:5');
-  // The canonical schema still carries the payout column after the save.
+  assert.equal(loaded.settings.payout_contribution, 3);
+  assert.equal(loaded.settings.payout_second_amount, 10);
+  assert.equal(loaded.settings.payout_second_min_players, 10);
+  // The canonical schema still carries the pool columns after the save.
   assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
 });
 
-test('handleSaveLeagueSettings rejects a negative or malformed payout', () => {
+test('handleSaveLeagueSettings rejects a negative pool amount and accepts blank', () => {
   const h = loadCode();
   h.fn('handleCreateLeagueSheet')({ spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES });
 
   const negative = h.parse(h.fn('handleSaveLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
-    settings: { payout_by_place: '2:-5' }
+    settings: { payout_contribution: -1 }
   }));
   assert.equal(negative.status, 'error');
-  assert.match(negative.message, /payout_by_place/);
+  assert.match(negative.message, /payout_contribution/);
 
-  const malformed = h.parse(h.fn('handleSaveLeagueSettings')({
+  const negativeSecond = h.parse(h.fn('handleSaveLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
-    settings: { payout_by_place: '1:two' }
+    settings: { payout_second_amount: -5 }
   }));
-  assert.equal(malformed.status, 'error');
-  assert.match(malformed.message, /payout_by_place/);
+  assert.equal(negativeSecond.status, 'error');
+  assert.match(negativeSecond.message, /payout_second_amount/);
 
-  // A blank payout is allowed and means "no weekly money".
+  // A blank contribution is allowed and means "no weekly money".
   const blank = h.parse(h.fn('handleSaveLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
-    settings: { payout_by_place: '' }
+    settings: { payout_contribution: '' }
   }));
   assert.equal(blank.status, 'ok');
+  assert.equal(blank.settings.payout_contribution, '');
 
   // A rejected save must not have written the bad value.
   const loaded = h.parse(h.fn('handleGetLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES
   }));
-  assert.notEqual(loaded.settings.payout_by_place, '2:-5');
-  assert.notEqual(loaded.settings.payout_by_place, '1:two');
+  assert.notEqual(loaded.settings.payout_contribution, -1);
 });
 
-test('handleSaveLeagueSettings appends the payout column to a pre-payout sheet', () => {
+test('handleSaveLeagueSettings appends the pool columns to a pre-payout sheet', () => {
   const h = loadCode();
   const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
   const league = doubles.insertSheet('League');
-  // The 19-column schema from before payout_by_place existed.
+  // The 19-column schema from before any payout setting existed.
   const prePayout = h.bound.LEAGUE_SHEET_HEADERS
     .concat(h.bound.LEAGUE_SHEET_METADATA_HEADERS)
     .concat(h.bound.LEAGUE_POINTS_HEADERS);
@@ -264,14 +334,75 @@ test('handleSaveLeagueSettings appends the payout column to a pre-payout sheet',
 
   const saved = h.parse(h.fn('handleSaveLeagueSettings')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
-    settings: { payout_by_place: '1:2,2:5' }
+    settings: { payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 }
   }));
   assert.equal(saved.status, 'ok');
   assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
   assert.equal(
-    league.getRange(2, h.bound.LEAGUE_SHEET_HEADERS_DOUBLES.indexOf('payout_by_place') + 1).getValue(),
-    '1:2,2:5'
+    league.getRange(2, h.bound.LEAGUE_SHEET_HEADERS_DOUBLES.indexOf('payout_contribution') + 1).getValue(),
+    3
   );
+});
+
+// ─── Legacy flat payout table migration ──────────────────────────────────────
+
+/** Builds a doubles spreadsheet whose League row still carries the retired
+ * flat payout_by_place column and the October 5 field. */
+function buildLegacyPayout(h, legacyValue) {
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const club = doubles.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  const week = doubles.insertSheet('Week ' + WEEK_DATE);
+  week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  octoberFifthRows(h).forEach((row) => week.appendRow(row));
+
+  const league = doubles.insertSheet('League');
+  const headers = h.bound.LEAGUE_SHEET_HEADERS
+    .concat(h.bound.LEAGUE_SHEET_METADATA_HEADERS)
+    .concat(h.bound.LEAGUE_POINTS_HEADERS)
+    .concat(h.bound.LEGACY_PAYOUT_HEADERS)
+    .concat(h.bound.LEAGUE_EXPLANATION_HEADERS)
+    .concat(h.bound.LEAGUE_BREAKDOWN_HEADERS);
+  league.appendRow(headers);
+  const row = new Array(headers.length).fill('');
+  row[headers.indexOf('league_format')] = h.bound.LEAGUE_FORMAT_DOUBLES;
+  row[headers.indexOf('scoring')] = h.bound.SCORING_POINTS;
+  row[headers.indexOf('payout_by_place')] = legacyValue;
+  league.appendRow(row);
+  return { doubles, league };
+}
+
+test('a legacy flat payout table is read as a pool rule', () => {
+  const h = loadCode();
+  buildLegacyPayout(h, '1:2,2:5');
+
+  const result = call(h, 'handleCalculatePoints');
+  assert.equal(result.status, 'ok');
+  // place-1 2 becomes the per-player contribution, place-2 5 x 2 becomes the
+  // second-place share, and the legacy model had no threshold.
+  assert.equal(result.payout.configured, true);
+  assert.equal(result.payout.contribution, 2);
+  assert.equal(result.payout.second_amount, 10);
+  assert.equal(result.payout.second_min_players, 0);
+  assert.equal(result.payout.pool, 14, '7 players x $2');
+  assert.equal(result.payout.second_paid, true);
+  assert.equal(result.payout.second_total, 10);
+  assert.equal(result.payout.winners_total, 4);
+});
+
+test('saving settings retires the legacy column and stores the pool rule', () => {
+  const h = loadCode();
+  const { league } = buildLegacyPayout(h, '1:2,2:5');
+
+  const saved = h.parse(h.fn('handleSaveLeagueSettings')({
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    settings: { payout_contribution: 3, payout_second_amount: 10, payout_second_min_players: 10 }
+  }));
+  assert.equal(saved.status, 'ok');
+  const headers = h.fn('getSheetHeaders')(league);
+  assert.equal(headers.indexOf('payout_by_place'), -1, 'the legacy column is retired');
+  assert.deepEqual(headers, h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
+  assert.equal(league.getRange(2, headers.indexOf('payout_contribution') + 1).getValue(), 3);
 });
 
 // ─── Ace pot included in the entry fee ───────────────────────────────────────
