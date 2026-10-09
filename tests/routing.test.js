@@ -17,16 +17,29 @@ test('no or unknown selector resolves to the singles spreadsheet', () => {
   assert.equal(resolve('some-other-spreadsheet-id'), h.bound.SPREADSHEET_ID);
 });
 
-test('doubles selector resolves to the configured doubles spreadsheet', () => {
+test('doubles selector resolves to the configured production spreadsheet', () => {
   const h = loadCode();
 
   assert.equal(
     h.bound.SPREADSHEET_ID_DOUBLES,
-    '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8'
+    '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g'
   );
   assert.equal(
     h.fn('resolveSpreadsheetId')(h.bound.SPREADSHEET_ID_DOUBLES),
     h.bound.SPREADSHEET_ID_DOUBLES
+  );
+});
+
+test('the test doubles selector resolves to the former proof-of-concept sheet', () => {
+  const h = loadCode();
+
+  assert.equal(
+    h.bound.SPREADSHEET_ID_DOUBLES_TEST,
+    '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8'
+  );
+  assert.equal(
+    h.fn('resolveSpreadsheetId')(h.bound.SPREADSHEET_ID_DOUBLES_TEST),
+    h.bound.SPREADSHEET_ID_DOUBLES_TEST
   );
 });
 
@@ -63,6 +76,7 @@ test('resolveLeagueId normalizes league ids, legacy ids, and unknowns', () => {
   assert.equal(resolve('not-a-league'), h.bound.LEAGUE_ID_SINGLES);
   // Deprecated spreadsheet ids still map to their league during migration.
   assert.equal(resolve(h.bound.SPREADSHEET_ID_DOUBLES), h.bound.LEAGUE_ID_DOUBLES);
+  assert.equal(resolve(h.bound.SPREADSHEET_ID_DOUBLES_TEST), h.bound.LEAGUE_ID_DOUBLES_TEST);
   assert.equal(resolve(h.bound.SPREADSHEET_ID), h.bound.LEAGUE_ID_SINGLES);
 });
 

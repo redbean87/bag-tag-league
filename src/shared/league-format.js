@@ -48,7 +48,7 @@
   // carries its own format and scoring as data; routing and gating read the
   // derived capability rules, never a hardcoded switch.
   // Spreadsheet ids are kept in sync with scripts/Code.gs
-  // (SPREADSHEET_ID / SPREADSHEET_ID_DOUBLES).
+  // (SPREADSHEET_ID / SPREADSHEET_ID_DOUBLES / SPREADSHEET_ID_DOUBLES_TEST).
   var LEAGUES = [
     {
       id: 'b-rads-league',
@@ -62,9 +62,18 @@
       name: 'Nightfliers Random Dubs',
       format: FORMATS.DOUBLES,
       scoring: SCORING.POINTS,
+      spreadsheetId: '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g'
+    },
+    {
+      id: 'nightfliers-random-dubs-test',
+      name: 'Nightfliers Random Dubs (Test)',
+      format: FORMATS.DOUBLES,
+      scoring: SCORING.POINTS,
       spreadsheetId: '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8',
       // Test surface: the guarded test-data reset may write here. The live
-      // Singles league is never flagged, so the reset can never target it.
+      // Singles and production Doubles leagues are never flagged, so the reset
+      // can never target them. Test-flagged leagues are hidden from the admin
+      // league picker.
       test: true
     }
   ];
@@ -73,6 +82,16 @@
 
   function leagues() {
     return LEAGUES.slice();
+  }
+
+  // The leagues a coordinator can pick. Test-flagged leagues are development
+  // surfaces (the former proof-of-concept workbook), so they are never offered
+  // in the admin league picker even though they stay in the registry for the
+  // guarded test tooling.
+  function selectableLeagues() {
+    return LEAGUES.filter(function(league) {
+      return league.test !== true;
+    });
   }
 
   function leagueById(id) {
@@ -187,6 +206,7 @@
     LEAGUES: LEAGUES,
     DEFAULT_LEAGUE_ID: DEFAULT_LEAGUE_ID,
     leagues: leagues,
+    selectableLeagues: selectableLeagues,
     leagueById: leagueById,
     normalizeLeagueId: normalizeLeagueId,
     leagueIdForFormat: leagueIdForFormat,

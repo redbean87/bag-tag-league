@@ -7,8 +7,9 @@
  *
  * Credentials / configuration are pluggable through Script Properties:
  *
- *   SINGLES_SPREADSHEET_ID  (falls back to SPREADSHEET_ID)
- *   DOUBLES_SPREADSHEET_ID  (falls back to SPREADSHEET_ID_DOUBLES)
+ *   SINGLES_SPREADSHEET_ID      (falls back to SPREADSHEET_ID)
+ *   DOUBLES_SPREADSHEET_ID      (falls back to SPREADSHEET_ID_DOUBLES)
+ *   DOUBLES_TEST_SPREADSHEET_ID (falls back to SPREADSHEET_ID_DOUBLES_TEST)
  *
  * Set a property when the operator wants to point at a different spreadsheet
  * without editing code:
@@ -16,12 +17,17 @@
  *   PropertiesService.getScriptProperties()
  *     .setProperty('DOUBLES_SPREADSHEET_ID', '<id>');
  *
+ * The guarded test-data reset reads DOUBLES_TEST_SPREADSHEET_ID and defaults to
+ * the test-flagged former proof-of-concept workbook, never the production
+ * doubles spreadsheet.
+ *
  * No secrets, tokens, or credentials are stored in this file. Running these
  * functions requires the operator's existing Apps Script authorization.
  */
 
 var SINGLES_SPREADSHEET_ID_PROPERTY = 'SINGLES_SPREADSHEET_ID';
 var DOUBLES_SPREADSHEET_ID_PROPERTY = 'DOUBLES_SPREADSHEET_ID';
+var DOUBLES_TEST_SPREADSHEET_ID_PROPERTY = 'DOUBLES_TEST_SPREADSHEET_ID';
 
 /**
  * Reads a spreadsheet ID from Script Properties, falling back to the supplied
@@ -43,6 +49,10 @@ function getConfiguredSinglesSpreadsheetId() {
 
 function getConfiguredDoublesSpreadsheetId() {
   return getSpreadsheetIdFromProperties(DOUBLES_SPREADSHEET_ID_PROPERTY, SPREADSHEET_ID_DOUBLES);
+}
+
+function getConfiguredDoublesTestSpreadsheetId() {
+  return getSpreadsheetIdFromProperties(DOUBLES_TEST_SPREADSHEET_ID_PROPERTY, SPREADSHEET_ID_DOUBLES_TEST);
 }
 
 /**
@@ -177,12 +187,13 @@ function applyDetagColumnDrops() {
  * Operator entry point: dry-run the guarded test-data reset for the doubles
  * test spreadsheet. Writes nothing and reports exactly which rows would be
  * removed. The configured id must be on the test allow-list or the reset
- * refuses, so the live Singles spreadsheet can never be targeted.
+ * refuses, so the production doubles and live Singles spreadsheets can never
+ * be targeted.
  *
  * Usage (Apps Script editor): run `previewTestDataReset`.
  */
 function previewTestDataReset() {
-  var spreadsheetId = getConfiguredDoublesSpreadsheetId();
+  var spreadsheetId = getConfiguredDoublesTestSpreadsheetId();
   var report = resetTestData(SpreadsheetApp.openById(spreadsheetId), {
     spreadsheetId: spreadsheetId,
     apply: false,
@@ -202,7 +213,7 @@ function previewTestDataReset() {
  * Usage (Apps Script editor): run `applyTestDataReset`.
  */
 function applyTestDataReset() {
-  var spreadsheetId = getConfiguredDoublesSpreadsheetId();
+  var spreadsheetId = getConfiguredDoublesTestSpreadsheetId();
   var report = resetTestData(SpreadsheetApp.openById(spreadsheetId), {
     spreadsheetId: spreadsheetId,
     apply: true,

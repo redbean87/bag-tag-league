@@ -125,7 +125,39 @@ test('spreadsheetIdForFormat maps each format to its spreadsheet', () => {
   );
   assert.equal(
     LeagueFormat.spreadsheetIdForFormat('doubles'),
-    '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8'
+    '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g'
+  );
+});
+
+test('the production doubles league is not test-flagged and the former POC is', () => {
+  const doubles = LeagueFormat.leagueById('nightfliers-random-dubs');
+  const testDoubles = LeagueFormat.leagueById('nightfliers-random-dubs-test');
+
+  assert.equal(doubles.spreadsheetId, '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g');
+  assert.notEqual(doubles.test, true);
+  assert.equal(testDoubles.test, true);
+  assert.equal(testDoubles.spreadsheetId, '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8');
+});
+
+test('selectableLeagues hides every test-flagged league from the picker', () => {
+  const all = LeagueFormat.leagues();
+  const selectable = LeagueFormat.selectableLeagues();
+
+  assert.ok(all.some((league) => league.test === true), 'expected a test league in the registry');
+  assert.equal(
+    selectable.some((league) => league.test === true),
+    false,
+    'a coordinator must never see a test-flagged league'
+  );
+  assert.deepEqual(
+    selectable.map((league) => league.id),
+    all.filter((league) => league.test !== true).map((league) => league.id)
+  );
+
+  // Doubles still resolves to the production league for format-based lookups.
+  assert.equal(
+    LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.DOUBLES),
+    'nightfliers-random-dubs'
   );
 });
 
@@ -135,7 +167,7 @@ test('the admin UI populates the picker from the league registry', () => {
   assert.match(html, /src="\.\.\/shared\/league-format\.js"/);
   assert.match(html, /id="leaguePicker"/);
   assert.match(html, /<select id="leaguePicker" onchange="onLeagueChange\(\)"><\/select>/);
-  assert.match(html, /window\.LeagueFormat\.leagues\(\)/);
+  assert.match(html, /window\.LeagueFormat\.selectableLeagues\(\)/);
   assert.match(html, /function populateLeaguePicker\(\)/);
   assert.match(html, /function onLeagueChange\(\)/);
   assert.match(html, /function getSpreadsheetId\(\)/);

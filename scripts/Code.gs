@@ -7,12 +7,18 @@
  * Deploy as: Web App -> Execute as: Me -> Who has access: Anyone
  */
 
-// Replace with your actual spreadsheet ID
+// Singles league spreadsheet.
 const SPREADSHEET_ID = '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik';
 
-// Doubles league spreadsheet (second spreadsheet). The singles spreadsheet
-// above stays the default for every caller that does not select doubles.
-const SPREADSHEET_ID_DOUBLES = '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8';
+// Production doubles league spreadsheet (Nightfliers Random Dubs). The singles
+// spreadsheet above stays the default for every caller that does not select
+// another league.
+const SPREADSHEET_ID_DOUBLES = '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g';
+
+// Former proof-of-concept doubles spreadsheet, kept as a test-flagged league
+// entry so development and the guarded test-data reset still have a safe
+// surface. It is never production data and no production tooling targets it.
+const SPREADSHEET_ID_DOUBLES_TEST = '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8';
 
 // Supported league formats. `league_format` gates format-specific behavior so
 // tag and points code paths do not duplicate a singles/doubles implementation.
@@ -341,6 +347,7 @@ const LEAGUE_SHEET_HEADERS_DOUBLES = LEAGUE_SHEET_HEADERS_EXTENDED;
 // src/shared/league-format.js.
 const LEAGUE_ID_SINGLES = 'b-rads-league';
 const LEAGUE_ID_DOUBLES = 'nightfliers-random-dubs';
+const LEAGUE_ID_DOUBLES_TEST = 'nightfliers-random-dubs-test';
 const DEFAULT_LEAGUE_ID = LEAGUE_ID_SINGLES;
 
 // Server-side allow-list and league table: opaque league id -> authorized
@@ -348,17 +355,25 @@ const DEFAULT_LEAGUE_ID = LEAGUE_ID_SINGLES;
 // client can only ever select one of these spreadsheets; a raw Google
 // spreadsheet id is never accepted as storage authority. Routing derives the
 // capability rules from this table, never from the league id directly.
+//
+// The doubles league points at the production workbook and is NOT flagged as a
+// test surface, so no test tooling (in particular the guarded test-data reset)
+// can ever write to production. The former proof-of-concept workbook is kept
+// as a second, test-flagged doubles entry so development still has a safe
+// target; it is hidden from the admin league picker.
 const LEAGUE_SPREADSHEETS = [
   { id: LEAGUE_ID_SINGLES, format: LEAGUE_FORMAT_SINGLES, scoring: SCORING_TAGS, spreadsheetId: SPREADSHEET_ID },
-  { id: LEAGUE_ID_DOUBLES, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES, test: true }
+  { id: LEAGUE_ID_DOUBLES, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES },
+  { id: LEAGUE_ID_DOUBLES_TEST, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES_TEST, test: true }
 ];
 
 // Spreadsheets the guarded test-data reset may ever write to, derived from the
-// league records flagged as test surfaces. The doubles spreadsheet is the
-// worker's disposable test surface; the singles spreadsheet holds live league
-// data and is never flagged. Deriving the list from the league allow-list keeps
-// a single source of truth for which spreadsheet is a test surface, and a raw
-// client-supplied id can never authorize a write.
+// league records flagged as test surfaces. Only the former proof-of-concept
+// doubles spreadsheet is flagged; the production doubles and live singles
+// spreadsheets hold live league data and are never flagged. Deriving the list
+// from the league allow-list keeps a single source of truth for which
+// spreadsheet is a test surface, and a raw client-supplied id can never
+// authorize a write.
 const TEST_SPREADSHEET_IDS = LEAGUE_SPREADSHEETS.filter(function(record) {
   return record.test === true;
 }).map(function(record) {
@@ -384,6 +399,19 @@ function leagueRecordById(leagueId) {
 }
 
 /**
+ * Looks up the allow-listed league record for a spreadsheet id. Returns null
+ * for anything not in the registry. Used by the deprecated raw-spreadsheet-id
+ * selector path and by the roster-seed guard, so both resolve through the same
+ * single source of truth.
+ */
+function leagueRecordBySpreadsheetId(spreadsheetId) {
+  for (var i = 0; i < LEAGUE_SPREADSHEETS.length; i++) {
+    if (LEAGUE_SPREADSHEETS[i].spreadsheetId === spreadsheetId) return LEAGUE_SPREADSHEETS[i];
+  }
+  return null;
+}
+
+/**
  * Normalizes a requested routing selector to a canonical league id.
  *
  * Accepts an opaque league id, or (deprecated, during migration) one of the
@@ -392,7 +420,8 @@ function leagueRecordById(leagueId) {
  */
 function resolveLeagueId(selector) {
   if (leagueRecordById(selector)) return selector;
-  if (selector === SPREADSHEET_ID_DOUBLES) return LEAGUE_ID_DOUBLES;
+  var record = leagueRecordBySpreadsheetId(selector);
+  if (record) return record.id;
   return DEFAULT_LEAGUE_ID;
 }
 
@@ -1243,8 +1272,8 @@ function applyRosterSeedPlan(sheet, plan) {
 }
 
 /**
- * Seed-only roster reload. Guards the target against the test-spreadsheet
- * allow-list before reading a row, then upserts the explicit member payload
+ * Seed-only roster reload. Guards the target against the doubles league
+ * registry before reading a row, then upserts the explicit member payload
  * into ClubMembers by `member_number`.
  *
  * This is intentionally independent of getDoublesProvisioningState: it is the
@@ -1253,8 +1282,8 @@ function applyRosterSeedPlan(sheet, plan) {
  * never touches a weekly sheet, and never renumbers a member.
  *
  * options:
- *   spreadsheetId (required) - resolved allow-listed id; must be on the
- *                              test-spreadsheet allow-list.
+ *   spreadsheetId (required) - resolved allow-listed id; must be a registered
+ *                              doubles spreadsheet (production or test).
  *   members (required)       - explicit array of member objects keyed by
  *                              ClubMembers header name.
  *   apply (boolean)          - false (default) previews, true writes.
@@ -1265,7 +1294,7 @@ function applyRosterSeedPlan(sheet, plan) {
  */
 function seedRoster(doublesSpreadsheet, options) {
   options = options || {};
-  var guard = assertTestSpreadsheet(options.spreadsheetId);
+  var guard = assertSeedableSpreadsheet(options.spreadsheetId);
   if (!guard.ok) {
     return { applied: false, refused: true, reason: guard.reason, error: guard.error, results: [] };
   }
@@ -1422,18 +1451,19 @@ function handleProvisionDoubles(data) {
 
 /**
  * Web-app action: preview or apply the seed-only roster reload. The target is
- * resolved through the league allow-list and then required to be on the
- * test-spreadsheet allow-list, so live Singles and any non-test spreadsheet
- * are refused before a row is read or written. Defaults to a dry run that
- * reports exactly which member_numbers would be inserted, updated, or left
- * unchanged.
+ * resolved through the league allow-list and then required to be a registered
+ * doubles spreadsheet (production or test), so live Singles and any
+ * non-doubles spreadsheet are refused before a row is read or written.
+ * Defaults to a dry run that reports exactly which member_numbers would be
+ * inserted, updated, or left unchanged.
  *
  * Unlike `provisionDoubles`, this action is allowed on an already-provisioned
  * workbook: it only reloads roster rows and never creates tabs. It is the
- * supported path after a `scope: 'full'` reset.
+ * supported path after a `scope: 'full'` reset, and the production roster-fill
+ * path.
  *
  * Inputs:
- *   league/spreadsheetId selector (must resolve to the doubles test sheet)
+ *   league/spreadsheetId selector (must resolve to a registered doubles sheet)
  *   members (required) - explicit array of member objects keyed by
  *                        ClubMembers header name; member_number is required.
  *   apply (boolean, default false)
@@ -1445,7 +1475,7 @@ function handleSeedRoster(data) {
   var spreadsheetId = resolveSpreadsheetId(selector);
   var apply = data.apply === true || data.apply === 'true';
 
-  var guard = assertTestSpreadsheet(spreadsheetId);
+  var guard = assertSeedableSpreadsheet(spreadsheetId);
   if (!guard.ok) {
     return respond('error', guard.error, {
       refused: true,
@@ -2253,6 +2283,31 @@ function assertTestSpreadsheet(spreadsheetId) {
     ok: false,
     reason: 'non_test',
     error: 'Refusing to reset a non-test spreadsheet; only test spreadsheets may be reset.'
+  };
+}
+
+/**
+ * Guards the seed-only roster reload. The seed is the production roster-fill
+ * path, so it may target any registered doubles spreadsheet - the production
+ * doubles league or the test-flagged former proof-of-concept league. The live
+ * Singles spreadsheet is still refused explicitly so a roster load can never
+ * touch it, and a spreadsheet outside the doubles registry is refused before
+ * any row is read or written.
+ */
+function assertSeedableSpreadsheet(spreadsheetId) {
+  var record = leagueRecordBySpreadsheetId(spreadsheetId);
+  if (record && record.format === LEAGUE_FORMAT_DOUBLES) return { ok: true };
+  if (spreadsheetId === SPREADSHEET_ID) {
+    return {
+      ok: false,
+      reason: 'live_singles',
+      error: 'Refusing to seed the live Singles spreadsheet; the roster seed is a doubles path.'
+    };
+  }
+  return {
+    ok: false,
+    reason: 'non_doubles',
+    error: 'Refusing to seed a non-doubles spreadsheet; only a registered doubles spreadsheet may be seeded.'
   };
 }
 

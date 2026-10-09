@@ -24,7 +24,7 @@ function valueByName(h, sheet, header, rowIndex) {
 
 /** Builds a provisioned doubles test spreadsheet with two week tabs of data. */
 function buildDoubles(h) {
-  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES_TEST);
 
   const league = doubles.insertSheet('League');
   league.appendRow(h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
@@ -78,19 +78,22 @@ function resultsByName(report) {
 
 // ─── Test-spreadsheet allow-list ─────────────────────────────────────────────
 
-test('the test allow-list contains the doubles spreadsheet only', () => {
+test('the test allow-list contains only the test doubles surface', () => {
   const h = loadCode();
 
-  assert.deepEqual(h.bound.TEST_SPREADSHEET_IDS, [h.bound.SPREADSHEET_ID_DOUBLES]);
-  assert.equal(h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID_DOUBLES), true);
+  assert.deepEqual(h.bound.TEST_SPREADSHEET_IDS, [h.bound.SPREADSHEET_ID_DOUBLES_TEST]);
+  assert.equal(h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID_DOUBLES_TEST), true);
   assert.equal(h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID), false);
+  // Production doubles is explicitly not a test surface, so the reset can
+  // never be pointed at the live workbook.
+  assert.equal(h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID_DOUBLES), false);
   assert.equal(h.fn('isTestSpreadsheetId')('some-other-sheet'), false);
 });
 
 test('the guard names live singles separately from any other non-test sheet', () => {
   const h = loadCode();
 
-  assert.equal(h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID_DOUBLES).ok, true);
+  assert.equal(h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID_DOUBLES_TEST).ok, true);
 
   const singles = h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID);
   assert.equal(singles.ok, false);
@@ -101,6 +104,15 @@ test('the guard names live singles separately from any other non-test sheet', ()
   assert.equal(other.ok, false);
   assert.equal(other.reason, 'non_test');
   assert.match(other.error, /non-test spreadsheet/);
+});
+
+test('the guard refuses the production doubles spreadsheet', () => {
+  const h = loadCode();
+
+  const production = h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID_DOUBLES);
+  assert.equal(production.ok, false);
+  assert.equal(production.reason, 'non_test');
+  assert.match(production.error, /non-test spreadsheet/);
 });
 
 // ─── Pure planner ────────────────────────────────────────────────────────────
@@ -138,7 +150,7 @@ test('the full plan also returns the roster to its header-only minimum', () => {
 
 test('an empty week sheet is planned as a no-op', () => {
   const h = loadCode();
-  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES_TEST);
   const empty = doubles.insertSheet('Week 2026-10-06');
   empty.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
 
@@ -157,7 +169,7 @@ test('a dry run reports the exact rows and writes nothing', () => {
   const before = snapshot(doubles);
 
   const report = h.fn('resetTestData')(doubles, {
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES_TEST,
     apply: false,
     scope: 'weekly'
   });
@@ -179,7 +191,7 @@ test('a full dry run reports weekly and roster rows together', () => {
   const { doubles } = buildDoubles(h);
 
   const report = h.fn('resetTestData')(doubles, {
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES_TEST,
     apply: false,
     scope: 'full'
   });
@@ -197,7 +209,7 @@ test('weekly apply deletes weekly rows and keeps the header and the roster', () 
   const { doubles, club, week, template } = buildDoubles(h);
 
   const report = h.fn('resetTestData')(doubles, {
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES_TEST,
     apply: true,
     scope: 'weekly'
   });
@@ -216,7 +228,7 @@ test('full apply also clears the roster down to its header', () => {
   const { doubles, club, week } = buildDoubles(h);
 
   const report = h.fn('resetTestData')(doubles, {
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES_TEST,
     apply: true,
     scope: 'full'
   });
@@ -233,14 +245,14 @@ test('apply is idempotent on an already-cleared test spreadsheet', () => {
   const { doubles, week } = buildDoubles(h);
 
   h.fn('resetTestData')(doubles, {
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES_TEST,
     apply: true,
     scope: 'full'
   });
   const before = snapshot(doubles);
 
   const second = h.fn('resetTestData')(doubles, {
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES_TEST,
     apply: true,
     scope: 'full'
   });
@@ -290,6 +302,29 @@ test('resetTestData refuses any non-test spreadsheet and writes nothing', () => 
   assert.equal(snapshot(other), before);
 });
 
+test('resetTestData refuses the production doubles spreadsheet and writes nothing', () => {
+  const h = loadCode();
+  const production = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const club = production.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  club.appendRow([3, 'Damon', 'damon31', '151236', true, 't', 't', 2]);
+  const week = production.insertSheet('Week ' + WEEK_DATE);
+  week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES.map((header) => 'v_' + header));
+  const before = snapshot(production);
+
+  const report = h.fn('resetTestData')(production, {
+    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+    apply: true,
+    scope: 'full'
+  });
+
+  assert.equal(report.applied, false);
+  assert.equal(report.refused, true);
+  assert.equal(report.reason, 'non_test');
+  assert.equal(snapshot(production), before, 'production doubles must never be reset');
+});
+
 // ─── Web-app handler ─────────────────────────────────────────────────────────
 
 test('the handler defaults to a dry run and never writes', () => {
@@ -298,7 +333,7 @@ test('the handler defaults to a dry run and never writes', () => {
   const before = snapshot(doubles);
 
   const result = h.parse(h.fn('handleResetTestData')({
-    league: h.bound.LEAGUE_ID_DOUBLES
+    league: h.bound.LEAGUE_ID_DOUBLES_TEST
   }));
 
   assert.equal(result.status, 'ok');
@@ -314,7 +349,7 @@ test('the handler applies a full reset to the doubles test spreadsheet', () => {
   const { doubles, club, week } = buildDoubles(h);
 
   const result = h.parse(h.fn('handleResetTestData')({
-    league: h.bound.LEAGUE_ID_DOUBLES,
+    league: h.bound.LEAGUE_ID_DOUBLES_TEST,
     apply: true,
     scope: 'full'
   }));
@@ -368,7 +403,7 @@ test('a doubles reset never writes the live singles spreadsheet', () => {
   const singlesBefore = snapshot(singles);
 
   const result = h.parse(h.fn('handleResetTestData')({
-    league: h.bound.LEAGUE_ID_DOUBLES,
+    league: h.bound.LEAGUE_ID_DOUBLES_TEST,
     apply: true,
     scope: 'full'
   }));
@@ -376,6 +411,26 @@ test('a doubles reset never writes the live singles spreadsheet', () => {
   assert.equal(result.status, 'ok');
   assert.equal(snapshot(singles), singlesBefore);
   assert.equal(doubles.getSheetByName('Week ' + WEEK_DATE).rows.length, 1);
+});
+
+test('the handler refuses the production doubles league and writes nothing', () => {
+  const h = loadCode();
+  const production = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const club = production.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  club.appendRow([3, 'Damon', 'damon31', '151236', true, 't', 't', 2]);
+  const before = snapshot(production);
+
+  const result = h.parse(h.fn('handleResetTestData')({
+    league: h.bound.LEAGUE_ID_DOUBLES,
+    apply: true,
+    scope: 'full'
+  }));
+
+  assert.equal(result.status, 'error');
+  assert.equal(result.refused, true);
+  assert.equal(result.reason, 'non_test');
+  assert.equal(snapshot(production), before, 'production doubles must never be reset');
 });
 
 // ─── Admin UI wiring (structural) ────────────────────────────────────────────
