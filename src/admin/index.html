@@ -304,9 +304,9 @@
     </div>
     <div class="card-info" id="leaguePickerInfo" role="note" hidden>
       <p class="help-text">
-        Choose which league you are managing. The picker lists the real leagues
-        and each one carries its own format; the selection is saved in this
-        browser and the first league remains the default.
+        Choose which league you are managing. The picker lists the leagues for
+        this address and each one carries its own format; the selection is saved
+        in this browser and the first league visible here is the default.
       </p>
     </div>
     <div class="field-group">
@@ -647,8 +647,9 @@
   <!-- Dev-only test-data reset. The reset is a testing tool, not a
        coordinator feature, so the coordinator page never renders it. The
        panel is inert markup: it mounts only when the page is opened with the
-       non-advertised ?devTestReset=1 flag while a test league is selected,
-       and the server allow-list still refuses every non-test spreadsheet. -->
+       non-advertised ?devTestReset=1 flag while a development league is
+       selected, and the server allow-list still refuses every non-development
+       spreadsheet. -->
   <template id="testResetDevTemplate">
     <div class="card" id="testResetCard">
       <div class="card-header">
@@ -1007,10 +1008,10 @@
 
       var selected = getLeagueId();
       selector.innerHTML = '';
-      // Test-flagged leagues are development surfaces. The production address
-      // keeps hiding them, while the development address lists them alongside
-      // the production leagues. selectableLeagues() resolves the serving
-      // address itself and fails safe to production when it is unknown.
+      // Each environment lists only its own leagues: the production address
+      // lists production leagues, the development address only development
+      // (POC) leagues. selectableLeagues() resolves the serving address itself
+      // and fails safe to production when it is unknown.
       window.LeagueFormat.selectableLeagues().forEach(function(league) {
         var option = document.createElement('option');
         option.value = league.id;
@@ -1072,9 +1073,9 @@
       if (provisionCard) provisionCard.style.display = rules.hasPairs ? '' : 'none';
 
       // The test-data reset is a dev-only tool, never part of the coordinator
-      // page. It mounts only for a test league when the non-advertised dev
-      // flag is present; the server enforces the same allow-list, so a live
-      // league can never use the wipe path.
+      // page. It mounts only for a development league when the non-advertised
+      // dev flag is present; the server enforces the same allow-list, so a
+      // production league can never use the wipe path.
       applyTestResetVisibility(league);
 
       // Points tooling follows the scoring method.
@@ -1289,12 +1290,12 @@
     }
 
     // ─── Dev-only test-data reset ─────────────────────────────────────────
-    // The reset wipes the disposable doubles test spreadsheet, so it is a
+    // The reset wipes a disposable development (POC) spreadsheet, so it is a
     // worker/testing tool rather than a coordinator feature. The coordinator
     // page renders no reset card or button: the panel lives in an inert
     // <template> and mounts only when the page is opened with the
-    // non-advertised flag below while a test league is selected. The server
-    // allow-list still refuses every non-test spreadsheet.
+    // non-advertised flag below while a development league is selected. The
+    // server allow-list still refuses every non-development spreadsheet.
     var TEST_RESET_DEV_FLAG = 'devTestReset';
 
     function testResetDevEnabled() {
@@ -1308,7 +1309,12 @@
     function applyTestResetVisibility(league) {
       var mount = document.getElementById('testResetDevMount');
       if (!mount) return;
-      var enabled = !!(league && league.test === true && testResetDevEnabled());
+      var enabled = !!(
+        league &&
+        window.LeagueFormat &&
+        league.environment === window.LeagueFormat.ENVIRONMENTS.DEVELOPMENT &&
+        testResetDevEnabled()
+      );
       var mounted = document.getElementById('testResetCard');
       if (enabled && !mounted) {
         var template = document.getElementById('testResetDevTemplate');

@@ -4,10 +4,12 @@ Increment 1 of the doubles league adds a second spreadsheet and the tooling to
 provision and inspect it. The Singles spreadsheet and its schema are never
 modified.
 
-- Singles spreadsheet (default): `SPREADSHEET_ID` in `scripts/Code.gs`
-- Doubles spreadsheet (production): `SPREADSHEET_ID_DOUBLES` in `scripts/Code.gs`
+- Singles POC spreadsheet (development): `SPREADSHEET_ID` in `scripts/Code.gs`
+  (`1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik`)
+- Doubles spreadsheet (production, the only production league):
+  `SPREADSHEET_ID_DOUBLES` in `scripts/Code.gs`
   (`1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g`)
-- Doubles test spreadsheet (former proof-of-concept, test-flagged):
+- Doubles POC spreadsheet (development):
   `SPREADSHEET_ID_DOUBLES_TEST` in `scripts/Code.gs`
   (`1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8`)
 
@@ -114,7 +116,9 @@ sits beside `Code.gs` in the Apps Script project root.
 The admin page has a **League** picker populated from the shared league
 registry (`src/shared/league-format.js`). Each league carries its own format as
 data, and the selected league id is persisted in `localStorage`
-(`bagTagLeague.leagueId`); the first league (Singles) remains the default. Every
+(`bagTagLeague.leagueId`); the first league visible on the serving address is
+the default, so production defaults to the doubles league and development to
+the singles POC. Every
 action request carries the derived `spreadsheetId`. When a league whose format
 is `doubles` is selected, the **<League name> Provisioning** card (the title,
 help, button, and status strings are rendered from the selected league's
@@ -143,26 +147,28 @@ the topology check keep working on a sheet that still carries the tag columns.
 
 ## Test-data reset
 
-The doubles test spreadsheet is the worker's disposable test surface, so it
-needs a programmatic wipe that does not require a hand in the Sheets editor.
-The `resetTestData` action clears test data without touching any live
-spreadsheet. The production doubles spreadsheet is deliberately **not**
-flagged as a test surface, so the reset can never be pointed at it.
+The development POC spreadsheets are the worker's disposable test surfaces, so
+they need a programmatic wipe that does not require a hand in the Sheets editor.
+The `resetTestData` action clears test data without touching any production
+spreadsheet. The production doubles spreadsheet is deliberately **not** a
+development surface, so the reset can never be pointed at it.
 
-The action is guarded by a **test-spreadsheet allow-list** derived from the
-league registry: a league record flagged `test: true` contributes its
-spreadsheet id to `TEST_SPREADSHEET_IDS`. The target is resolved through the
-league allow-list (an unknown selector always resolves to Singles), then the
-resolved id is checked against that list before a single row is read or
-written. Live Singles is refused with a `live_singles` reason and any other
-spreadsheet with a `non_test` reason, so no sheet write can ever land outside a
-test spreadsheet. The reset is a testing tool rather than a coordinator
-feature: the coordinator admin page renders no reset card or button. The panel
-lives in an inert `<template>` and mounts only when the page is opened with the
-non-advertised `?devTestReset=1` flag while a test league is selected, so a
-live league can never show (or use) the wipe path in the normal UI. Test-flagged
-leagues are hidden from the admin league picker, so a coordinator never sees the
-test surface at all.
+The action is guarded by a **development-surface allow-list** derived from the
+league registry: a league record classified `environment: development`
+contributes its spreadsheet id to `TEST_SPREADSHEET_IDS`. Both the singles POC
+and the doubles POC workbooks are development surfaces, so both are wipe-able;
+the production doubles spreadsheet is not. The target is resolved through the
+league allow-list (an unknown selector resolves to the development singles POC),
+then the resolved id is checked against that list before a single row is read or
+written. A spreadsheet outside the list is refused with a `non_test` reason, so
+no sheet write can ever land outside a development spreadsheet. The reset is a
+testing tool rather than a coordinator feature: the coordinator admin page
+renders no reset card or button. The panel lives in an inert `<template>` and
+mounts only when the page is opened with the non-advertised `?devTestReset=1`
+flag while a development league is selected, so a production league can never
+show (or use) the wipe path in the normal UI. Development leagues are hidden
+from the production admin league picker, so a coordinator on production never
+sees the test surfaces at all.
 
 The reset is a dry run by default. `apply: false` returns exactly which sheets
 would change and how many rows each would lose, and writes nothing. With
@@ -174,7 +180,7 @@ Two scopes are available:
 | Scope | Clears |
 |-------|--------|
 | `weekly` (default) | Data rows in every weekly sheet (`Week YYYY-MM-DD` and the `Week template`), discovered by header name |
-| `full` | Weekly data rows **and** the `ClubMembers` roster, returning the test spreadsheet to empty |
+| `full` | Weekly data rows **and** the `ClubMembers` roster, returning the development spreadsheet to empty |
 
 The header row and the `League` settings (including the `league_format` and
 `scoring` metadata and the per-league points table) are never removed, so
@@ -182,9 +188,9 @@ routing and topology stay intact.
 The web-app action `resetTestData` accepts `league`/`spreadsheetId`, `apply`,
 and `scope`; the dev-only panel's `previewTestDataReset` and
 `applyTestDataReset` entry points run the selected scope (`weekly` by default)
-against the configured test spreadsheet (the
-`DOUBLES_TEST_SPREADSHEET_ID` Script Property, defaulting to the test-flagged
-former proof-of-concept workbook).
+against the configured development spreadsheet (the
+`DOUBLES_TEST_SPREADSHEET_ID` Script Property, defaulting to the doubles POC
+workbook).
 
 ## Re-provisioning guard
 
@@ -247,16 +253,16 @@ name. `member_number` is required on every entry and is copied exactly. A
 missing, blank, or duplicate `member_number` is rejected before any write. The
 selector (`league`, or the deprecated `spreadsheetId`) must resolve to a
 registered doubles spreadsheet - the production doubles league or the
-test-flagged former proof-of-concept league.
+doubles POC league.
 
 ### Steps
 
 1. Resolve the selector through the league allow-list; an unknown selector
    resolves to Singles.
-2. Require the resolved id to be a registered doubles spreadsheet. Live
-   Singles is refused with `reason: "live_singles"` and any spreadsheet outside
-   the doubles registry with `reason: "non_doubles"`, before a row is read or
-   written.
+2. Require the resolved id to be a registered doubles spreadsheet. The singles
+   POC league is refused with `reason: "non_doubles"` (it is not a doubles
+   surface) and any spreadsheet outside the doubles registry likewise, before a
+   row is read or written.
 3. Validate the payload: must be a non-empty array, every entry an object with
    a present and unique `member_number`.
 4. Plan: index the existing `ClubMembers` rows by `member_number` and classify

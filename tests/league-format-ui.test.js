@@ -49,31 +49,37 @@ test('the picker lists real leagues, each carrying its own format', () => {
   assert.ok(scorings.includes(LeagueFormat.SCORING.POINTS), 'expected a points league');
 });
 
-test('the first league is the default for an empty or missing storage', () => {
-  assert.equal(LeagueFormat.readStoredLeagueId(null), LeagueFormat.DEFAULT_LEAGUE_ID);
-  assert.equal(LeagueFormat.readStoredLeagueId(makeStorage({})), LeagueFormat.DEFAULT_LEAGUE_ID);
+test('the default league is the first league visible in the environment', () => {
+  // An empty or missing storage selects the serving environment's first
+  // visible league, never a hidden one.
+  assert.equal(LeagueFormat.readStoredLeagueId(null), LeagueFormat.defaultLeagueId());
+  assert.equal(LeagueFormat.readStoredLeagueId(makeStorage({})), LeagueFormat.defaultLeagueId());
   assert.equal(
     LeagueFormat.readStoredFormat(makeStorage({})),
-    LeagueFormat.leagueById(LeagueFormat.DEFAULT_LEAGUE_ID).format
+    LeagueFormat.leagueById(LeagueFormat.defaultLeagueId()).format
   );
 });
 
 test('the selected league persists across reloads', () => {
-  const doubles = LeagueFormat.leagues().find((l) => l.format === LeagueFormat.FORMATS.DOUBLES);
+  const doubles = LeagueFormat.selectableLeagues(LeagueFormat.ENVIRONMENTS.PRODUCTION)[0];
   const storage = makeStorage({});
 
   LeagueFormat.persistLeagueId(storage, doubles.id);
   assert.equal(LeagueFormat.readStoredLeagueId(storage), doubles.id);
   assert.equal(LeagueFormat.readStoredFormat(storage), LeagueFormat.FORMATS.DOUBLES);
 
-  LeagueFormat.persistLeagueId(storage, LeagueFormat.DEFAULT_LEAGUE_ID);
-  assert.equal(LeagueFormat.readStoredLeagueId(storage), LeagueFormat.DEFAULT_LEAGUE_ID);
+  const defaultId = LeagueFormat.defaultLeagueId();
+  LeagueFormat.persistLeagueId(storage, defaultId);
+  assert.equal(LeagueFormat.readStoredLeagueId(storage), defaultId);
 });
 
-test('an unknown stored league id falls back to the default', () => {
+test('an unknown stored league id falls back to the environment default', () => {
   const storage = makeStorage({ [LeagueFormat.STORAGE_KEY]: 'nonsense' });
-  assert.equal(LeagueFormat.readStoredLeagueId(storage), LeagueFormat.DEFAULT_LEAGUE_ID);
-  assert.equal(LeagueFormat.readStoredFormat(storage), LeagueFormat.FORMATS.SINGLES);
+  assert.equal(LeagueFormat.readStoredLeagueId(storage), LeagueFormat.defaultLeagueId());
+  assert.equal(
+    LeagueFormat.readStoredFormat(storage),
+    LeagueFormat.leagueById(LeagueFormat.defaultLeagueId()).format
+  );
 });
 
 test('a legacy stored format migrates to its league', () => {
@@ -96,10 +102,10 @@ test('storage failures fall back to the default instead of throwing', () => {
     }
   };
 
-  assert.equal(LeagueFormat.readStoredLeagueId(throwing), LeagueFormat.DEFAULT_LEAGUE_ID);
+  assert.equal(LeagueFormat.readStoredLeagueId(throwing), LeagueFormat.defaultLeagueId());
   assert.equal(
-    LeagueFormat.persistLeagueId(throwing, LeagueFormat.DEFAULT_LEAGUE_ID),
-    LeagueFormat.DEFAULT_LEAGUE_ID
+    LeagueFormat.persistLeagueId(throwing, LeagueFormat.defaultLeagueId()),
+    LeagueFormat.defaultLeagueId()
   );
 });
 
@@ -110,53 +116,70 @@ test('format and spreadsheet derive from the league record, not a parallel map',
   }
 });
 
-test('leagueIdForFormat resolves a format to the league that carries it', () => {
-  const singles = LeagueFormat.leagues().find((l) => l.format === LeagueFormat.FORMATS.SINGLES);
-  const doubles = LeagueFormat.leagues().find((l) => l.format === LeagueFormat.FORMATS.DOUBLES);
-
-  assert.equal(LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.SINGLES), singles.id);
-  assert.equal(LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.DOUBLES), doubles.id);
+test('leagueIdForFormat resolves a format within the environment', () => {
+  assert.equal(
+    LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.SINGLES, LeagueFormat.ENVIRONMENTS.DEVELOPMENT),
+    'b-rads-league'
+  );
+  assert.equal(
+    LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.DOUBLES, LeagueFormat.ENVIRONMENTS.PRODUCTION),
+    'nightfliers-random-dubs'
+  );
+  assert.equal(
+    LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.DOUBLES, LeagueFormat.ENVIRONMENTS.DEVELOPMENT),
+    'nightfliers-random-dubs-test'
+  );
+  // A format with no league in the environment falls back to its default.
+  assert.equal(
+    LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.SINGLES, LeagueFormat.ENVIRONMENTS.PRODUCTION),
+    'nightfliers-random-dubs'
+  );
 });
 
-test('spreadsheetIdForFormat maps each format to its spreadsheet', () => {
+test('spreadsheetIdForFormat maps each format within the environment', () => {
   assert.equal(
-    LeagueFormat.spreadsheetIdForFormat('singles'),
+    LeagueFormat.spreadsheetIdForFormat('singles', LeagueFormat.ENVIRONMENTS.DEVELOPMENT),
     '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik'
   );
   assert.equal(
-    LeagueFormat.spreadsheetIdForFormat('doubles'),
+    LeagueFormat.spreadsheetIdForFormat('doubles', LeagueFormat.ENVIRONMENTS.PRODUCTION),
     '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g'
+  );
+  assert.equal(
+    LeagueFormat.spreadsheetIdForFormat('doubles', LeagueFormat.ENVIRONMENTS.DEVELOPMENT),
+    '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8'
   );
 });
 
-test('the production doubles league is not test-flagged and the former POC is', () => {
+test('the production doubles league is the only production league', () => {
   const doubles = LeagueFormat.leagueById('nightfliers-random-dubs');
+  const singles = LeagueFormat.leagueById('b-rads-league');
   const testDoubles = LeagueFormat.leagueById('nightfliers-random-dubs-test');
 
+  assert.equal(doubles.environment, LeagueFormat.ENVIRONMENTS.PRODUCTION);
   assert.equal(doubles.spreadsheetId, '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g');
-  assert.notEqual(doubles.test, true);
-  assert.equal(testDoubles.test, true);
+  assert.equal(singles.environment, LeagueFormat.ENVIRONMENTS.DEVELOPMENT);
+  assert.equal(testDoubles.environment, LeagueFormat.ENVIRONMENTS.DEVELOPMENT);
   assert.equal(testDoubles.spreadsheetId, '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8');
 });
 
-test('selectableLeagues hides every test-flagged league from the picker', () => {
+test('selectableLeagues is symmetric: no league appears on both addresses', () => {
   const all = LeagueFormat.leagues();
-  const selectable = LeagueFormat.selectableLeagues();
+  const prod = LeagueFormat.selectableLeagues(LeagueFormat.ENVIRONMENTS.PRODUCTION);
+  const dev = LeagueFormat.selectableLeagues(LeagueFormat.ENVIRONMENTS.DEVELOPMENT);
 
-  assert.ok(all.some((league) => league.test === true), 'expected a test league in the registry');
-  assert.equal(
-    selectable.some((league) => league.test === true),
-    false,
-    'a coordinator must never see a test-flagged league'
-  );
-  assert.deepEqual(
-    selectable.map((league) => league.id),
-    all.filter((league) => league.test !== true).map((league) => league.id)
-  );
+  assert.deepEqual(prod.map((league) => league.id), ['nightfliers-random-dubs']);
+  assert.deepEqual(dev.map((league) => league.id), ['b-rads-league', 'nightfliers-random-dubs-test']);
 
-  // Doubles still resolves to the production league for format-based lookups.
+  const prodIds = new Set(prod.map((league) => league.id));
+  for (const league of dev) {
+    assert.equal(prodIds.has(league.id), false, league.id + ' must not be visible on both addresses');
+  }
+  assert.equal(prod.length + dev.length, all.length);
+
+  // Doubles still resolves to the production league on the production address.
   assert.equal(
-    LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.DOUBLES),
+    LeagueFormat.leagueIdForFormat(LeagueFormat.FORMATS.DOUBLES, LeagueFormat.ENVIRONMENTS.PRODUCTION),
     'nightfliers-random-dubs'
   );
 });
@@ -229,13 +252,14 @@ test('scoringForLeague reads the league record, matching the registry', () => {
   }
 });
 
-test('an unknown league or value normalizes to the registry defaults', () => {
+test('an unknown league or value normalizes to the environment default', () => {
   const fallback = LeagueFormat.rulesForLeague('not-a-league');
-  assert.equal(fallback.format, LeagueFormat.FORMATS.SINGLES);
-  assert.equal(fallback.scoring, LeagueFormat.SCORING.TAGS);
-  assert.equal(fallback.usesTags, true);
-  assert.equal(fallback.usesPoints, false);
-  assert.equal(fallback.hasPairs, false);
+  const defaultLeague = LeagueFormat.leagueById(LeagueFormat.defaultLeagueId());
+  assert.equal(fallback.format, defaultLeague.format);
+  assert.equal(fallback.scoring, defaultLeague.scoring);
+  assert.equal(fallback.usesTags, defaultLeague.scoring === LeagueFormat.SCORING.TAGS);
+  assert.equal(fallback.usesPoints, defaultLeague.scoring === LeagueFormat.SCORING.POINTS);
+  assert.equal(fallback.hasPairs, defaultLeague.format === LeagueFormat.FORMATS.DOUBLES);
 
   // A typo degrades to the default instead of coercing into the other value.
   assert.equal(LeagueFormat.normalizeFormat('triples'), LeagueFormat.FORMATS.SINGLES);

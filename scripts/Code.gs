@@ -7,17 +7,19 @@
  * Deploy as: Web App -> Execute as: Me -> Who has access: Anyone
  */
 
-// Singles league spreadsheet.
+// Singles POC spreadsheet. It is a development surface: offered only on the
+// development address and targetable by the guarded test-data reset. It is the
+// server's default for an unknown selector so a malformed request can never
+// reach production data.
 const SPREADSHEET_ID = '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik';
 
-// Production doubles league spreadsheet (Nightfliers Random Dubs). The singles
-// spreadsheet above stays the default for every caller that does not select
-// another league.
+// Production doubles league spreadsheet (Nightfliers Random Doubles). This is the
+// only production league, so no test tooling may ever write to it.
 const SPREADSHEET_ID_DOUBLES = '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g';
 
-// Former proof-of-concept doubles spreadsheet, kept as a test-flagged league
-// entry so development and the guarded test-data reset still have a safe
-// surface. It is never production data and no production tooling targets it.
+// Former proof-of-concept doubles spreadsheet. It is a development surface: a
+// development league entry so development and the guarded test-data reset have
+// a safe doubles target. It is never production data.
 const SPREADSHEET_ID_DOUBLES_TEST = '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8';
 
 // Supported league formats. `league_format` gates format-specific behavior so
@@ -34,6 +36,13 @@ const LEAGUE_FORMATS = [LEAGUE_FORMAT_SINGLES, LEAGUE_FORMAT_DOUBLES];
 const SCORING_TAGS = 'tags';
 const SCORING_POINTS = 'points';
 const SCORING_METHODS = [SCORING_TAGS, SCORING_POINTS];
+
+// Environment classification for league records. The app is served from a
+// production worker and a development worker; each league belongs to exactly
+// one environment. The test-tooling allow-list is derived from the development
+// records, so the classification (not the caller) decides what may be wiped.
+const ENVIRONMENT_PRODUCTION = 'production';
+const ENVIRONMENT_DEVELOPMENT = 'development';
 
 // Name of the doubles weekly template tab (not a dated Week sheet, so it is
 // ignored by the Week YYYY-MM-DD discovery logic).
@@ -348,34 +357,37 @@ const LEAGUE_SHEET_HEADERS_DOUBLES = LEAGUE_SHEET_HEADERS_EXTENDED;
 const LEAGUE_ID_SINGLES = 'b-rads-league';
 const LEAGUE_ID_DOUBLES = 'nightfliers-random-dubs';
 const LEAGUE_ID_DOUBLES_TEST = 'nightfliers-random-dubs-test';
+// Fallback for an unknown or missing selector. It is a development surface (the
+// singles POC league), so a malformed request can never resolve to production
+// data; every known caller sends an explicit allow-listed selector.
 const DEFAULT_LEAGUE_ID = LEAGUE_ID_SINGLES;
 
 // Server-side allow-list and league table: opaque league id -> authorized
-// spreadsheet id plus the deploy-time authoritative format and scoring. A
-// client can only ever select one of these spreadsheets; a raw Google
-// spreadsheet id is never accepted as storage authority. Routing derives the
-// capability rules from this table, never from the league id directly.
+// spreadsheet id plus the deploy-time authoritative format, scoring, and
+// environment. A client can only ever select one of these spreadsheets; a raw
+// Google spreadsheet id is never accepted as storage authority. Routing
+// derives the capability rules from this table, never from the league id
+// directly.
 //
-// The doubles league points at the production workbook and is NOT flagged as a
-// test surface, so no test tooling (in particular the guarded test-data reset)
-// can ever write to production. The former proof-of-concept workbook is kept
-// as a second, test-flagged doubles entry so development still has a safe
-// target; it is hidden from the admin league picker.
+// `nightfliers-random-dubs` is the only production league. The singles POC and
+// the former proof-of-concept doubles workbook are development surfaces; the
+// guarded test-data reset allow-list is derived from exactly those records, so
+// it can never target the production spreadsheet.
 const LEAGUE_SPREADSHEETS = [
-  { id: LEAGUE_ID_SINGLES, format: LEAGUE_FORMAT_SINGLES, scoring: SCORING_TAGS, spreadsheetId: SPREADSHEET_ID },
-  { id: LEAGUE_ID_DOUBLES, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES },
-  { id: LEAGUE_ID_DOUBLES_TEST, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES_TEST, test: true }
+  { id: LEAGUE_ID_DOUBLES, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES, environment: ENVIRONMENT_PRODUCTION },
+  { id: LEAGUE_ID_SINGLES, format: LEAGUE_FORMAT_SINGLES, scoring: SCORING_TAGS, spreadsheetId: SPREADSHEET_ID, environment: ENVIRONMENT_DEVELOPMENT },
+  { id: LEAGUE_ID_DOUBLES_TEST, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES_TEST, environment: ENVIRONMENT_DEVELOPMENT }
 ];
 
 // Spreadsheets the guarded test-data reset may ever write to, derived from the
-// league records flagged as test surfaces. Only the former proof-of-concept
-// doubles spreadsheet is flagged; the production doubles and live singles
-// spreadsheets hold live league data and are never flagged. Deriving the list
-// from the league allow-list keeps a single source of truth for which
-// spreadsheet is a test surface, and a raw client-supplied id can never
-// authorize a write.
+// league records classified as development surfaces. Both the singles POC and
+// the doubles POC workbooks are development surfaces; the production doubles
+// spreadsheet holds live league data and is never in the list. Deriving the
+// list from the league allow-list keeps a single source of truth for which
+// spreadsheet may be wiped, and a raw client-supplied id can never authorize a
+// write.
 const TEST_SPREADSHEET_IDS = LEAGUE_SPREADSHEETS.filter(function(record) {
-  return record.test === true;
+  return record.environment === ENVIRONMENT_DEVELOPMENT;
 }).map(function(record) {
   return record.spreadsheetId;
 });
@@ -1452,8 +1464,9 @@ function handleProvisionDoubles(data) {
 /**
  * Web-app action: preview or apply the seed-only roster reload. The target is
  * resolved through the league allow-list and then required to be a registered
- * doubles spreadsheet (production or test), so live Singles and any
- * non-doubles spreadsheet are refused before a row is read or written.
+ * doubles spreadsheet (production or development POC), so any non-doubles
+ * spreadsheet (including the singles POC) is refused before a row is read or
+ * written.
  * Defaults to a dry run that reports exactly which member_numbers would be
  * inserted, updated, or left unchanged.
  *
@@ -2265,45 +2278,36 @@ function handleMigrateDetagColumnDrops(data) {
 // ─── Test-data reset ─────────────────────────────────────────────────────────
 
 /**
- * Guards a reset against the test-spreadsheet allow-list. Returns
- * { ok: true } or { ok: false, reason, error }. The singles spreadsheet is
- * called out explicitly so the refusal message names live data rather than a
- * generic non-test refusal.
+ * Guards a reset against the development-surface allow-list. Returns
+ * { ok: true } or { ok: false, reason, error }.
+ *
+ * Rule: only a spreadsheet whose league record is classified as a development
+ * surface may be reset. The production spreadsheet is refused, so the wipe
+ * path can never touch live league data. The singles POC workbook is a
+ * development surface now, so it is deliberately wipe-able from the
+ * development address; the earlier `live_singles` special case is gone
+ * because that spreadsheet is no longer a live league.
  */
 function assertTestSpreadsheet(spreadsheetId) {
   if (isTestSpreadsheetId(spreadsheetId)) return { ok: true };
-  if (spreadsheetId === SPREADSHEET_ID) {
-    return {
-      ok: false,
-      reason: 'live_singles',
-      error: 'Refusing to reset the live Singles spreadsheet; only test spreadsheets may be reset.'
-    };
-  }
   return {
     ok: false,
     reason: 'non_test',
-    error: 'Refusing to reset a non-test spreadsheet; only test spreadsheets may be reset.'
+    error: 'Refusing to reset a non-development spreadsheet; only development (POC) spreadsheets may be reset.'
   };
 }
 
 /**
  * Guards the seed-only roster reload. The seed is the production roster-fill
  * path, so it may target any registered doubles spreadsheet - the production
- * doubles league or the test-flagged former proof-of-concept league. The live
- * Singles spreadsheet is still refused explicitly so a roster load can never
- * touch it, and a spreadsheet outside the doubles registry is refused before
- * any row is read or written.
+ * doubles league or the development doubles POC league. A non-doubles
+ * spreadsheet is refused before any row is read or written. The singles POC
+ * league is such a surface, so it is refused as `non_doubles` rather than the
+ * former `live_singles` case.
  */
 function assertSeedableSpreadsheet(spreadsheetId) {
   var record = leagueRecordBySpreadsheetId(spreadsheetId);
   if (record && record.format === LEAGUE_FORMAT_DOUBLES) return { ok: true };
-  if (spreadsheetId === SPREADSHEET_ID) {
-    return {
-      ok: false,
-      reason: 'live_singles',
-      error: 'Refusing to seed the live Singles spreadsheet; the roster seed is a doubles path.'
-    };
-  }
   return {
     ok: false,
     reason: 'non_doubles',
@@ -2316,8 +2320,8 @@ function assertSeedableSpreadsheet(spreadsheetId) {
  * each would lose. Weekly sheets are discovered by header name (so dated Week
  * tabs and the Week template are covered without a tab-name hard-list).
  * `scope: 'weekly'` (default) plans only weekly data rows; `scope: 'full'`
- * also plans the ClubMembers roster, returning the test spreadsheet to its
- * header-only minimum. Writes nothing and returns the sheet references
+ * also plans the ClubMembers roster, returning the development spreadsheet to
+ * its header-only minimum. Writes nothing and returns the sheet references
  * separately so the caller can apply the plan.
  */
 function planTestDataReset(spreadsheet, options) {
@@ -2358,7 +2362,7 @@ function planTestDataReset(spreadsheet, options) {
 /**
  * Applies a plan from planTestDataReset by deleting every data row below the
  * header. Deleting (rather than blanking) returns each sheet to its header-only
- * minimum. Only called after the test-spreadsheet guard has passed.
+ * minimum. Only called after the development-surface guard has passed.
  */
 function applyTestDataResetPlan(plans) {
   for (var i = 0; i < plans.length; i++) {
@@ -2390,15 +2394,15 @@ function summarizeTestDataReset(plan) {
 }
 
 /**
- * Guarded test-data reset. Refuses any spreadsheet not on the test allow-list
- * before planning or writing, so no sheet outside a test spreadsheet is ever
- * touched. Dry-run by default: with `apply: false` it writes nothing and
- * reports exactly which rows would be removed. With `apply: true` it deletes
- * the planned rows down to the header.
+ * Guarded test-data reset. Refuses any spreadsheet not on the development
+ * allow-list before planning or writing, so no sheet outside a development
+ * (POC) spreadsheet is ever touched. Dry-run by default: with `apply: false`
+ * it writes nothing and reports exactly which rows would be removed. With
+ * `apply: true` it deletes the planned rows down to the header.
  *
  * options:
  *   spreadsheetId (required) - resolved allow-listed id; checked against the
- *                               test allow-list before any work.
+ *                               development allow-list before any work.
  *   apply (boolean)           - false (default) previews, true writes.
  *   scope ('weekly'|'full')   - weekly data only, or also the roster.
  */
@@ -2428,9 +2432,9 @@ function resetTestData(spreadsheet, options) {
 
 /**
  * Web-app action: preview or apply the guarded test-data reset. The target is
- * resolved through the league allow-list, then checked against the test
- * allow-list; live Singles and any non-test spreadsheet are refused before a
- * single row is read or written. Defaults to a dry run.
+ * resolved through the league allow-list, then checked against the development
+ * allow-list; the production spreadsheet and any non-development spreadsheet
+ * are refused before a single row is read or written. Defaults to a dry run.
  *
  * Inputs: league/spreadsheetId selector, apply (boolean, default false),
  * scope ('weekly' default | 'full').
