@@ -127,11 +127,6 @@
       margin: 0;
       font-size: 1.25rem;
     }
-    details.card > summary .summary-hint {
-      font-size: 0.8125rem;
-      color: #888;
-      font-weight: 400;
-    }
     details.card > summary::after {
       content: '\25B6';
       font-size: 1.125rem;
@@ -146,6 +141,63 @@
     details.card > .card-body {
       padding: 0 1.25rem 1.25rem;
     }
+    /* Card headers stay one scannable row: title on the left and an info
+       icon on the right. The icon opens the card's descriptive text on tap
+       or click (never a hover-only tooltip) and is a 44px touch target. */
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .card-header h2 {
+      margin-bottom: 0;
+    }
+    .info-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      margin: 0;
+      padding: 0;
+      border: 1px solid #d5dee8;
+      border-radius: 50%;
+      background: #eef2f7;
+      color: #33475b;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 1.125rem;
+      font-style: italic;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .info-toggle:hover { background: #e2e8f0; }
+    .info-toggle:focus-visible {
+      outline: 2px solid #0066cc;
+      outline-offset: 2px;
+    }
+    .info-toggle[aria-expanded="true"] {
+      background: #0066cc;
+      border-color: #0066cc;
+      color: #fff;
+    }
+    .card-info {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 0.75rem 0.875rem;
+      margin-bottom: 1rem;
+      user-select: text;
+    }
+    .card-info[hidden] { display: none; }
+    .card-info .help-text { margin-bottom: 0; }
+    /* Accordion cards: the icon rides the summary row next to the chevron. */
+    details.card > summary .info-toggle { margin-left: auto; }
     /* Members accordion: one full-width summary row and a horizontally
        scrollable table keep it usable on a phone, and the summary and
        Refresh button become comfortable touch targets. */
@@ -237,12 +289,17 @@
 
   <!-- 0. League Picker -->
   <div class="card" id="leaguePickerCard">
-    <h2>League</h2>
-    <p class="help-text">
-      Choose which league you are managing. The picker lists the real leagues
-      and each one carries its own format; the selection is saved in this
-      browser and the first league remains the default.
-    </p>
+    <div class="card-header">
+      <h2>League</h2>
+      <button type="button" class="info-toggle" aria-expanded="false" aria-controls="leaguePickerInfo" aria-label="About League" onclick="toggleCardInfo(event, 'leaguePickerInfo')">i</button>
+    </div>
+    <div class="card-info" id="leaguePickerInfo" role="note" hidden>
+      <p class="help-text">
+        Choose which league you are managing. The picker lists the real leagues
+        and each one carries its own format; the selection is saved in this
+        browser and the first league remains the default.
+      </p>
+    </div>
     <div class="field-group">
       <label for="leaguePicker">League</label>
       <select id="leaguePicker" onchange="onLeagueChange()"></select>
@@ -256,10 +313,17 @@
     <summary>
       <div class="summary-text">
         <h2>League Settings</h2>
-        <span class="summary-hint">Configure league settings</span>
       </div>
+      <button type="button" class="info-toggle" aria-expanded="false" aria-controls="leagueCardInfo" aria-label="About League Settings" onclick="toggleCardInfo(event, 'leagueCardInfo')">i</button>
     </summary>
     <div class="card-body">
+      <div class="card-info" id="leagueCardInfo" role="note" hidden>
+        <p class="help-text">Configure league settings</p>
+        <p class="help-text">
+          Format and scoring are set when a league is provisioned and are
+          shown here read-only; the registry is authoritative for routing.
+        </p>
+      </div>
       <div id="leagueMissing">
         <p class="help-text">
           The <code>League</code> sheet does not exist in the spreadsheet yet.
@@ -280,10 +344,6 @@
             <label>Scoring</label>
             <div class="badge-row" id="settingsScoring"></div>
           </div>
-          <p class="help-text">
-            Format and scoring are set when a league is provisioned and are
-            shown here read-only; the registry is authoritative for routing.
-          </p>
           <div class="field-group">
             <label for="league_name">League Name</label>
             <input type="text" id="league_name" placeholder="">
@@ -334,15 +394,18 @@
     <summary>
       <div class="summary-text">
         <h2>Members</h2>
-        <span class="summary-hint">Doubles season totals</span>
       </div>
+      <button type="button" class="info-toggle" aria-expanded="false" aria-controls="membersCardInfo" aria-label="About Members" onclick="toggleCardInfo(event, 'membersCardInfo')">i</button>
     </summary>
     <div class="card-body">
-      <p class="help-text">
-        Doubles members with their <strong>Season Total</strong>: the sum of
-        each member's points for every week played. A member with no points yet
-        shows 0.
-      </p>
+      <div class="card-info" id="membersCardInfo" role="note" hidden>
+        <p class="help-text">Doubles season totals</p>
+        <p class="help-text">
+          Doubles members with their <strong>Season Total</strong>: the sum of
+          each member's points for every week played. A member with no points yet
+          shows 0.
+        </p>
+      </div>
       <button type="button" id="btnLoadMembers" onclick="loadMembers()">Refresh Members</button>
       <div id="membersTable" style="display:none;"></div>
       <div id="membersResult" class="status hidden"></div>
@@ -351,8 +414,13 @@
 
   <!-- 3. Active League Date -->
   <div class="card" id="activeLeagueDateCard">
-    <h2>Active League Date</h2>
-    <p class="help-text">Select a date to work with. Dates with existing sheets will unlock the workflow.</p>
+    <div class="card-header">
+      <h2>Active League Date</h2>
+      <button type="button" class="info-toggle" aria-expanded="false" aria-controls="activeLeagueDateInfo" aria-label="About Active League Date" onclick="toggleCardInfo(event, 'activeLeagueDateInfo')">i</button>
+    </div>
+    <div class="card-info" id="activeLeagueDateInfo" role="note" hidden>
+      <p class="help-text">Select a date to work with. Dates with existing sheets will unlock the workflow.</p>
+    </div>
     <div class="field-group">
       <label for="activeLeagueDate">Active League Date</label>
       <input type="date" id="activeLeagueDate" onchange="onActiveLeagueDateChange()">
@@ -361,12 +429,17 @@
   </div>
 
   <!-- 4. Create League Day -->
-  <div class="card">
-    <h2>Create League Day</h2>
-    <p class="help-text">
-      Create a new tab in the spreadsheet for the Active League Date. The tab will be named
-      <code>Week YYYY-MM-DD</code> with the standard 48-column roster template.
-    </p>
+  <div class="card" id="createLeagueDayCard">
+    <div class="card-header">
+      <h2>Create League Day</h2>
+      <button type="button" class="info-toggle" aria-expanded="false" aria-controls="createLeagueDayInfo" aria-label="About Create League Day" onclick="toggleCardInfo(event, 'createLeagueDayInfo')">i</button>
+    </div>
+    <div class="card-info" id="createLeagueDayInfo" role="note" hidden>
+      <p class="help-text">
+        Create a new tab in the spreadsheet for the Active League Date. The tab will be named
+        <code>Week YYYY-MM-DD</code> with the standard 48-column roster template.
+      </p>
+    </div>
     <div id="createLeagueDaySheetExists" style="display:none;"></div>
     <form id="createForm" onsubmit="createWeeklyTab(event)" style="display:none;">
       <button type="submit" id="btnCreate">Create League Day</button>
@@ -384,21 +457,31 @@
 
     <!-- 5. Player Sign-In QR Code -->
     <div class="card" id="playerSignInCard">
-      <h2>Player Sign-In QR Code</h2>
-      <p class="help-text">
-        Display a QR code that players can scan to open the sign-in page on their phone.
-      </p>
+      <div class="card-header">
+        <h2>Player Sign-In QR Code</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="playerSignInInfo" aria-label="About Player Sign-In QR Code" onclick="toggleCardInfo(event, 'playerSignInInfo')">i</button>
+      </div>
+      <div class="card-info" id="playerSignInInfo" role="note" hidden>
+        <p class="help-text">
+          Display a QR code that players can scan to open the sign-in page on their phone.
+        </p>
+      </div>
       <button type="button" id="btnShowQR" onclick="showSignInQR()">Show Player Sign-In QR Code</button>
     </div>
 
     <!-- 6. Pre-Round Review -->
     <div class="card" id="preRoundCard">
-      <h2>Pre-Round Review</h2>
-      <p class="help-text">
-        Review participating players and calculate ace pot and CTP totals.
-        The calculated totals are based on League settings and checked-in players.
-        You can override the final totals before saving.
-      </p>
+      <div class="card-header">
+        <h2>Pre-Round Review</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="preRoundInfo" aria-label="About Pre-Round Review" onclick="toggleCardInfo(event, 'preRoundInfo')">i</button>
+      </div>
+      <div class="card-info" id="preRoundInfo" role="note" hidden>
+        <p class="help-text">
+          Review participating players and calculate ace pot and CTP totals.
+          The calculated totals are based on League settings and checked-in players.
+          You can override the final totals before saving.
+        </p>
+      </div>
       <button type="button" id="btnLoadPreRound" onclick="loadPreRoundReview()">Load Review</button>
       <div id="preRoundReviewData" style="display:none;">
         <h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Participation</h3>
@@ -462,12 +545,17 @@
 
     <!-- 7. UDisc Import -->
     <div class="card" id="udiscImportCard">
-      <h2>UDisc Import</h2>
-      <p class="help-text">
-        Upload a UDisc <code>Event results</code> xlsx export to import scores
-        and player data into a weekly sheet. Preview is write-free. Approval
-        commits the import.
-      </p>
+      <div class="card-header">
+        <h2>UDisc Import</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="udiscImportInfo" aria-label="About UDisc Import" onclick="toggleCardInfo(event, 'udiscImportInfo')">i</button>
+      </div>
+      <div class="card-info" id="udiscImportInfo" role="note" hidden>
+        <p class="help-text">
+          Upload a UDisc <code>Event results</code> xlsx export to import scores
+          and player data into a weekly sheet. Preview is write-free. Approval
+          commits the import.
+        </p>
+      </div>
       <div class="field-group">
         <label for="udiscFile">UDisc Export (.xlsx)</label>
         <input type="file" id="udiscFile" accept=".xlsx,.xls">
@@ -479,12 +567,17 @@
 
     <!-- 8. Tag Calculation -->
     <div class="card" id="tagCalcCard">
-      <h2>Tag Calculation</h2>
-      <p class="help-text">
-        Calculate tag assignments for all players in a weekly league.
-        Every player in the selected week's sheet is included.
-        Preview is write-free. Confirm writes <code>out_tag</code> values.
-      </p>
+      <div class="card-header">
+        <h2>Tag Calculation</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="tagCalcInfo" aria-label="About Tag Calculation" onclick="toggleCardInfo(event, 'tagCalcInfo')">i</button>
+      </div>
+      <div class="card-info" id="tagCalcInfo" role="note" hidden>
+        <p class="help-text">
+          Calculate tag assignments for all players in a weekly league.
+          Every player in the selected week's sheet is included.
+          Preview is write-free. Confirm writes <code>out_tag</code> values.
+        </p>
+      </div>
       <button type="button" id="btnCalcTags" onclick="calculateTags()">Calculate Tags</button>
       <div id="tagCalcPreview" style="display:none;"></div>
       <div id="tagCalcResult" class="status hidden"></div>
@@ -492,13 +585,18 @@
 
     <!-- 9. Finalize Round -->
     <div class="card" id="finalizeRoundCard">
-      <h2>Finalize Round</h2>
-      <p class="help-text">
-        Propagate <code>out_tag</code> values from the weekly sheet to each
-        matching ClubMembers record's <code>current_tag</code>. Only players
-        with a confirmed, nonblank <code>out_tag</code> and a matching
-        ClubMembers record are updated.
-      </p>
+      <div class="card-header">
+        <h2>Finalize Round</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="finalizeRoundInfo" aria-label="About Finalize Round" onclick="toggleCardInfo(event, 'finalizeRoundInfo')">i</button>
+      </div>
+      <div class="card-info" id="finalizeRoundInfo" role="note" hidden>
+        <p class="help-text">
+          Propagate <code>out_tag</code> values from the weekly sheet to each
+          matching ClubMembers record's <code>current_tag</code>. Only players
+          with a confirmed, nonblank <code>out_tag</code> and a matching
+          ClubMembers record are updated.
+        </p>
+      </div>
       <button type="button" id="btnPreviewFinalize" onclick="previewFinalizeRound()">Preview</button>
       <div id="finalizeRoundPreview" style="display:none;"></div>
       <div id="finalizeRoundResult" class="status hidden"></div>
@@ -506,16 +604,21 @@
 
     <!-- 9b. Points results (doubles mode only) -->
     <div class="card" id="pointsCalcCard" style="display:none;">
-      <h2>Points Results</h2>
-      <p class="help-text">
-        Doubles weekly points: 1st=2, 2nd=1.5, 3rd=1, every other
-        participant=0.5. Both partners receive the same value and a solo
-        receives the full value. Points are computed from the committed
-        placement when the UDisc import is committed, and this panel is a
-        read-only view of those committed results. Season totals are summed
-        live from them, so there is nothing to confirm or finalize. Tag data
-        is never touched.
-      </p>
+      <div class="card-header">
+        <h2>Points Results</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="pointsCalcInfo" aria-label="About Points Results" onclick="toggleCardInfo(event, 'pointsCalcInfo')">i</button>
+      </div>
+      <div class="card-info" id="pointsCalcInfo" role="note" hidden>
+        <p class="help-text">
+          Doubles weekly points: 1st=2, 2nd=1.5, 3rd=1, every other
+          participant=0.5. Both partners receive the same value and a solo
+          receives the full value. Points are computed from the committed
+          placement when the UDisc import is committed, and this panel is a
+          read-only view of those committed results. Season totals are summed
+          live from them, so there is nothing to confirm or finalize. Tag data
+          is never touched.
+        </p>
+      </div>
       <button type="button" id="btnLoadPoints" onclick="loadPoints()">Load Results</button>
       <div id="pointsPreview" style="display:none;"></div>
       <div id="pointsResult" class="status hidden"></div>
@@ -527,13 +630,18 @@
        the recurring weekly workflow stays on top. Member setup is covered by
        provisioning, so no separate club-members card is rendered. -->
   <div class="card" id="doublesProvisionCard" style="display:none;">
-    <h2>Doubles Provisioning</h2>
-    <p class="help-text">
-      Create the League (with <code>league_format=doubles</code>), ClubMembers,
-      and Week template tabs in the Doubles spreadsheet, and seed its roster
-      from the Singles league. Safe to run repeatedly; the Singles
-      spreadsheet is never written.
-    </p>
+    <div class="card-header">
+      <h2>Doubles Provisioning</h2>
+      <button type="button" class="info-toggle" aria-expanded="false" aria-controls="doublesProvisionInfo" aria-label="About Doubles Provisioning" onclick="toggleCardInfo(event, 'doublesProvisionInfo')">i</button>
+    </div>
+    <div class="card-info" id="doublesProvisionInfo" role="note" hidden>
+      <p class="help-text">
+        Create the League (with <code>league_format=doubles</code>), ClubMembers,
+        and Week template tabs in the Doubles spreadsheet, and seed its roster
+        from the Singles league. Safe to run repeatedly; the Singles
+        spreadsheet is never written.
+      </p>
+    </div>
     <button type="button" id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet()">Provision Doubles Spreadsheet</button>
     <div id="doublesProvisionResult" class="status hidden"></div>
   </div>
@@ -545,13 +653,18 @@
        and the server allow-list still refuses every non-test spreadsheet. -->
   <template id="testResetDevTemplate">
     <div class="card" id="testResetCard">
-      <h2>Test Data Reset (dev)</h2>
-      <p class="help-text">
-        Clear test data from the doubles test spreadsheet. The preview lists
-        every row that would be removed and writes nothing; the reset then
-        deletes those rows down to the header. Live Singles and any non-test
-        spreadsheet are refused by the server before any write.
-      </p>
+      <div class="card-header">
+        <h2>Test Data Reset (dev)</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="testResetInfo" aria-label="About Test Data Reset" onclick="toggleCardInfo(event, 'testResetInfo')">i</button>
+      </div>
+      <div class="card-info" id="testResetInfo" role="note" hidden>
+        <p class="help-text">
+          Clear test data from the doubles test spreadsheet. The preview lists
+          every row that would be removed and writes nothing; the reset then
+          deletes those rows down to the header. Live Singles and any non-test
+          spreadsheet are refused by the server before any write.
+        </p>
+      </div>
       <div class="field-group">
         <label for="testResetScope">Scope</label>
         <select id="testResetScope">
@@ -623,6 +736,45 @@
       var league = getSelectedLeague();
       return league ? league.spreadsheetId : '';
     }
+
+    // ─── Card info icons ──────────────────────────────────────────────────
+    // Each card's descriptive text lives in a hidden panel behind the info
+    // icon at the right of its header. The icon is a real button (tap, click,
+    // keyboard), never a hover-only tooltip; Escape closes an open panel.
+    function closeCardInfo() {
+      var panels = document.querySelectorAll('.card-info');
+      for (var i = 0; i < panels.length; i++) {
+        panels[i].hidden = true;
+      }
+      var buttons = document.querySelectorAll('.info-toggle');
+      for (var j = 0; j < buttons.length; j++) {
+        buttons[j].setAttribute('aria-expanded', 'false');
+      }
+    }
+
+    function toggleCardInfo(event, panelId) {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      var panel = document.getElementById(panelId);
+      if (!panel) return;
+      var button = event && event.currentTarget ? event.currentTarget : null;
+      var willOpen = panel.hidden;
+      closeCardInfo();
+      if (!willOpen) return;
+      // A panel inside a collapsed accordion needs the card open to be seen.
+      if (button && button.closest) {
+        var details = button.closest('details');
+        if (details) details.open = true;
+      }
+      panel.hidden = false;
+      if (button) button.setAttribute('aria-expanded', 'true');
+    }
+
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') closeCardInfo();
+    });
 
     // ─── Format / scoring badges and read-only display ────────────────────
     // The registry is the routing authority, so the picker and the settings
