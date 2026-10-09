@@ -251,6 +251,27 @@
     <div id="doublesProvisionResult" class="status hidden"></div>
   </div>
 
+  <!-- 0c. Test Data Reset (test league only) -->
+  <div class="card" id="testResetCard" style="display:none;">
+    <h2>Test Data Reset</h2>
+    <p class="help-text">
+      Clear test data from the doubles test spreadsheet. The preview lists
+      every row that would be removed and writes nothing; the reset then
+      deletes those rows down to the header. Live Singles and any non-test
+      spreadsheet are refused by the server before any write.
+    </p>
+    <div class="field-group">
+      <label for="testResetScope">Scope</label>
+      <select id="testResetScope">
+        <option value="weekly">Weekly rows only</option>
+        <option value="full">Weekly rows + roster (empty)</option>
+      </select>
+    </div>
+    <button type="button" id="btnPreviewTestReset" onclick="previewTestDataReset()">Preview Reset</button>
+    <button type="button" id="btnApplyTestReset" onclick="applyTestDataReset()">Reset Test Data</button>
+    <div id="testResetResult" class="status hidden"></div>
+  </div>
+
   <!-- 1. League Settings -->
   <details class="card" id="leagueCard">
     <summary>
@@ -732,6 +753,12 @@
       var provisionCard = document.getElementById('doublesProvisionCard');
       if (provisionCard) provisionCard.style.display = rules.hasPairs ? '' : 'none';
 
+      // The test-data reset only ever appears for a league the registry flags
+      // as a test surface; the server enforces the same allow-list, so a live
+      // league never shows (or can use) the wipe path.
+      var testResetCard = document.getElementById('testResetCard');
+      if (testResetCard) testResetCard.style.display = league && league.test === true ? '' : 'none';
+
       // Points tooling follows the scoring method.
       var pointsCard = document.getElementById('pointsCalcCard');
       if (pointsCard) pointsCard.style.display = rules.usesPoints ? '' : 'none';
@@ -940,6 +967,77 @@
           btn.textContent = 'Provision Doubles Spreadsheet';
         }
       }
+    }
+
+    function testResetScope() {
+      var el = document.getElementById('testResetScope');
+      return el && el.value === 'full' ? 'full' : 'weekly';
+    }
+
+    function setTestResetStatus(type, html) {
+      var el = document.getElementById('testResetResult');
+      if (!el) return;
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    // Preview or apply the guarded test-data reset. Both buttons call the same
+    // path; `apply` decides whether the server writes or only reports. The
+    // server refuses live Singles and non-test spreadsheets regardless of what
+    // this page sends.
+    async function runTestDataReset(apply) {
+      var previewBtn = document.getElementById('btnPreviewTestReset');
+      var applyBtn = document.getElementById('btnApplyTestReset');
+      if (previewBtn) previewBtn.disabled = true;
+      if (applyBtn) applyBtn.disabled = true;
+      setTestResetStatus('pending', apply ? 'Resetting test data...' : 'Previewing test-data reset...');
+      log(apply ? 'Resetting test data' : 'Previewing test-data reset');
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'resetTestData',
+            spreadsheetId: getSpreadsheetId(),
+            apply: apply,
+            scope: testResetScope()
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setTestResetStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          return;
+        }
+
+        var verb = apply ? 'Removed' : 'Would remove';
+        setTestResetStatus('ok',
+          '<strong>' + verb + ' ' + data.total_rows_removed + ' row(s)</strong> across ' +
+          data.sheets_changed + ' sheet(s).' + (apply ? '' : ' No writes were made.'));
+        log((apply ? 'Reset test data: removed ' : 'Previewed test-data reset: ') +
+          data.total_rows_removed + ' row(s) across ' + data.sheets_changed + ' sheet(s)');
+
+        if (apply) {
+          await loadWeeklyTabs();
+          await loadMembers();
+        }
+      } catch (err) {
+        setTestResetStatus('error', '<strong>Request failed:</strong> ' + err.message);
+        log('FAILED test-data reset: ' + err.message);
+      } finally {
+        if (previewBtn) previewBtn.disabled = false;
+        if (applyBtn) applyBtn.disabled = false;
+      }
+    }
+
+    function previewTestDataReset() {
+      return runTestDataReset(false);
+    }
+
+    function applyTestDataReset() {
+      return runTestDataReset(true);
     }
 
     function showSignInQR() {

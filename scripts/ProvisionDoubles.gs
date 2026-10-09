@@ -174,6 +174,46 @@ function applyDetagColumnDrops() {
 }
 
 /**
+ * Operator entry point: dry-run the guarded test-data reset for the doubles
+ * test spreadsheet. Writes nothing and reports exactly which rows would be
+ * removed. The configured id must be on the test allow-list or the reset
+ * refuses, so the live Singles spreadsheet can never be targeted.
+ *
+ * Usage (Apps Script editor): run `previewTestDataReset`.
+ */
+function previewTestDataReset() {
+  var spreadsheetId = getConfiguredDoublesSpreadsheetId();
+  var report = resetTestData(SpreadsheetApp.openById(spreadsheetId), {
+    spreadsheetId: spreadsheetId,
+    apply: false,
+    scope: 'full'
+  });
+
+  Logger.log('Test-data reset preview:\n' + JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
+ * Operator entry point: apply the guarded test-data reset to the doubles test
+ * spreadsheet, clearing every weekly data row and the roster down to the
+ * header-only minimum. Refuses live Singles and any non-test spreadsheet before
+ * any write. Run `previewTestDataReset` first to inspect the exact rows.
+ *
+ * Usage (Apps Script editor): run `applyTestDataReset`.
+ */
+function applyTestDataReset() {
+  var spreadsheetId = getConfiguredDoublesSpreadsheetId();
+  var report = resetTestData(SpreadsheetApp.openById(spreadsheetId), {
+    spreadsheetId: spreadsheetId,
+    apply: true,
+    scope: 'full'
+  });
+
+  Logger.log('Test-data reset applied:\n' + JSON.stringify(report, null, 2));
+  return report;
+}
+
+/**
  * Verifies the topology and headers of both spreadsheets against the schema
  * expected for their format. Returns a report and logs it.
  *

@@ -71,6 +71,8 @@ authorization. No credentials or secrets are stored in the repository.
 | `applyWeeklyColumnOrderMigration()` | Apply the weekly column migration; refused unless the captain sets the approval Script Property |
 | `previewDetagColumnDrops()` | Dry-run the destructive detag column-drop migration for the doubles spreadsheet (writes nothing) |
 | `applyDetagColumnDrops()` | Drop `in_tag`/`out_tag`/`udisc_ending_tag` from doubles weeks and `current_tag` from the doubles roster; run the preview first to inspect the columns |
+| `previewTestDataReset()` | Dry-run the guarded test-data reset for the doubles test spreadsheet (writes nothing) |
+| `applyTestDataReset()` | Clear every weekly data row and the roster down to the header-only minimum in the doubles test spreadsheet |
 | `reportRosterCounts()` | Report Singles and Doubles roster counts |
 
 Each returns a plain report object and logs it with `Logger.log`, so the result
@@ -124,6 +126,41 @@ first and inspect exactly which columns every sheet will lose before applying.
 There is no Script Property interlock. During the transition the code accepts
 the pre-detag layouts as known-but-un-migrated, so the column-order dry run and
 the topology check keep working on a sheet that still carries the tag columns.
+
+## Test-data reset
+
+The doubles spreadsheet is the worker's disposable test surface, so it needs a
+programmatic wipe that does not require a hand in the Sheets editor. The
+`resetTestData` action clears test data without touching any live spreadsheet.
+
+The action is guarded by a **test-spreadsheet allow-list** derived from the
+league registry: a league record flagged `test: true` contributes its
+spreadsheet id to `TEST_SPREADSHEET_IDS`. The target is resolved through the
+league allow-list (an unknown selector always resolves to Singles), then the
+resolved id is checked against that list before a single row is read or
+written. Live Singles is refused with a `live_singles` reason and any other
+spreadsheet with a `non_test` reason, so no sheet write can ever land outside a
+test spreadsheet. The admin card is shown only for a league the registry flags
+as a test surface.
+
+The reset is a dry run by default. `apply: false` returns exactly which sheets
+would change and how many rows each would lose, and writes nothing. With
+`apply: true` it deletes the planned data rows, returning each sheet to its
+header-only minimum.
+
+Two scopes are available:
+
+| Scope | Clears |
+|-------|--------|
+| `weekly` (default) | Data rows in every weekly sheet (`Week YYYY-MM-DD` and the `Week template`), discovered by header name |
+| `full` | Weekly data rows **and** the `ClubMembers` roster, returning the test spreadsheet to empty |
+
+The header row and the `League` settings (including the `league_format` and
+`scoring` metadata) are never removed, so routing and topology stay intact.
+The web-app action `resetTestData` accepts `league`/`spreadsheetId`, `apply`,
+and `scope`; the operator entry points `previewTestDataReset` and
+`applyTestDataReset` always run `full` scope against the configured doubles
+spreadsheet.
 
 ## Re-provisioning guard
 
