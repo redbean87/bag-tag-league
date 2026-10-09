@@ -43,6 +43,15 @@
 
   var SCORINGS = [SCORING.TAGS, SCORING.POINTS];
 
+  // The app is served from two addresses: the live worker and a development
+  // worker (`bag-tag-league-dev`). The serving address decides whether the
+  // test-flagged POC leagues are offered in the admin picker. An environment is
+  // never inferred from anything but the address; see environmentForHost.
+  var ENVIRONMENTS = {
+    PRODUCTION: 'production',
+    DEVELOPMENT: 'development'
+  };
+
   // The leagues this app manages. Each record is the single source of truth
   // for its id, display name, format, scoring, and spreadsheet. Every league
   // carries its own format and scoring as data; routing and gating read the
@@ -84,13 +93,49 @@
     return LEAGUES.slice();
   }
 
+  // Resolves the running environment from the host that served the page. The
+  // development worker is named with a `-dev` suffix (`bag-tag-league-dev`),
+  // and a conventional `dev.` prefix is accepted too, without hardcoding the
+  // account-specific workers.dev subdomain. Detection is fail-safe: anything
+  // that is not clearly the development address, including a missing, empty,
+  // or unparseable host, resolves to production so a test league can never
+  // leak onto the live address.
+  function environmentForHost(host) {
+    if (typeof host !== 'string') return ENVIRONMENTS.PRODUCTION;
+    var firstLabel = host.trim().toLowerCase().split('.')[0];
+    if (!firstLabel) return ENVIRONMENTS.PRODUCTION;
+    if (firstLabel === 'dev' || firstLabel.slice(-4) === '-dev') {
+      return ENVIRONMENTS.DEVELOPMENT;
+    }
+    return ENVIRONMENTS.PRODUCTION;
+  }
+
+  // The environment of the page that loaded this registry. It reads the
+  // serving hostname in the browser and falls back to production when the
+  // hostname is unavailable, so the default is always the safe one.
+  function currentEnvironment() {
+    try {
+      if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+        return environmentForHost(window.location.hostname);
+      }
+    } catch (e) {
+      // Fall through to the production default.
+    }
+    return ENVIRONMENTS.PRODUCTION;
+  }
+
   // The leagues a coordinator can pick. Test-flagged leagues are development
-  // surfaces (the former proof-of-concept workbook), so they are never offered
-  // in the admin league picker even though they stay in the registry for the
-  // guarded test tooling.
-  function selectableLeagues() {
+  // surfaces (the former proof-of-concept workbook): the production address
+  // keeps hiding them, while the development address lists them alongside the
+  // production leagues so POC work can select a disposable sheet. The
+  // environment argument is an ENVIRONMENTS value; anything else, and the
+  // omitted/default case, resolves against the serving address and fails safe
+  // to production.
+  function selectableLeagues(environment) {
+    var env = environment || currentEnvironment();
     return LEAGUES.filter(function(league) {
-      return league.test !== true;
+      if (league.test !== true) return true;
+      return env === ENVIRONMENTS.DEVELOPMENT;
     });
   }
 
@@ -205,6 +250,9 @@
     SCORINGS: SCORINGS,
     LEAGUES: LEAGUES,
     DEFAULT_LEAGUE_ID: DEFAULT_LEAGUE_ID,
+    ENVIRONMENTS: ENVIRONMENTS,
+    environmentForHost: environmentForHost,
+    currentEnvironment: currentEnvironment,
     leagues: leagues,
     selectableLeagues: selectableLeagues,
     leagueById: leagueById,
