@@ -134,6 +134,13 @@ class FakeSheet {
     return this;
   }
 
+  deleteRows(rowPosition, howMany) {
+    if (howMany === undefined) howMany = 1;
+    if (rowPosition < 1 || howMany < 1) return this;
+    this.rows.splice(rowPosition - 1, howMany);
+    return this;
+  }
+
   deleteColumn(columnPosition) {
     if (columnPosition < 1) return this;
     const index = columnPosition - 1;

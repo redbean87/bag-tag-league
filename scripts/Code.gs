@@ -326,8 +326,27 @@ const DEFAULT_LEAGUE_ID = LEAGUE_ID_SINGLES;
 // capability rules from this table, never from the league id directly.
 const LEAGUE_SPREADSHEETS = [
   { id: LEAGUE_ID_SINGLES, format: LEAGUE_FORMAT_SINGLES, scoring: SCORING_TAGS, spreadsheetId: SPREADSHEET_ID },
-  { id: LEAGUE_ID_DOUBLES, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES }
+  { id: LEAGUE_ID_DOUBLES, format: LEAGUE_FORMAT_DOUBLES, scoring: SCORING_POINTS, spreadsheetId: SPREADSHEET_ID_DOUBLES, test: true }
 ];
+
+// Spreadsheets the guarded test-data reset may ever write to, derived from the
+// league records flagged as test surfaces. The doubles spreadsheet is the
+// worker's disposable test surface; the singles spreadsheet holds live league
+// data and is never flagged. Deriving the list from the league allow-list keeps
+// a single source of truth for which spreadsheet is a test surface, and a raw
+// client-supplied id can never authorize a write.
+const TEST_SPREADSHEET_IDS = LEAGUE_SPREADSHEETS.filter(function(record) {
+  return record.test === true;
+}).map(function(record) {
+  return record.spreadsheetId;
+});
+
+/**
+ * Whether a spreadsheet id is on the test-data reset allow-list.
+ */
+function isTestSpreadsheetId(spreadsheetId) {
+  return TEST_SPREADSHEET_IDS.indexOf(spreadsheetId) !== -1;
+}
 
 /**
  * Looks up the allow-listed league record for a canonical league id.
@@ -1752,6 +1771,199 @@ function handleMigrateDetagColumnDrops(data) {
 
 // ─── End detag column-drop migration ────────────────────────────────────────
 
+// ─── Test-data reset ─────────────────────────────────────────────────────────
+
+/**
+ * Guards a reset against the test-spreadsheet allow-list. Returns
+ * { ok: true } or { ok: false, reason, error }. The singles spreadsheet is
+ * called out explicitly so the refusal message names live data rather than a
+ * generic non-test refusal.
+ */
+function assertTestSpreadsheet(spreadsheetId) {
+  if (isTestSpreadsheetId(spreadsheetId)) return { ok: true };
+  if (spreadsheetId === SPREADSHEET_ID) {
+    return {
+      ok: false,
+      reason: 'live_singles',
+      error: 'Refusing to reset the live Singles spreadsheet; only test spreadsheets may be reset.'
+    };
+  }
+  return {
+    ok: false,
+    reason: 'non_test',
+    error: 'Refusing to reset a non-test spreadsheet; only test spreadsheets may be reset.'
+  };
+}
+
+/**
+ * Pure planner: lists every sheet a reset would clear and how many data rows
+ * each would lose. Weekly sheets are discovered by header name (so dated Week
+ * tabs and the Week template are covered without a tab-name hard-list).
+ * `scope: 'weekly'` (default) plans only weekly data rows; `scope: 'full'`
+ * also plans the ClubMembers roster, returning the test spreadsheet to its
+ * header-only minimum. Writes nothing and returns the sheet references
+ * separately so the caller can apply the plan.
+ */
+function planTestDataReset(spreadsheet, options) {
+  options = options || {};
+  var scope = options.scope === 'full' ? 'full' : 'weekly';
+  var sheets = spreadsheet.getSheets();
+  var plans = [];
+  var results = [];
+
+  for (var i = 0; i < sheets.length; i++) {
+    var sheet = sheets[i];
+    var headers = getSheetHeaders(sheet);
+    if (!headers || headers.length === 0) continue;
+
+    var kind = null;
+    if (isWeeklyRecordHeaderRow(headers)) {
+      kind = 'weekly';
+    } else if (scope === 'full' && sheet.getName() === 'ClubMembers' &&
+               headers.indexOf('member_number') !== -1) {
+      kind = 'club_members';
+    }
+    if (!kind) continue;
+
+    var rows = Math.max(0, sheet.getLastRow() - 1);
+    plans.push({ sheet: sheet, kind: kind, rows: rows });
+    results.push({
+      sheet_name: sheet.getName(),
+      kind: kind,
+      action: rows > 0 ? 'clear-rows' : 'no-op',
+      rows_removed: rows,
+      rows_kept: rows > 0 ? 1 : sheet.getLastRow()
+    });
+  }
+
+  return { scope: scope, plans: plans, results: results };
+}
+
+/**
+ * Applies a plan from planTestDataReset by deleting every data row below the
+ * header. Deleting (rather than blanking) returns each sheet to its header-only
+ * minimum. Only called after the test-spreadsheet guard has passed.
+ */
+function applyTestDataResetPlan(plans) {
+  for (var i = 0; i < plans.length; i++) {
+    if (plans[i].rows > 0) {
+      plans[i].sheet.deleteRows(2, plans[i].rows);
+    }
+  }
+}
+
+/**
+ * Summarizes a reset plan into the totals the preview and the apply report.
+ */
+function summarizeTestDataReset(plan) {
+  var weekly = 0;
+  var members = 0;
+  var changed = 0;
+  for (var i = 0; i < plan.results.length; i++) {
+    var result = plan.results[i];
+    if (result.kind === 'weekly') weekly += result.rows_removed;
+    if (result.kind === 'club_members') members += result.rows_removed;
+    if (result.action === 'clear-rows') changed++;
+  }
+  return {
+    weekly_rows_removed: weekly,
+    member_rows_removed: members,
+    total_rows_removed: weekly + members,
+    sheets_changed: changed
+  };
+}
+
+/**
+ * Guarded test-data reset. Refuses any spreadsheet not on the test allow-list
+ * before planning or writing, so no sheet outside a test spreadsheet is ever
+ * touched. Dry-run by default: with `apply: false` it writes nothing and
+ * reports exactly which rows would be removed. With `apply: true` it deletes
+ * the planned rows down to the header.
+ *
+ * options:
+ *   spreadsheetId (required) - resolved allow-listed id; checked against the
+ *                               test allow-list before any work.
+ *   apply (boolean)           - false (default) previews, true writes.
+ *   scope ('weekly'|'full')   - weekly data only, or also the roster.
+ */
+function resetTestData(spreadsheet, options) {
+  options = options || {};
+  var guard = assertTestSpreadsheet(options.spreadsheetId);
+  if (!guard.ok) {
+    return { applied: false, refused: true, reason: guard.reason, error: guard.error, results: [] };
+  }
+
+  var apply = options.apply === true;
+  var plan = planTestDataReset(spreadsheet, { scope: options.scope });
+  var summary = summarizeTestDataReset(plan);
+  if (apply) applyTestDataResetPlan(plan.plans);
+
+  return {
+    applied: apply,
+    refused: false,
+    scope: plan.scope,
+    weekly_rows_removed: summary.weekly_rows_removed,
+    member_rows_removed: summary.member_rows_removed,
+    total_rows_removed: summary.total_rows_removed,
+    sheets_changed: summary.sheets_changed,
+    results: plan.results
+  };
+}
+
+/**
+ * Web-app action: preview or apply the guarded test-data reset. The target is
+ * resolved through the league allow-list, then checked against the test
+ * allow-list; live Singles and any non-test spreadsheet are refused before a
+ * single row is read or written. Defaults to a dry run.
+ *
+ * Inputs: league/spreadsheetId selector, apply (boolean, default false),
+ * scope ('weekly' default | 'full').
+ */
+function handleResetTestData(data) {
+  data = data || {};
+  var selector = leagueSelectorFrom(data);
+  var rules = getLeagueRules(selector);
+  var spreadsheetId = resolveSpreadsheetId(selector);
+  var apply = data.apply === true || data.apply === 'true';
+  var scope = data.scope === 'full' ? 'full' : 'weekly';
+
+  var guard = assertTestSpreadsheet(spreadsheetId);
+  if (!guard.ok) {
+    return respond('error', guard.error, {
+      refused: true,
+      reason: guard.reason,
+      format: rules.format,
+      scoring: rules.scoring,
+      applied: false
+    });
+  }
+
+  var report = resetTestData(resolveSpreadsheet(selector), {
+    spreadsheetId: spreadsheetId,
+    apply: apply,
+    scope: scope
+  });
+
+  var message = apply
+    ? 'Test-data reset applied: removed ' + report.total_rows_removed + ' row(s) from ' + report.sheets_changed + ' sheet(s).'
+    : 'Test-data reset dry run: ' + report.total_rows_removed + ' row(s) would be removed from ' + report.sheets_changed + ' sheet(s). No writes were made.';
+
+  return respond('ok', message, {
+    refused: false,
+    format: rules.format,
+    scoring: rules.scoring,
+    applied: apply,
+    scope: report.scope,
+    weekly_rows_removed: report.weekly_rows_removed,
+    member_rows_removed: report.member_rows_removed,
+    total_rows_removed: report.total_rows_removed,
+    sheets_changed: report.sheets_changed,
+    results: report.results
+  });
+}
+
+// ─── End test-data reset ─────────────────────────────────────────────────────
+
 // ─── End doubles provisioning ────────────────────────────────────────────────
 
 /**
@@ -1848,6 +2060,9 @@ function doPost(e) {
     }
     if (data.action === 'migrateDetagColumnDrops') {
       return handleMigrateDetagColumnDrops(data);
+    }
+    if (data.action === 'resetTestData') {
+      return handleResetTestData(data);
     }
 
     return respond('error', 'Unknown action: ' + data.action);

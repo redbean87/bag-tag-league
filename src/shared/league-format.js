@@ -62,7 +62,10 @@
       name: 'Nightfliers Random Dubs',
       format: FORMATS.DOUBLES,
       scoring: SCORING.POINTS,
-      spreadsheetId: '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8'
+      spreadsheetId: '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8',
+      // Test surface: the guarded test-data reset may write here. The live
+      // Singles league is never flagged, so the reset can never target it.
+      test: true
     }
   ];
 

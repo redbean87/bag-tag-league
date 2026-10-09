@@ -130,3 +130,57 @@ test('applyDetagColumnDrops drops the tag columns without any approval property'
     h.bound.CLUB_MEMBER_HEADERS_DOUBLES
   );
 });
+
+// ─── Guarded test-data reset operator entry points ──────────────────────────
+
+function buildTestDoubles(h) {
+  const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
+  const club = doubles.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  club.appendRow([3, 'Damon', 'damon31', '151236', true, 't', 't', 2]);
+  const week = doubles.insertSheet('Week 2026-10-05');
+  week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
+  week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES.map((header) => 'v_' + header));
+  return { doubles, club, week };
+}
+
+test('previewTestDataReset reports the rows and writes nothing', () => {
+  const h = loadOperator();
+  const { week } = buildTestDoubles(h);
+  const before = JSON.stringify(week.rows);
+
+  const report = h.fn('previewTestDataReset')();
+
+  assert.equal(report.applied, false);
+  assert.equal(report.refused, false);
+  assert.equal(report.total_rows_removed, 2);
+  assert.equal(JSON.stringify(week.rows), before);
+});
+
+test('applyTestDataReset clears the doubles test spreadsheet to its minimum', () => {
+  const h = loadOperator();
+  const { club, week } = buildTestDoubles(h);
+
+  const report = h.fn('applyTestDataReset')();
+
+  assert.equal(report.applied, true);
+  assert.equal(report.total_rows_removed, 2);
+  assert.equal(week.rows.length, 1);
+  assert.equal(club.rows.length, 1);
+});
+
+test('the operator reset refuses a non-test spreadsheet override', () => {
+  const h = loadOperator();
+  h.setScriptProperty('DOUBLES_SPREADSHEET_ID', 'not-the-test-sheet');
+  const other = h.makeSpreadsheet('not-the-test-sheet');
+  const club = other.insertSheet('ClubMembers');
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  club.appendRow([3, 'Damon', 'damon31', '151236', true, 't', 't', 2]);
+  const before = JSON.stringify(club.rows);
+
+  const report = h.fn('applyTestDataReset')();
+
+  assert.equal(report.refused, true);
+  assert.equal(report.reason, 'non_test');
+  assert.equal(JSON.stringify(club.rows), before);
+});
