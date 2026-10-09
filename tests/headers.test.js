@@ -128,19 +128,20 @@ test('the singles League base columns stay 15 and carry no metadata', () => {
   assert.ok(!h.bound.LEAGUE_SHEET_HEADERS.includes('scoring'));
 });
 
-test('both League schemas extend the base with metadata and points settings', () => {
+test('both League schemas extend the base with metadata, points, and payout settings', () => {
   const h = loadCode();
   const extended = h.bound.LEAGUE_SHEET_HEADERS_DOUBLES;
   const base = h.bound.LEAGUE_SHEET_HEADERS;
 
-  // Base settings plus the format/scoring metadata and the per-league points
-  // table (points_by_place + points_participation).
-  assert.equal(extended.length, base.length + 2 + 2);
+  // Base settings plus the format/scoring metadata, the per-league points
+  // table (points_by_place + points_participation), and the per-league weekly
+  // payout table (payout_by_place).
+  assert.equal(extended.length, base.length + 2 + 2 + 1);
   assert.deepEqual(extended.slice(0, base.length), base);
   assert.deepEqual(extended.slice(base.length), [
-    'league_format', 'scoring', 'points_by_place', 'points_participation'
+    'league_format', 'scoring', 'points_by_place', 'points_participation', 'payout_by_place'
   ]);
-  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 19);
+  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 20);
 });
 
 test('format-specific header accessors gate singles versus doubles', () => {

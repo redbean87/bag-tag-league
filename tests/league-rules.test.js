@@ -37,7 +37,8 @@ test('getLeagueRules derives capabilities from enums, not the league id', () => 
     usesTags: true,
     usesPoints: false,
     hasPairs: false,
-    points: { byPlace: { 1: 2, 2: 1.5, 3: 1 }, participation: 0.5 }
+    points: { byPlace: { 1: 2, 2: 1.5, 3: 1 }, participation: 0.5 },
+    payout: { byPlace: {} }
   });
   assert.deepEqual(rules(h.bound.LEAGUE_ID_DOUBLES), {
     format: h.bound.LEAGUE_FORMAT_DOUBLES,
@@ -45,7 +46,8 @@ test('getLeagueRules derives capabilities from enums, not the league id', () => 
     usesTags: false,
     usesPoints: true,
     hasPairs: true,
-    points: { byPlace: { 1: 2, 2: 1.5, 3: 1 }, participation: 0.5 }
+    points: { byPlace: { 1: 2, 2: 1.5, 3: 1 }, participation: 0.5 },
+    payout: { byPlace: {} }
   });
 });
 

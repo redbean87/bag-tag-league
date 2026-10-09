@@ -407,6 +407,16 @@
               <label for="points_participation">Participation Points</label>
               <input type="number" id="points_participation" step="0.01" min="0" placeholder="0.5">
             </div>
+            <p class="help-text">
+              Optional per-player weekly payouts, keyed by team placement as
+              <code>place:amount</code> (for example <code>1:2,2:5</code>). The
+              amount is paid to each member of that team; a second-place amount
+              can carry the entry-fee refund. Blank pays no weekly money.
+            </p>
+            <div class="field-group">
+              <label for="payout_by_place">Weekly Payout by Place ($ per player)</label>
+              <input type="text" id="payout_by_place" placeholder="1:2,2:5">
+            </div>
           </div>
 
           <button type="submit" id="btnSaveLeague">Save Settings</button>
@@ -1647,6 +1657,7 @@
           document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
           document.getElementById('points_by_place').value = s.points_by_place !== undefined && s.points_by_place !== '' ? s.points_by_place : '';
           document.getElementById('points_participation').value = s.points_participation !== undefined && s.points_participation !== '' ? s.points_participation : '';
+          document.getElementById('payout_by_place').value = s.payout_by_place !== undefined && s.payout_by_place !== '' ? s.payout_by_place : '';
           applyLeagueSettingsMismatch(s);
           renderLeagueCopy(getSelectedLeague(), getLeagueRules(), s);
           log('League settings loaded');
@@ -1719,7 +1730,8 @@
         ace_pot_current_total: document.getElementById('ace_pot_current_total').value,
         ctp_contribution: document.getElementById('ctp_contribution').value,
         points_by_place: document.getElementById('points_by_place').value.trim(),
-        points_participation: document.getElementById('points_participation').value
+        points_participation: document.getElementById('points_participation').value,
+        payout_by_place: document.getElementById('payout_by_place').value.trim()
       };
 
       log('Saving league settings');
@@ -2961,7 +2973,9 @@
           members: members,
           place: place,
           has_position: hasPosition,
-          points: points === null ? 0 : points
+          points: points === null ? 0 : points,
+          payout_per_player: 0,
+          payout_total: 0
         });
       }
       return pairs;
@@ -3034,6 +3048,7 @@
       var previewEl = document.getElementById('pointsPreview');
       var players = data.players || [];
       var pairs = data.pairs || groupPointsPairsClient(players);
+      var showPayout = !!(data.payout && data.payout.configured);
 
       var html = '';
       html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
@@ -3049,6 +3064,21 @@
         for (var w = 0; w < data.warnings.length; w++) {
           html += escHtml(data.warnings[w].message) + (w < data.warnings.length - 1 ? '\n' : '');
         }
+        html += '</div>';
+      }
+
+      if (showPayout) {
+        var payoutPlaces = Object.keys(data.payout.by_place).map(function(key) {
+          return parseInt(key, 10);
+        }).sort(function(a, b) { return a - b; });
+        var payoutParts = payoutPlaces.map(function(place) {
+          return ordinalLabel(place) + '=$' + Number(data.payout.by_place[place]).toFixed(2);
+        });
+        html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Weekly Payouts</h3>';
+        html += '<div class="field-group">';
+        html += '<p>Total for the week: <strong>$' + (data.payout.total || 0).toFixed(2) + '</strong></p>';
+        html += '<p>Per player: ' + escHtml(payoutParts.join(', ')) + '</p>';
+        html += '<p style="color:#888; font-style:italic;">Derived from each committed team placement. Every member of a placed team receives the per-player amount; a second-place amount can carry the entry-fee refund.</p>';
         html += '</div>';
       }
 
@@ -3088,6 +3118,7 @@
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Pair</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Place</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Points</th>';
+      if (showPayout) html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Payout</th>';
       html += '</tr>';
       for (var r = 0; r < pairs.length; r++) {
         var result = pairs[r];
@@ -3098,6 +3129,7 @@
         html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(result.label) + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + resultPlace + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + result.points + '</td>';
+        if (showPayout) html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">$' + (result.payout_total || 0).toFixed(2) + '</td>';
         html += '</tr>';
       }
       html += '</table>';
