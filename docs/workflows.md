@@ -28,7 +28,8 @@
 4. System loads the weekly sheet and League settings
 5. System calculates:
    - Participating count (players with `checked_in = TRUE`)
-   - Ace pot participant count (checked-in players with `ace_pot = TRUE`)
+   - Ace pot participant count (every checked-in player when the league sets
+     an ace pot contribution, because the ace pot is included in the entry fee)
    - CTP participant count (checked-in players with `ctp = TRUE`)
    - Ace pot calculated total: `ace_pot_current_total + (ace_pot_contribution × ace_pot_participant_count)`
    - CTP calculated total: `ctp_contribution × ctp_participant_count`
@@ -50,9 +51,10 @@
    - The app does NOT auto-fill this from `ClubMembers.current_tag`
    - Players may have traded tags since the last league day
 7. Player sees the money options the league actually offers — Paid always, and
-   Ace Pot or CTP only when the league sets that contribution above zero — with
-   a plain-language explanation of what the entry fee pays for, then confirms
-   their payment status
+   CTP only when the league sets that contribution above zero — with a
+   plain-language explanation of what the entry fee pays for, then confirms
+   their payment status. When the league sets an ace pot contribution it is
+   included in the entry fee, so it is not a separate choice.
 8. Player submits the check-in
 9. System creates a new row in the WeeklyPlayerRecords tab with:
    - `member_number` linking to the ClubMembers record

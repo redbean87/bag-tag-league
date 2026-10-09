@@ -604,12 +604,13 @@ function resolvePayoutRules(leagueSettings) {
 
 /**
  * Resolves the money options a league offers at check-in from its settings.
- * Paid is always offered; the ace pot is offered only when the league sets a
- * contribution above zero, and CTP only when it sets a CTP contribution above
- * zero. A blank, missing, or malformed contribution means the option is not
- * offered, so the page can hide it and the server can refuse it. The money
- * explanation falls back to DEFAULT_ENTRY_FEE_EXPLANATION. Returns
- * { paid, ctp, ace_pot, money_explanation }.
+ * Paid is always offered and CTP only when the league sets a CTP contribution
+ * above zero. An ace pot is never a player choice: when the league sets an ace
+ * pot contribution above zero it is included in the entry fee, so `ace_pot`
+ * reports whether the entry includes a pot rather than whether the player may
+ * select it. A blank, missing, or malformed contribution means there is no ace
+ * pot. The money explanation falls back to DEFAULT_ENTRY_FEE_EXPLANATION.
+ * Returns { paid, ctp, ace_pot, money_explanation }.
  */
 function resolveCheckInOptions(leagueSettings) {
   var settings = leagueSettings || {};
@@ -2995,10 +2996,12 @@ function handleSubmitCheckIn(data) {
 
   const spreadsheet = resolveSpreadsheet(leagueId);
 
-  // Money options are data-driven from the league's own settings: an option the
-  // league does not offer (its contribution is not above zero) is refused even
-  // when a client supplies it, matching exactly the options the sign-in page
-  // renders. Paid is always offered.
+  // Money options are data-driven from the league's own settings: CTP is
+  // refused when the league does not offer it, matching exactly the options
+  // the sign-in page renders. Paid is always offered. The ace pot is not a
+  // player choice: when the league configures one it is part of the entry fee,
+  // so a legacy client that still sends ace_pot is accepted but its value is
+  // ignored in favour of the league setting below.
   const checkInOptions = resolveCheckInOptions(readLeagueSettingsRow(spreadsheet.getSheetByName('League')));
   if ((ctp === true || ctp === 'TRUE') && !checkInOptions.ctp) {
     return respond('error', 'CTP is not offered by this league.');
@@ -3165,7 +3168,10 @@ function handleSubmitCheckIn(data) {
   newRecord[weeklyHeaders.indexOf('signed_in_at')] = recordTimestamp;
   newRecord[weeklyHeaders.indexOf('paid')] = paid === true || paid === 'TRUE';
   newRecord[weeklyHeaders.indexOf('ctp')] = ctp === true || ctp === 'TRUE';
-  newRecord[weeklyHeaders.indexOf('ace_pot')] = ace_pot === true || ace_pot === 'TRUE';
+  // The ace pot is included in the entry fee when the league configures a
+  // contribution, so every checked-in player contributes regardless of what a
+  // client sent.
+  newRecord[weeklyHeaders.indexOf('ace_pot')] = checkInOptions.ace_pot;
   newRecord[weeklyHeaders.indexOf('created_at')] = recordTimestamp;
   newRecord[weeklyHeaders.indexOf('updated_at')] = recordTimestamp;
 
@@ -3614,6 +3620,11 @@ function handleGetPreRoundReview(data) {
   let acePotParticipantCount = 0;
   let ctpParticipantCount = 0;
 
+  // The ace pot is included in the entry fee: when the league configures a
+  // contribution, every checked-in player contributes. The stored ace_pot flag
+  // is a legacy per-player tick and no longer gates the count.
+  const acePotIncluded = acePotContribution > 0;
+
   for (let i = 1; i < weeklyData.length; i++) {
     const row = weeklyData[i];
     const isCheckedIn = row[checkedInCol] === true || row[checkedInCol] === 'TRUE';
@@ -3621,7 +3632,7 @@ function handleGetPreRoundReview(data) {
     if (isCheckedIn) {
       participatingCount++;
 
-      const isAcePot = row[acePotCol] === true || row[acePotCol] === 'TRUE';
+      const isAcePot = acePotIncluded || row[acePotCol] === true || row[acePotCol] === 'TRUE';
       if (isAcePot) {
         acePotParticipantCount++;
       }
@@ -3709,6 +3720,8 @@ function handleSavePreRoundReview(data) {
   }
 
   const leagueHeaders = leagueData[0];
+  const leagueRow = leagueData[1];
+  const acePotContribution = Number(leagueRow[leagueHeaders.indexOf('ace_pot_contribution')]) || 0;
 
   // Recalculate from weekly sheet (do not trust browser-calculated values)
   const weeklyData = weeklySheet.getDataRange().getValues();
@@ -3720,12 +3733,17 @@ function handleSavePreRoundReview(data) {
   let acePotParticipantCount = 0;
   let ctpParticipantCount = 0;
 
+  // The ace pot is included in the entry fee: when the league configures a
+  // contribution, every checked-in player contributes. The stored ace_pot flag
+  // is a legacy per-player tick and no longer gates the count.
+  const acePotIncluded = acePotContribution > 0;
+
   for (let i = 1; i < weeklyData.length; i++) {
     const row = weeklyData[i];
     const isCheckedIn = row[checkedInCol] === true || row[checkedInCol] === 'TRUE';
 
     if (isCheckedIn) {
-      const isAcePot = row[acePotCol] === true || row[acePotCol] === 'TRUE';
+      const isAcePot = acePotIncluded || row[acePotCol] === true || row[acePotCol] === 'TRUE';
       if (isAcePot) {
         acePotParticipantCount++;
       }
@@ -3738,8 +3756,6 @@ function handleSavePreRoundReview(data) {
   }
 
   // Get League settings for calculation
-  const leagueRow = leagueData[1];
-  const acePotContribution = Number(leagueRow[leagueHeaders.indexOf('ace_pot_contribution')]) || 0;
   const acePotCurrentTotal = Number(leagueRow[leagueHeaders.indexOf('ace_pot_current_total')]) || 0;
   const ctpContribution = Number(leagueRow[leagueHeaders.indexOf('ctp_contribution')]) || 0;
 

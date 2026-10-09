@@ -108,7 +108,7 @@ These fields are set by the player or admin during the check-in process, before 
 | `signed_in_at` | App | Timestamp of when app check-in occurred |
 | `paid` | Player/Admin | Payment status confirmed during check-in |
 | `ctp` | Player/Admin | Closest-to-pin status |
-| `ace_pot` | Player/Admin | Ace pot status |
+| `ace_pot` | Player/Admin | Ace pot inclusion, set when the league configures a pot |
 
 ### 3. Calculated by the App During Finalization
 

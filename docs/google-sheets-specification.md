@@ -138,7 +138,7 @@ Fields in this tab fall into four categories based on their source and role:
 | 8 | `signed_in_at` | string (ISO 8601 UTC) | Yes | App check-in | Timestamp when the player signed in through the app. The presence of this timestamp historically defined participation; now superseded by `checked_in` for participation logic. |
 | 9 | `paid` | boolean | Yes | App check-in | Payment status for this league, confirmed during check-in. Default: `FALSE`. |
 | 10 | `ctp` | boolean | Yes | App check-in | Closest-to-pin status for this league. Default: `FALSE`. |
-| 11 | `ace_pot` | boolean | Yes | App check-in | Ace pot status for this league. Default: `FALSE`. |
+| 11 | `ace_pot` | boolean | Yes | App check-in | Ace pot inclusion for this league. Set when the league configures an ace pot; the pot counts every checked-in player. Default: `FALSE`. |
 
 #### UDisc Import Fields — Identity (for matching)
 
@@ -377,7 +377,7 @@ Normal admin corrections to the sheet or through the app are acceptable. Before 
 4. **Re-import UDisc data:** Upload a new file. Existing rows are merged (updated), not duplicated.
 5. **Resolve unmatched records:** Manually match an unmatched UDisc record to an existing signed-in player, or add a new player to `ClubMembers` and then match.
 6. **Correct player data:** Edit `ClubMembers` fields (name, UDisc username, PDGA number) at any time.
-7. **Adjust payment/CTP/ace pot:** Toggle `paid`, `ctp`, `ace_pot` on any `WeeklyPlayerRecords` row.
+7. **Adjust payment/CTP:** Toggle `paid` and `ctp` on any `WeeklyPlayerRecords` row. The `ace_pot` column records league inclusion and is not a per-player choice.
 
 There is no separate admin override system, audit log, correction record, or immutable event history. The app is simply intended to help the organizer run the league.
 

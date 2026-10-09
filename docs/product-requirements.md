@@ -60,7 +60,7 @@ Each weekly player record is a row in the WeeklyPlayerRecords tab, created only 
 - out_tag (player's ending bag tag, calculated by the app after tag calculation)
 - checked_in (boolean participation flag, set TRUE when player completes check-in)
 - signed_in_at (timestamp of when check-in occurred)
-- Paid, CTP, Ace pot status
+- Paid and CTP status, and ace pot inclusion
 - UDisc data (score, starting hole, start time, round/event scores, division, position, hole-by-hole scores, udisc_ending_tag)
 - Admin notes
 

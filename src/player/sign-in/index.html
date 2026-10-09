@@ -196,7 +196,7 @@
           <label class="checkbox-label" id="checkInCtpLabel">
             <input type="checkbox" id="checkInCtp"> CTP
           </label>
-          <label class="checkbox-label" id="checkInAcePotLabel">
+          <label class="checkbox-label" id="checkInAcePotLabel" style="display:none;">
             <input type="checkbox" id="checkInAcePot"> Ace Pot
           </label>
         </div>
@@ -243,7 +243,7 @@
           <label class="checkbox-label" id="registerCtpLabel">
             <input type="checkbox" id="registerCtp"> CTP
           </label>
-          <label class="checkbox-label" id="registerAcePotLabel">
+          <label class="checkbox-label" id="registerAcePotLabel" style="display:none;">
             <input type="checkbox" id="registerAcePot"> Ace Pot
           </label>
         </div>
@@ -341,10 +341,11 @@
 
     // --- Money options ---
     // The check-in money options are data-driven from the league's own
-    // settings: Paid is always offered, Ace Pot only when the league sets an
-    // ace pot contribution above zero, and CTP only when it sets a CTP
-    // contribution above zero. A hidden option is never submitted, and the
-    // server independently refuses an option the league does not offer. The
+    // settings: Paid is always offered and CTP only when the league sets a CTP
+    // contribution above zero. The ace pot is never a player choice - when a
+    // league configures one it is included in the entry fee - so its checkbox
+    // is always hidden and never submitted. A hidden option is never submitted,
+    // and the server independently refuses a CTP the league does not offer. The
     // explanation beside the options comes from the same league data.
 
     function checkInOptionsFrom(data) {
@@ -355,7 +356,6 @@
       return {
         paid: options.paid !== false,
         ctp: options.ctp === true,
-        ace_pot: options.ace_pot === true,
         money_explanation: explanation
       };
     }
@@ -372,9 +372,11 @@
         var ctpLabel = document.getElementById(ctpLabels[i]);
         if (ctpLabel) ctpLabel.style.display = opts.ctp ? '' : 'none';
       }
+      // The ace pot is part of the entry fee, never a choice, so the box is
+      // hidden whichever league is loaded.
       for (i = 0; i < aceLabels.length; i++) {
         var aceLabel = document.getElementById(aceLabels[i]);
-        if (aceLabel) aceLabel.style.display = opts.ace_pot ? '' : 'none';
+        if (aceLabel) aceLabel.style.display = 'none';
       }
       for (i = 0; i < explanations.length; i++) {
         var explanation = document.getElementById(explanations[i]);
@@ -391,12 +393,10 @@
         if (ctpCheckIn) ctpCheckIn.checked = false;
         if (ctpRegister) ctpRegister.checked = false;
       }
-      if (!opts.ace_pot) {
-        var aceCheckIn = document.getElementById('checkInAcePot');
-        var aceRegister = document.getElementById('registerAcePot');
-        if (aceCheckIn) aceCheckIn.checked = false;
-        if (aceRegister) aceRegister.checked = false;
-      }
+      var aceCheckIn = document.getElementById('checkInAcePot');
+      var aceRegister = document.getElementById('registerAcePot');
+      if (aceCheckIn) aceCheckIn.checked = false;
+      if (aceRegister) aceRegister.checked = false;
     }
 
     async function loadCheckInOptions() {
@@ -595,7 +595,6 @@
       var inTag = document.getElementById(prefix + 'Tag').value;
       var paid = document.getElementById(prefix + 'Paid').checked;
       var ctp = document.getElementById(prefix + 'Ctp').checked;
-      var acePot = document.getElementById(prefix + 'AcePot').checked;
 
       if (!name) {
         setStatus(prefix + 'Status', 'error', 'Player name is required.');
@@ -622,11 +621,12 @@
           paid: paid
         };
 
-        // Only the money options the league actually offers are submitted. A
+        // Only the money option the league actually offers is submitted. A
         // hidden option is omitted so it can never be recorded for a league
-        // that does not run it; the server refuses a disallowed option too.
+        // that does not run it; the server refuses a disallowed CTP too. The
+        // ace pot is included in the entry fee, not a choice, so it is never
+        // submitted.
         if (moneyOptions.ctp) payload.ctp = ctp;
-        if (moneyOptions.ace_pot) payload.ace_pot = acePot;
 
         // Tag collection belongs to tag-scoring leagues; points-scoring
         // leagues never send in_tag.
