@@ -286,11 +286,15 @@ doubles POC league.
 ### End state with `apply: true`
 
 - Each payload member is upserted into `ClubMembers` by `member_number`:
-  existing rows are rewritten in place, new rows are appended. No member is
+  existing rows keep the row in place, new rows are appended. No member is
   ever renumbered and no row is ever duplicated.
+- An identity field the payload omits or leaves empty preserves the stored
+  value, so a partial payload can never blank the roster; only a non-empty
+  payload value replaces it. A new member has nothing to preserve, so its
+  omitted fields land blank.
 - `current_tag` is always blank (a points roster carries no tag), and
   `season_points` is never written: a new row lands blank and an existing cache
-  is preserved. The seed owns the identity fields only.
+  is preserved.
 - Weekly sheets and the `Week template` are never touched.
 - Re-sending the same payload is a true no-op (`inserted: 0`, `updated: 0`,
   `sheets_changed: 0`).

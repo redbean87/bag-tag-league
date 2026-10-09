@@ -295,3 +295,84 @@ test('a hidden option is cleared and never sent from the sign-in page', () => {
   assert.doesNotMatch(SIGN_IN_HTML, /moneyOptions\.ace_pot/);
   assert.match(SIGN_IN_HTML, /action: 'getCheckInOptions', league: resolvedLeague\.id/);
 });
+
+// ─── Check-in never blanks stored roster identity ────────────────────────────
+
+// The stored identity fields of the single member buildDoubles seeds.
+function storedMember(h, club) {
+  const headers = club.rows[0];
+  const row = club.rows[1];
+  return {
+    name: row[headers.indexOf('name')],
+    udisc_username: row[headers.indexOf('udisc_username')],
+    pdga_number: row[headers.indexOf('pdga_number')]
+  };
+}
+
+test('a returning check-in with a blank PDGA and UDisc preserves the stored values', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, {});
+
+  const result = checkIn(h, { udisc_username: '', pdga_number: '' });
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(storedMember(h, club), {
+    name: 'Damon Forsythe',
+    udisc_username: 'damon31',
+    pdga_number: '151236'
+  });
+});
+
+test('a returning check-in with a blank name errors and leaves every stored identity field intact', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, {});
+
+  const result = checkIn(h, { name: '' });
+
+  assert.equal(result.status, 'error');
+  assert.match(result.message, /name is required/i);
+  assert.deepEqual(storedMember(h, club), {
+    name: 'Damon Forsythe',
+    udisc_username: 'damon31',
+    pdga_number: '151236'
+  });
+});
+
+test('a returning check-in that supplies a new identity value still replaces it', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, {});
+
+  const result = checkIn(h, {
+    name: 'Damon F.',
+    udisc_username: 'damonf',
+    pdga_number: '999999'
+  });
+
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(storedMember(h, club), {
+    name: 'Damon F.',
+    udisc_username: 'damonf',
+    pdga_number: '999999'
+  });
+});
+
+test('a brand-new member with blank UDisc and PDGA lands blank without erroring', () => {
+  const h = loadCode();
+  const { club } = buildDoubles(h, {});
+
+  const result = h.parse(h.fn('handleSubmitCheckIn')({
+    league: h.bound.LEAGUE_ID_DOUBLES,
+    name: 'New Player',
+    udisc_username: '',
+    pdga_number: '',
+    paid: true
+  }));
+
+  assert.equal(result.status, 'ok');
+  assert.equal(club.getLastRow(), 3, 'the new member was appended');
+  const headers = club.rows[0];
+  const row = club.rows[2];
+  assert.equal(row[headers.indexOf('name')], 'New Player');
+  assert.equal(row[headers.indexOf('udisc_username')], '');
+  assert.equal(row[headers.indexOf('pdga_number')], '');
+});
