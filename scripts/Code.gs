@@ -2874,13 +2874,11 @@ function handleSubmitCheckIn(data) {
   const playerNameCol = playersHeaders.indexOf('name');
   const playerUdiscCol = playersHeaders.indexOf('udisc_username');
   const playerPdgaCol = playersHeaders.indexOf('pdga_number');
-  const playerCurrentTagCol = playersHeaders.indexOf('current_tag');
   const playerIsActiveCol = playersHeaders.indexOf('is_active');
 
   let memberId = null;
   let memberRow = null;
   let memberRowIndex = null;
-  let isNewMember = false;
 
   if (member_number !== undefined && member_number !== null && member_number !== '') {
     // Validate the supplied member_number against an active ClubMembers record
@@ -2907,7 +2905,8 @@ function handleSubmitCheckIn(data) {
     if (playerNameCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerNameCol + 1).setValue(trimmedName);
     if (playerUdiscCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerUdiscCol + 1).setValue(trimmedUdisc);
     if (playerPdgaCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerPdgaCol + 1).setValue(trimmedPdga);
-    if (usesTags && playerCurrentTagCol !== -1) playersSheet.getRange(memberRowIndex + 1, playerCurrentTagCol + 1).setValue(inTagNum);
+    // The roster tag is never written at check-in; it updates only at
+    // end-of-night finalization.
     // Always update updated_at
     const updatedAtCol = playersHeaders.indexOf('updated_at');
     if (updatedAtCol !== -1) playersSheet.getRange(memberRowIndex + 1, updatedAtCol + 1).setValue(now);
@@ -2965,7 +2964,6 @@ function handleSubmitCheckIn(data) {
         newPlayer[playersHeaders.indexOf('name')] = trimmedName;
         newPlayer[playersHeaders.indexOf('udisc_username')] = trimmedUdisc;
         newPlayer[playersHeaders.indexOf('pdga_number')] = trimmedPdga;
-        if (usesTags) newPlayer[playersHeaders.indexOf('current_tag')] = inTagNum;
         newPlayer[playersHeaders.indexOf('is_active')] = true;
         newPlayer[playersHeaders.indexOf('created_at')] = now;
         newPlayer[playersHeaders.indexOf('updated_at')] = now;
@@ -2974,17 +2972,9 @@ function handleSubmitCheckIn(data) {
 
         memberId = newMemberNumber;
         memberRow = newPlayer;
-        isNewMember = true;
       } finally {
         lock.releaseLock();
       }
-    }
-
-    // Update ClubMembers.current_tag with the tag they are checking in with.
-    // Tag-scoring leagues only.
-    if (usesTags && !isNewMember) {
-      const memberRowIndexForTag = playersData.indexOf(memberRow) + 1;
-      playersSheet.getRange(memberRowIndexForTag, playerCurrentTagCol + 1).setValue(inTagNum);
     }
   }
 
