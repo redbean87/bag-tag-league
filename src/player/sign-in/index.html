@@ -97,6 +97,7 @@
     .status strong { font-weight: 600; }
     .form-group { margin-bottom: 1rem; }
     .helper-text { font-size: 0.8125rem; color: #666; margin-top: -0.5rem; margin-bottom: 0.75rem; }
+    .money-breakdown { white-space: pre-line; margin-top: 0; }
     .required-note { font-size: 0.8125rem; color: #666; margin-bottom: 1rem; }
     .success-details { margin-top: 0.75rem; }
     .success-details p { margin-bottom: 0.25rem; }
@@ -201,6 +202,7 @@
           </label>
         </div>
         <p class="helper-text money-explanation" id="checkInMoneyExplanation"></p>
+        <p class="helper-text money-breakdown" id="checkInMoneyBreakdown"></p>
       </div>
       <button type="submit" id="btnCheckIn">Check In</button>
     </form>
@@ -248,6 +250,7 @@
           </label>
         </div>
         <p class="helper-text money-explanation" id="registerMoneyExplanation"></p>
+        <p class="helper-text money-breakdown" id="registerMoneyBreakdown"></p>
       </div>
       <button type="submit" id="btnRegister">Check In</button>
     </form>
@@ -353,11 +356,23 @@
       var explanation = (data && typeof data.money_explanation === 'string')
         ? data.money_explanation
         : '';
+      var breakdown = (data && Object.prototype.toString.call(data.money_breakdown) === '[object Array]')
+        ? data.money_breakdown
+        : [];
       return {
         paid: options.paid !== false,
         ctp: options.ctp === true,
-        money_explanation: explanation
+        money_explanation: explanation,
+        money_breakdown: breakdown
       };
+    }
+
+    // Formats a per-player dollar amount without trailing zeroes so a
+    // whole-dollar part reads as "$2" rather than "$2.00".
+    function formatBreakdownAmount(value) {
+      var amount = Number(value);
+      if (isNaN(amount)) return String(value);
+      return String(Math.round(amount * 100) / 100);
     }
 
     function applyMoneyOptionsToDom(options) {
@@ -366,6 +381,7 @@
       var ctpLabels = ['checkInCtpLabel', 'registerCtpLabel'];
       var aceLabels = ['checkInAcePotLabel', 'registerAcePotLabel'];
       var explanations = ['checkInMoneyExplanation', 'registerMoneyExplanation'];
+      var breakdowns = ['checkInMoneyBreakdown', 'registerMoneyBreakdown'];
       var i;
 
       for (i = 0; i < ctpLabels.length; i++) {
@@ -383,6 +399,21 @@
         if (explanation) {
           explanation.textContent = opts.money_explanation || '';
           explanation.style.display = opts.money_explanation ? '' : 'none';
+        }
+      }
+      // Each component is its own line, rendered from the league's ordered
+      // data so the itemised parts of the fee always come from the settings.
+      var breakdownLines = [];
+      for (i = 0; i < (opts.money_breakdown || []).length; i++) {
+        var component = opts.money_breakdown[i] || {};
+        breakdownLines.push(component.label + ' \u2014 $' + formatBreakdownAmount(component.amount));
+      }
+      var breakdownText = breakdownLines.join('\n');
+      for (i = 0; i < breakdowns.length; i++) {
+        var breakdownEl = document.getElementById(breakdowns[i]);
+        if (breakdownEl) {
+          breakdownEl.textContent = breakdownText;
+          breakdownEl.style.display = breakdownText ? '' : 'none';
         }
       }
 
