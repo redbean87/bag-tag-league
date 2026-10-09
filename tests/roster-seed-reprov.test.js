@@ -49,7 +49,7 @@ function member(number, overrides) {
     udisc_username: 'member' + number,
     pdga_number: String(1000 + number),
     is_active: true,
-    created_at: 't',
+    joined: 't',
     updated_at: 't'
   }, overrides || {});
 }

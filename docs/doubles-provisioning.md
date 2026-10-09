@@ -254,7 +254,7 @@ is deterministic by construction: explicit row payload in, exact roster out.
       "udisc_username": "cortez",
       "pdga_number": "151236",
       "is_active": true,
-      "created_at": "2026-10-09T00:00:00.000Z",
+      "joined": "2026-03-01T00:00:00.000Z",
       "updated_at": "2026-10-09T00:00:00.000Z"
     }
   ]
@@ -264,9 +264,10 @@ is deterministic by construction: explicit row payload in, exact roster out.
 `members` is required: an array of plain objects keyed by `ClubMembers` header
 name. `member_number` is required on every entry and is copied exactly. A
 missing, blank, or duplicate `member_number` is rejected before any write. The
-selector (`league`, or the deprecated `spreadsheetId`) must resolve to a
-registered doubles spreadsheet - the production doubles league or the
-doubles POC league.
+join date is the one field supplied under its own name, `joined`: the reload
+writes it to the member's `created_at` column. The selector (`league`, or the
+deprecated `spreadsheetId`) must resolve to a registered doubles spreadsheet -
+the production doubles league or the doubles POC league.
 
 ### Steps
 
@@ -292,6 +293,11 @@ doubles POC league.
   value, so a partial payload can never blank the roster; only a non-empty
   payload value replaces it. A new member has nothing to preserve, so its
   omitted fields land blank.
+- `created_at` is the member's join date, taken from the payload's `joined`
+  field. An omitted or blank `joined` preserves the stored `created_at`, and
+  the reload never replaces it with the load time; a brand-new member with no
+  `joined` lands blank. `updated_at` keeps its existing meaning as the
+  last-modification timestamp and is never repurposed as a join date.
 - `current_tag` is always blank (a points roster carries no tag), and
   `season_points` is never written: a new row lands blank and an existing cache
   is preserved.
@@ -315,5 +321,6 @@ doubles provisioning, roster-seed
 `member_number` preservation, the doubles provisioning-state guard, the
 disabled re-provisioning UI, the guarded test-data reset, and the seed-only
 roster reload (`member_number` exactness after a full reset, upsert
-idempotency, blank `current_tag`, the preserved `season_points` cache, the
-production permit, and the test-sheet refusal).
+idempotency, the join date written to `created_at` and preserved when absent,
+blank `current_tag`, the preserved `season_points` cache, the production
+permit, and the test-sheet refusal).

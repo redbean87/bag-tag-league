@@ -85,6 +85,13 @@ const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS_DETAG.concat([
 const ROSTER_SEED_BLANK_HEADERS = ['current_tag'];
 const ROSTER_SEED_PRESERVE_HEADERS = ['season_points'];
 
+// Payload field that carries a member's join date. The seed-only roster reload
+// maps it onto the ClubMembers `created_at` column, so a reload restores the
+// member's real join date instead of stamping the load time. `created_at` is
+// never read straight from the payload; `joined` is the one name for this value
+// in the payload, the code, and the docs.
+const ROSTER_SEED_JOIN_DATE_FIELD = 'joined';
+
 // Human-first weekly column groups. A human reading a week tab should see the
 // identity, pair, score, and points/tag columns before the long tail of import
 // and reference fields. Header names never change, so every reader that
@@ -1445,9 +1452,12 @@ function normalizeRosterSeedMembers(members) {
  * and a target header absent from the payload lands blank, so a new row's
  * payload is its whole definition. `current_tag` is always blank;
  * `season_points` is blank for a new row (an update preserves the existing
- * cache). On an update, an omitted or empty identity field preserves the
- * stored value instead of blanking it, so a partial re-seed can never wipe
- * roster detail; only a non-empty payload value replaces it.
+ * cache). The `created_at` column is filled from the payload's `joined` join
+ * date rather than from a payload `created_at` key, so one name carries the
+ * join date everywhere. On an update, an omitted or empty identity field
+ * (including a blank `joined`) preserves the stored value instead of blanking
+ * it, so a partial re-seed can never wipe roster detail; only a non-empty
+ * payload value replaces it.
  */
 function mapRosterSeedRow(member, targetHeaders) {
   var row = new Array(targetHeaders.length).fill('');
@@ -1455,8 +1465,9 @@ function mapRosterSeedRow(member, targetHeaders) {
     var header = targetHeaders[c];
     if (ROSTER_SEED_BLANK_HEADERS.indexOf(header) !== -1) continue;
     if (ROSTER_SEED_PRESERVE_HEADERS.indexOf(header) !== -1) continue;
-    if (Object.prototype.hasOwnProperty.call(member, header) && member[header] !== undefined) {
-      row[c] = member[header];
+    var source = header === 'created_at' ? ROSTER_SEED_JOIN_DATE_FIELD : header;
+    if (Object.prototype.hasOwnProperty.call(member, source) && member[source] !== undefined) {
+      row[c] = member[source];
     }
   }
   return row;
@@ -1483,9 +1494,10 @@ function rosterSeedUpdateValue(mappedValue, existingValue) {
  * with a changed identity field), or unchanged. For an existing row an omitted
  * or empty identity field preserves the stored value rather than blanking it,
  * so a partial re-seed can never wipe roster detail and only a non-empty
- * payload value replaces it; `current_tag` is compared as blank and
- * `season_points` is excluded, so re-seeding an unchanged payload writes
- * nothing and never disturbs the points cache.
+ * payload value replaces it; `created_at` is sourced from the payload's
+ * `joined` join date, `current_tag` is compared as blank and `season_points`
+ * is excluded, so re-seeding an unchanged payload writes nothing and never
+ * disturbs the points cache.
  *
  * Writes nothing. Returns { ok: true, headers, inserts, updates, unchanged,
  * results } or { ok: false, error }.
@@ -3138,6 +3150,10 @@ function handleSearchClubMembers(data) {
  * weeks reports 0 and is never omitted. Singles records omit season_points
  * entirely so the singles payload and views stay exactly as they were.
  *
+ * Every record carries `created_at`, the member's stored join date, so the
+ * admin Member since column can render it. It is read-only here: neither the
+ * listing nor a check-in can set or clear it.
+ *
  * Inputs: league (optional routing selector)
  */
 function handleListClubMembers(data) {
@@ -3160,6 +3176,7 @@ function handleListClubMembers(data) {
   const pdgaCol = playersHeaders.indexOf('pdga_number');
   const currentTagCol = playersHeaders.indexOf('current_tag');
   const isActiveCol = playersHeaders.indexOf('is_active');
+  const createdAtCol = playersHeaders.indexOf('created_at');
 
   // One aggregation shared by every points member listing; it sums the
   // points persisted at import commit, so a committed week always counts.
@@ -3177,7 +3194,8 @@ function handleListClubMembers(data) {
       name: (row[nameCol] || '').toString(),
       udisc_username: (row[udiscCol] || '').toString(),
       pdga_number: (row[pdgaCol] || '').toString(),
-      is_active: isActive
+      is_active: isActive,
+      created_at: createdAtCol !== -1 ? (row[createdAtCol] || '').toString() : ''
     };
 
     if (rules.usesPoints) {
