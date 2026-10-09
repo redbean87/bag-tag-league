@@ -202,7 +202,7 @@ test('the doubles member payload carries the expected fields', () => {
 
   assert.deepEqual(
     Object.keys(ann).sort(),
-    ['is_active', 'member_number', 'name', 'pdga_number', 'season_points', 'udisc_username']
+    ['created_at', 'is_active', 'member_number', 'name', 'pdga_number', 'season_points', 'udisc_username']
   );
   assert.equal(ann.season_points, 2);
   assert.equal(ann.name, 'Ann');

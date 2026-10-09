@@ -1272,6 +1272,22 @@
       el.innerHTML = html;
     }
 
+    // Renders a member's stored join date (created_at) as a date-only label.
+    // The stored value is an ISO 8601 timestamp, so the date prefix is used
+    // directly and never shifts across time zones. A missing, blank, or
+    // unparseable value renders blank rather than an epoch date like
+    // 1970-01-01 or a raw timestamp.
+    function formatMemberSince(value) {
+      if (value === undefined || value === null) return '';
+      var text = String(value).trim();
+      if (!text) return '';
+      var datePart = text.match(/^\d{4}-\d{2}-\d{2}/);
+      if (datePart) return datePart[0];
+      var parsed = new Date(text);
+      if (isNaN(parsed.getTime())) return '';
+      return parsed.toISOString().slice(0, 10);
+    }
+
     // Renders one row per member. season_points defaults to 0 so a member with
     // no points yet shows a number, never null/undefined/NaN.
     function renderMembers(members) {
@@ -1290,6 +1306,7 @@
         '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Name</th>' +
         '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">UDisc</th>' +
         '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">PDGA</th>' +
+        '<th style="text-align:left; border-bottom:1px solid #ddd; padding:0.5rem;">Member since</th>' +
         '<th style="text-align:right; border-bottom:1px solid #ddd; padding:0.5rem;">Season Total</th>' +
         '</tr></thead><tbody>';
 
@@ -1303,6 +1320,7 @@
             (member.is_active === false ? ' <span style="color:#888;">(inactive)</span>' : '') + '</td>' +
           '<td style="padding:0.5rem;">' + escHtml(member.udisc_username || '') + '</td>' +
           '<td style="padding:0.5rem;">' + escHtml(member.pdga_number || '') + '</td>' +
+          '<td style="padding:0.5rem;">' + escHtml(formatMemberSince(member.created_at)) + '</td>' +
           '<td style="padding:0.5rem; text-align:right;">' + total + '</td>' +
           '</tr>';
       });
