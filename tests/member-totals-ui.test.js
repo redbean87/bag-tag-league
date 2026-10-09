@@ -27,6 +27,19 @@ test('the Members panel is present and labelled Season Total', () => {
   assert.match(adminHtml, />Season Total</);
 });
 
+test('the Members panel is a collapsed accordion with mobile touch targets', () => {
+  // Rendered as the shared details.card accordion and collapsed by default.
+  assert.match(adminHtml, /<details class="card" id="membersCard" style="display:none;">\n    <summary>/);
+  assert.doesNotMatch(adminHtml, /<details[^>]*id="membersCard"[^>]*\bopen\b/);
+  assert.match(adminHtml, /<summary>[\s\S]*?<h2>Members<\/h2>[\s\S]*?<\/summary>\s*<div class="card-body">/);
+
+  // The phone layout gives the summary and Refresh action touch-target
+  // height and lets the wide table scroll instead of overflowing.
+  assert.match(adminHtml, /details#membersCard > summary \{\s*min-height: 48px;/);
+  assert.match(adminHtml, /#membersTable \{\s*overflow-x: auto;/);
+  assert.match(adminHtml, /#membersCard button \{\s*min-height: 44px;/);
+});
+
 test('the Members panel is doubles-only and posts to listClubMembers', () => {
   const apply = functionBody(adminHtml, 'applyLeague');
   assert.match(apply, /membersCard\.style\.display = rules\.usesPoints \? '' : 'none'/);
