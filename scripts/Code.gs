@@ -59,6 +59,17 @@ const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS_DETAG.concat([
   'season_points'
 ]);
 
+// ClubMembers columns the seed-only roster reload must never take from the
+// caller's payload. `current_tag` is a singles tag field that has no meaning on
+// a points roster and must stay blank, so the reload always writes it empty
+// (this only matters for a legacy roster that still carries the column).
+// `season_points` is a derived cache recomputed from committed weeks, so an
+// existing value is preserved rather than overwritten and a new row lands
+// blank. Neither column is ever part of the seed's identity comparison, so a
+// re-seed with an unchanged payload is a true no-op.
+const ROSTER_SEED_BLANK_HEADERS = ['current_tag'];
+const ROSTER_SEED_PRESERVE_HEADERS = ['season_points'];
+
 // Human-first weekly column groups. A human reading a week tab should see the
 // identity, pair, score, and points/tag columns before the long tail of import
 // and reference fields. Header names never change, so every reader that
@@ -917,6 +928,237 @@ function seedRosterFromSingles(singlesSpreadsheet, doublesSpreadsheet) {
   };
 }
 
+// ─── Seed-only roster reload ─────────────────────────────────────────────────
+
+/**
+ * Validates an explicit roster-seed payload.
+ *
+ * The payload is an array of plain objects keyed by ClubMembers header name
+ * (the same header order the doubles roster uses). `member_number` is required
+ * on every entry and is copied exactly; a missing, blank, or duplicate number
+ * is rejected before any row is read or written, so the caller gets one
+ * deterministic error instead of a partial seed.
+ *
+ * Returns { ok: true, members: [...] } or { ok: false, error: '...' }.
+ */
+function normalizeRosterSeedMembers(members) {
+  if (members === undefined || members === null) {
+    return { ok: false, error: 'seedRoster requires a `members` array payload.' };
+  }
+  if (!Array.isArray(members)) {
+    return { ok: false, error: 'seedRoster `members` must be an array of member rows.' };
+  }
+  if (members.length === 0) {
+    return { ok: false, error: 'seedRoster `members` must contain at least one member.' };
+  }
+
+  var normalized = [];
+  var seen = {};
+  for (var i = 0; i < members.length; i++) {
+    var member = members[i];
+    if (!member || typeof member !== 'object' || Array.isArray(member)) {
+      return {
+        ok: false,
+        error: 'seedRoster member at index ' + i + ' must be an object keyed by ClubMembers header name.'
+      };
+    }
+    var number = member.member_number;
+    if (number === undefined || number === null || String(number).trim() === '') {
+      return { ok: false, error: 'seedRoster member at index ' + i + ' is missing member_number.' };
+    }
+    var key = String(number);
+    if (seen[key]) {
+      return { ok: false, error: 'seedRoster payload contains duplicate member_number ' + key + '.' };
+    }
+    seen[key] = true;
+    normalized.push(member);
+  }
+
+  return { ok: true, members: normalized };
+}
+
+/**
+ * Maps one explicit member payload object onto the target ClubMembers header
+ * order. Values are copied by header name: an unknown payload key is ignored
+ * and a target header absent from the payload lands blank, so the payload is
+ * the whole row definition. `current_tag` is always blank; `season_points` is
+ * blank for a new row (an update preserves the existing cache).
+ */
+function mapRosterSeedRow(member, targetHeaders) {
+  var row = new Array(targetHeaders.length).fill('');
+  for (var c = 0; c < targetHeaders.length; c++) {
+    var header = targetHeaders[c];
+    if (ROSTER_SEED_BLANK_HEADERS.indexOf(header) !== -1) continue;
+    if (ROSTER_SEED_PRESERVE_HEADERS.indexOf(header) !== -1) continue;
+    if (Object.prototype.hasOwnProperty.call(member, header) && member[header] !== undefined) {
+      row[c] = member[header];
+    }
+  }
+  return row;
+}
+
+/**
+ * Pure planner for the seed-only roster reload. Compares the explicit member
+ * payload against the current ClubMembers rows by `member_number` and
+ * classifies each member as an insert (new number), an update (existing number
+ * with a changed identity field), or unchanged. Identity fields are compared
+ * by header name; `current_tag` is compared as blank and `season_points` is
+ * excluded, so re-seeding an unchanged payload writes nothing and never
+ * disturbs the points cache.
+ *
+ * Writes nothing. Returns { ok: true, headers, inserts, updates, unchanged,
+ * results } or { ok: false, error }.
+ */
+function planRosterSeed(doublesSpreadsheet, members) {
+  var sheet = doublesSpreadsheet.getSheetByName('ClubMembers');
+  if (!sheet) {
+    return { ok: false, error: 'ClubMembers tab not found in doubles spreadsheet.' };
+  }
+
+  var headers = getSheetHeaders(sheet);
+  var memberCol = headers.indexOf('member_number');
+  if (memberCol === -1) {
+    return { ok: false, error: 'ClubMembers tab has no member_number column.' };
+  }
+
+  var data = sheet.getDataRange().getValues();
+  var existingByNumber = {};
+  for (var r = 1; r < data.length; r++) {
+    var existingNumber = data[r][memberCol];
+    if (existingNumber === '' || existingNumber === null || existingNumber === undefined) continue;
+    existingByNumber[String(existingNumber)] = { row_index: r, values: data[r] };
+  }
+
+  var inserts = [];
+  var updates = [];
+  var unchanged = [];
+  var results = [];
+
+  for (var i = 0; i < members.length; i++) {
+    var member = members[i];
+    var number = member.member_number;
+    var mapped = mapRosterSeedRow(member, headers);
+    var existing = existingByNumber[String(number)];
+
+    if (!existing) {
+      var insertedFields = [];
+      for (var f = 0; f < headers.length; f++) {
+        if (ROSTER_SEED_PRESERVE_HEADERS.indexOf(headers[f]) !== -1) continue;
+        if (mapped[f] !== '') insertedFields.push(headers[f]);
+      }
+      inserts.push({ member_number: number, row: mapped });
+      results.push({ member_number: number, action: 'insert', changed_fields: insertedFields });
+      continue;
+    }
+
+    var changedFields = [];
+    for (var c = 0; c < headers.length; c++) {
+      if (ROSTER_SEED_PRESERVE_HEADERS.indexOf(headers[c]) !== -1) continue;
+      if (existing.values[c] !== mapped[c]) changedFields.push(headers[c]);
+    }
+
+    if (changedFields.length === 0) {
+      unchanged.push(number);
+      results.push({ member_number: number, action: 'unchanged', changed_fields: [] });
+      continue;
+    }
+
+    // Overwrite every identity field but keep derived columns (season_points)
+    // from the existing row, so an update can never blank the points cache.
+    var updatedRow = existing.values.slice();
+    for (var c2 = 0; c2 < headers.length; c2++) {
+      if (ROSTER_SEED_PRESERVE_HEADERS.indexOf(headers[c2]) !== -1) continue;
+      updatedRow[c2] = mapped[c2];
+    }
+    updates.push({ member_number: number, row_index: existing.row_index, row: updatedRow });
+    results.push({ member_number: number, action: 'update', changed_fields: changedFields });
+  }
+
+  return {
+    ok: true,
+    headers: headers,
+    inserts: inserts,
+    updates: updates,
+    unchanged: unchanged,
+    results: results
+  };
+}
+
+/**
+ * Applies a plan from planRosterSeed. Existing rows are rewritten in place (so
+ * member_number never moves and the season_points cache is preserved) and new
+ * rows are appended. Weekly sheets are never touched.
+ */
+function applyRosterSeedPlan(sheet, plan) {
+  for (var i = 0; i < plan.updates.length; i++) {
+    var update = plan.updates[i];
+    sheet.getRange(update.row_index + 1, 1, 1, plan.headers.length).setValues([update.row]);
+  }
+  for (var j = 0; j < plan.inserts.length; j++) {
+    sheet.appendRow(plan.inserts[j].row);
+  }
+}
+
+/**
+ * Seed-only roster reload. Guards the target against the test-spreadsheet
+ * allow-list before reading a row, then upserts the explicit member payload
+ * into ClubMembers by `member_number`.
+ *
+ * This is intentionally independent of getDoublesProvisioningState: it is the
+ * supported action on an already-provisioned workbook, in particular right
+ * after a `scope: 'full'` reset has emptied the roster. It never creates tabs,
+ * never touches a weekly sheet, and never renumbers a member.
+ *
+ * options:
+ *   spreadsheetId (required) - resolved allow-listed id; must be on the
+ *                              test-spreadsheet allow-list.
+ *   members (required)       - explicit array of member objects keyed by
+ *                              ClubMembers header name.
+ *   apply (boolean)          - false (default) previews, true writes.
+ *
+ * Returns a deterministic report: the applied flag, the insert/update/
+ * unchanged counts and member numbers, and per-member results. A refused or
+ * invalid request reports no writes.
+ */
+function seedRoster(doublesSpreadsheet, options) {
+  options = options || {};
+  var guard = assertTestSpreadsheet(options.spreadsheetId);
+  if (!guard.ok) {
+    return { applied: false, refused: true, reason: guard.reason, error: guard.error, results: [] };
+  }
+
+  var normalized = normalizeRosterSeedMembers(options.members);
+  if (!normalized.ok) {
+    return { applied: false, refused: false, error: normalized.error, results: [] };
+  }
+
+  var plan = planRosterSeed(doublesSpreadsheet, normalized.members);
+  if (!plan.ok) {
+    return { applied: false, refused: false, error: plan.error, results: [] };
+  }
+
+  var apply = options.apply === true;
+  if (apply) {
+    applyRosterSeedPlan(doublesSpreadsheet.getSheetByName('ClubMembers'), plan);
+  }
+
+  return {
+    applied: apply,
+    refused: false,
+    inserted: plan.inserts.length,
+    updated: plan.updates.length,
+    unchanged: plan.unchanged.length,
+    total_members: normalized.members.length,
+    sheets_changed: plan.inserts.length + plan.updates.length > 0 ? 1 : 0,
+    inserted_member_numbers: plan.inserts.map(function(entry) { return entry.member_number; }),
+    updated_member_numbers: plan.updates.map(function(entry) { return entry.member_number; }),
+    unchanged_member_numbers: plan.unchanged.slice(),
+    results: plan.results
+  };
+}
+
+// ─── End seed-only roster reload ─────────────────────────────────────────────
+
 /**
  * Provisions the doubles workbook schema: League (league_format=doubles),
  * ClubMembers, the Week template, and the singles roster seed.
@@ -1033,6 +1275,80 @@ function handleProvisionDoubles(data) {
   var singlesSpreadsheet = resolveSpreadsheet(SPREADSHEET_ID);
   var summary = provisionDoublesWorkbook(doublesSpreadsheet, singlesSpreadsheet);
   return respond('ok', 'Doubles spreadsheet provisioned.', summary);
+}
+
+/**
+ * Web-app action: preview or apply the seed-only roster reload. The target is
+ * resolved through the league allow-list and then required to be on the
+ * test-spreadsheet allow-list, so live Singles and any non-test spreadsheet
+ * are refused before a row is read or written. Defaults to a dry run that
+ * reports exactly which member_numbers would be inserted, updated, or left
+ * unchanged.
+ *
+ * Unlike `provisionDoubles`, this action is allowed on an already-provisioned
+ * workbook: it only reloads roster rows and never creates tabs. It is the
+ * supported path after a `scope: 'full'` reset.
+ *
+ * Inputs:
+ *   league/spreadsheetId selector (must resolve to the doubles test sheet)
+ *   members (required) - explicit array of member objects keyed by
+ *                        ClubMembers header name; member_number is required.
+ *   apply (boolean, default false)
+ */
+function handleSeedRoster(data) {
+  data = data || {};
+  var selector = leagueSelectorFrom(data);
+  var rules = getLeagueRules(selector);
+  var spreadsheetId = resolveSpreadsheetId(selector);
+  var apply = data.apply === true || data.apply === 'true';
+
+  var guard = assertTestSpreadsheet(spreadsheetId);
+  if (!guard.ok) {
+    return respond('error', guard.error, {
+      refused: true,
+      reason: guard.reason,
+      format: rules.format,
+      scoring: rules.scoring,
+      applied: false
+    });
+  }
+
+  var report = seedRoster(resolveSpreadsheet(selector), {
+    spreadsheetId: spreadsheetId,
+    members: data.members,
+    apply: apply
+  });
+
+  if (report.error) {
+    return respond('error', report.error, {
+      refused: false,
+      format: rules.format,
+      scoring: rules.scoring,
+      applied: false
+    });
+  }
+
+  var message = apply
+    ? 'Roster seed applied: inserted ' + report.inserted + ', updated ' + report.updated +
+      ', unchanged ' + report.unchanged + '.'
+    : 'Roster seed dry run: would insert ' + report.inserted + ', update ' + report.updated +
+      ', leave ' + report.unchanged + ' unchanged. No writes were made.';
+
+  return respond('ok', message, {
+    refused: false,
+    format: rules.format,
+    scoring: rules.scoring,
+    applied: apply,
+    inserted: report.inserted,
+    updated: report.updated,
+    unchanged: report.unchanged,
+    total_members: report.total_members,
+    sheets_changed: report.sheets_changed,
+    inserted_member_numbers: report.inserted_member_numbers,
+    updated_member_numbers: report.updated_member_numbers,
+    unchanged_member_numbers: report.unchanged_member_numbers,
+    results: report.results
+  });
 }
 
 /**
@@ -2063,6 +2379,9 @@ function doPost(e) {
     }
     if (data.action === 'resetTestData') {
       return handleResetTestData(data);
+    }
+    if (data.action === 'seedRoster') {
+      return handleSeedRoster(data);
     }
 
     return respond('error', 'Unknown action: ' + data.action);
