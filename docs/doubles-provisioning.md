@@ -20,7 +20,7 @@ topology. It is deterministic and safe to run repeatedly:
 
 | Tab | Headers | Notes |
 |-----|---------|-------|
-| `League` | 15 base columns + `league_format` + `scoring` + `points_by_place` + `points_participation` + `payout_by_place` | Settings row records `league_format=doubles` and `scoring=points`; the points columns carry the per-league matrix and the payout column the per-league weekly amounts |
+| `League` | 15 base columns + `league_format` + `scoring` + `points_by_place` + `points_participation` + `payout_by_place` + `entry_fee_explanation` | Settings row records `league_format=doubles` and `scoring=points`; the points columns carry the per-league matrix, the payout column the per-league weekly amounts, and the explanation column the plain-language money copy shown at check-in |
 | `ClubMembers` | The 8 tag-free roster columns | One row per member, `member_number` preserved; `season_points` caches the live season total |
 | `Week template` | The 51 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
 | `Week YYYY-MM-DD` | The 51 human-first weekly columns | Created on demand for a league date |
@@ -47,14 +47,18 @@ drops the singles tag columns entirely. Every reader resolves a column by name,
 so only the physical layout changed. The 15 base `LEAGUE_SHEET_HEADERS`
 columns are unchanged; both leagues append the same metadata columns
 (`league_format` and `scoring`) plus the per-league points settings
-(`points_by_place` and `points_participation`) and the per-league weekly payout
-table (`payout_by_place`), so a League sheet is 20 columns.
+(`points_by_place` and `points_participation`), the per-league weekly payout
+table (`payout_by_place`), and the check-in money explanation
+(`entry_fee_explanation`), so a League sheet is 21 columns.
 `points_by_place` is a compact `place:value,...` list and
 `points_participation` is the showing-up credit; a blank values falls back to
 the day-one `1:2,2:1.5,3:1` and `0.5`. `payout_by_place` is the same compact
 form, each value being the per-player dollar amount for that placement (a
 second-place value can carry the entry-fee refund); a blank value means the
-league pays no weekly money. The registry is authoritative for
+league pays no weekly money. `entry_fee_explanation` is the text shown beside
+the check-in payment options; a blank value falls back to the default copy
+about the weekly winning team, the second-place team's money back, and the
+season payout from points. The registry is authoritative for
 routing and the sheet records the same values as per-spreadsheet confirmation;
 a mismatch is reported, never auto-corrected.
 

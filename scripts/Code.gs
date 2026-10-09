@@ -347,10 +347,28 @@ const LEAGUE_POINTS_HEADERS = ['points_by_place', 'points_participation'];
 // the app shows no payout figures, keeping today's output byte-identical.
 const LEAGUE_PAYOUT_HEADERS = ['payout_by_place'];
 
+// League-level explanation of what the entry fee pays for, shown beside the
+// check-in payment options. A blank value falls back to
+// DEFAULT_ENTRY_FEE_EXPLANATION, so an un-migrated sheet still explains the
+// money in plain language.
+const LEAGUE_EXPLANATION_HEADERS = ['entry_fee_explanation'];
+
+// Shown whenever a league has not written its own explanation. It describes
+// the money this app's league actually collects: the weekly winning team gets
+// paid, the second-place team gets its entry fee back, and the season is paid
+// out from points.
+const DEFAULT_ENTRY_FEE_EXPLANATION = 'Your entry fee pays the weekly winning team, the second-place team their money back, and the season payout from points.';
+
+// The settings columns this writer owns: the points table, the weekly payout
+// table, and the money explanation. Kept together so the save path appends all
+// of them to a pre-settings sheet in one place.
+const LEAGUE_SETTINGS_HEADERS = LEAGUE_POINTS_HEADERS
+  .concat(LEAGUE_PAYOUT_HEADERS)
+  .concat(LEAGUE_EXPLANATION_HEADERS);
+
 const LEAGUE_SHEET_HEADERS_EXTENDED = LEAGUE_SHEET_HEADERS
   .concat(LEAGUE_SHEET_METADATA_HEADERS)
-  .concat(LEAGUE_POINTS_HEADERS)
-  .concat(LEAGUE_PAYOUT_HEADERS);
+  .concat(LEAGUE_SETTINGS_HEADERS);
 
 // Kept name for callers written before singles carried metadata; the doubles
 // schema and the extended singles schema are the same settings set now.
@@ -582,6 +600,31 @@ function resolvePayoutRules(leagueSettings) {
   var settings = leagueSettings || {};
   var parsed = parsePointsByPlace(settings.payout_by_place);
   return { byPlace: parsed.ok ? parsed.byPlace : {} };
+}
+
+/**
+ * Resolves the money options a league offers at check-in from its settings.
+ * Paid is always offered; the ace pot is offered only when the league sets a
+ * contribution above zero, and CTP only when it sets a CTP contribution above
+ * zero. A blank, missing, or malformed contribution means the option is not
+ * offered, so the page can hide it and the server can refuse it. The money
+ * explanation falls back to DEFAULT_ENTRY_FEE_EXPLANATION. Returns
+ * { paid, ctp, ace_pot, money_explanation }.
+ */
+function resolveCheckInOptions(leagueSettings) {
+  var settings = leagueSettings || {};
+  var acePot = Number(settings.ace_pot_contribution);
+  var ctp = Number(settings.ctp_contribution);
+  var explanation = settings.entry_fee_explanation;
+  if (explanation === '' || explanation === null || explanation === undefined) {
+    explanation = DEFAULT_ENTRY_FEE_EXPLANATION;
+  }
+  return {
+    paid: true,
+    ctp: !isNaN(ctp) && ctp > 0,
+    ace_pot: !isNaN(acePot) && acePot > 0,
+    money_explanation: String(explanation)
+  };
 }
 
 /**
@@ -1617,6 +1660,10 @@ function leagueHeadersMatch(headers, format, scoring) {
       arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(['league_format']))) return true;
   if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS))) return true;
   if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS).concat(LEAGUE_POINTS_HEADERS))) return true;
+  // A sheet provisioned before the money explanation existed carries every
+  // settings column but this one; it is still a known layout, brought current
+  // by the next provision or settings save.
+  if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS).concat(LEAGUE_POINTS_HEADERS).concat(LEAGUE_PAYOUT_HEADERS))) return true;
   return false;
 }
 
@@ -2555,6 +2602,9 @@ function doPost(e) {
     if (data.action === 'getLeagueSettings') {
       return handleGetLeagueSettings(data);
     }
+    if (data.action === 'getCheckInOptions') {
+      return handleGetCheckInOptions(data);
+    }
     if (data.action === 'saveLeagueSettings') {
       return handleSaveLeagueSettings(data);
     }
@@ -2942,6 +2992,18 @@ function handleSubmitCheckIn(data) {
 
   const spreadsheet = resolveSpreadsheet(leagueId);
 
+  // Money options are data-driven from the league's own settings: an option the
+  // league does not offer (its contribution is not above zero) is refused even
+  // when a client supplies it, matching exactly the options the sign-in page
+  // renders. Paid is always offered.
+  const checkInOptions = resolveCheckInOptions(readLeagueSettingsRow(spreadsheet.getSheetByName('League')));
+  if ((ctp === true || ctp === 'TRUE') && !checkInOptions.ctp) {
+    return respond('error', 'CTP is not offered by this league.');
+  }
+  if ((ace_pot === true || ace_pot === 'TRUE') && !checkInOptions.ace_pot) {
+    return respond('error', 'Ace Pot is not offered by this league.');
+  }
+
   // --- Step 1: Find or create club member ---
   const playersSheet = spreadsheet.getSheetByName('ClubMembers');
   if (!playersSheet) {
@@ -3220,6 +3282,33 @@ function handleGetLeagueSettings(data) {
 }
 
 /**
+ * Returns the money options a league offers at check-in plus its plain-language
+ * money explanation. Read-only and safe for the player sign-in page: it exposes
+ * only the offered options and the explanation, never the full settings row.
+ * A league with no League sheet or no settings row offers Paid only and the
+ * default explanation.
+ */
+function handleGetCheckInOptions(data) {
+  const selector = leagueSelectorFrom(data);
+  const spreadsheet = resolveSpreadsheet(selector);
+  const settings = readLeagueSettingsRow(spreadsheet.getSheetByName('League'));
+  const rules = getLeagueRules(selector, settings);
+  const options = resolveCheckInOptions(settings);
+
+  return respond('ok', 'Check-in options loaded.', {
+    league: resolveLeagueId(selector),
+    format: rules.format,
+    scoring: rules.scoring,
+    options: {
+      paid: options.paid,
+      ctp: options.ctp,
+      ace_pot: options.ace_pot
+    },
+    money_explanation: options.money_explanation
+  });
+}
+
+/**
  * Saves or updates League settings on the League sheet.
  * Numeric fields: entry_fee, ace_pot_contribution, ace_pot_current_total,
  *   ace_pot_calculated_total, ace_pot_total, ctp_contribution,
@@ -3307,7 +3396,7 @@ function handleSaveLeagueSettings(data) {
   // them when a pre-settings sheet lacks them so the write below stays aligned.
   // The format/scoring enums are provisioned elsewhere and preserved, never
   // written from this form.
-  ensureLeagueSettingsColumns(sheet, LEAGUE_POINTS_HEADERS.concat(LEAGUE_PAYOUT_HEADERS));
+  ensureLeagueSettingsColumns(sheet, LEAGUE_SETTINGS_HEADERS);
 
   const allData = sheet.getDataRange().getValues();
   const now = new Date().toISOString();

@@ -49,7 +49,10 @@
 6. Player supplies their `in_tag` (actual starting bag tag for this league day)
    - The app does NOT auto-fill this from `ClubMembers.current_tag`
    - Players may have traded tags since the last league day
-7. Player confirms payment status (`paid`)
+7. Player sees the money options the league actually offers — Paid always, and
+   Ace Pot or CTP only when the league sets that contribution above zero — with
+   a plain-language explanation of what the entry fee pays for, then confirms
+   their payment status
 8. Player submits the check-in
 9. System creates a new row in the WeeklyPlayerRecords tab with:
    - `member_number` linking to the ClubMembers record

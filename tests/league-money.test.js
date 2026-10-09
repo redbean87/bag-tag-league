@@ -344,12 +344,13 @@ test('the sign-in page ships the Ace Pot checkbox through to the check-in payloa
   );
 
   // The box exists in both the returning-member and registration forms and is
-  // read into the payload the server counts. This is the UI half of the
-  // ticked-vs-unticked contract the server tests above prove.
+  // read into the payload the server counts, but only when the league actually
+  // offers the ace pot. This is the UI half of the ticked-vs-unticked contract
+  // the server tests above prove.
   assert.match(html, /id="checkInAcePot"/);
   assert.match(html, /id="registerAcePot"/);
   assert.match(html, /var acePot = document\.getElementById\(prefix \+ 'AcePot'\)\.checked;/);
-  assert.match(html, /ace_pot: acePot/);
+  assert.match(html, /if \(moneyOptions\.ace_pot\) payload\.ace_pot = acePot;/);
 });
 
 test('only ticked check-ins count toward the pot across a full field', () => {

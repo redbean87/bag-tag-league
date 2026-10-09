@@ -391,6 +391,16 @@
             <label for="ctp_contribution">CTP Contribution</label>
             <input type="number" id="ctp_contribution" step="0.01" min="0" placeholder="">
           </div>
+          <p class="help-text">
+            Shown beside the player check-in payment options, so players can see
+            plainly what the entry fee pays for. Leave blank to use the default:
+            <em>Your entry fee pays the weekly winning team, the second-place
+            team their money back, and the season payout from points.</em>
+          </p>
+          <div class="field-group">
+            <label for="entry_fee_explanation">Entry Fee Explanation</label>
+            <textarea id="entry_fee_explanation" rows="2" placeholder="What your entry fee pays for"></textarea>
+          </div>
 
           <div id="pointsSettingsFields" style="display:none;">
             <h3 style="font-size:1rem; margin-bottom:0.75rem; margin-top:1rem; color:#555;">Points</h3>
@@ -1655,6 +1665,7 @@
           document.getElementById('ace_pot_contribution').value = s.ace_pot_contribution !== undefined && s.ace_pot_contribution !== '' ? s.ace_pot_contribution : '';
           document.getElementById('ace_pot_current_total').value = s.ace_pot_current_total !== undefined && s.ace_pot_current_total !== '' ? s.ace_pot_current_total : '';
           document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
+          document.getElementById('entry_fee_explanation').value = s.entry_fee_explanation !== undefined && s.entry_fee_explanation !== '' ? s.entry_fee_explanation : '';
           document.getElementById('points_by_place').value = s.points_by_place !== undefined && s.points_by_place !== '' ? s.points_by_place : '';
           document.getElementById('points_participation').value = s.points_participation !== undefined && s.points_participation !== '' ? s.points_participation : '';
           document.getElementById('payout_by_place').value = s.payout_by_place !== undefined && s.payout_by_place !== '' ? s.payout_by_place : '';
@@ -1729,6 +1740,7 @@
         ace_pot_contribution: document.getElementById('ace_pot_contribution').value,
         ace_pot_current_total: document.getElementById('ace_pot_current_total').value,
         ctp_contribution: document.getElementById('ctp_contribution').value,
+        entry_fee_explanation: document.getElementById('entry_fee_explanation').value.trim(),
         points_by_place: document.getElementById('points_by_place').value.trim(),
         points_participation: document.getElementById('points_participation').value,
         payout_by_place: document.getElementById('payout_by_place').value.trim()

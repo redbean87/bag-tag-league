@@ -190,16 +190,17 @@
       <div class="form-group">
         <label>Status</label>
         <div class="checkbox-group">
-          <label class="checkbox-label">
+          <label class="checkbox-label" id="checkInPaidLabel">
             <input type="checkbox" id="checkInPaid"> Paid
           </label>
-          <label class="checkbox-label">
+          <label class="checkbox-label" id="checkInCtpLabel">
             <input type="checkbox" id="checkInCtp"> CTP
           </label>
-          <label class="checkbox-label">
+          <label class="checkbox-label" id="checkInAcePotLabel">
             <input type="checkbox" id="checkInAcePot"> Ace Pot
           </label>
         </div>
+        <p class="helper-text money-explanation" id="checkInMoneyExplanation"></p>
       </div>
       <button type="submit" id="btnCheckIn">Check In</button>
     </form>
@@ -236,16 +237,17 @@
       <div class="form-group">
         <label>Status</label>
         <div class="checkbox-group">
-          <label class="checkbox-label">
+          <label class="checkbox-label" id="registerPaidLabel">
             <input type="checkbox" id="registerPaid"> Paid
           </label>
-          <label class="checkbox-label">
+          <label class="checkbox-label" id="registerCtpLabel">
             <input type="checkbox" id="registerCtp"> CTP
           </label>
-          <label class="checkbox-label">
+          <label class="checkbox-label" id="registerAcePotLabel">
             <input type="checkbox" id="registerAcePot"> Ace Pot
           </label>
         </div>
+        <p class="helper-text money-explanation" id="registerMoneyExplanation"></p>
       </div>
       <button type="submit" id="btnRegister">Check In</button>
     </form>
@@ -289,6 +291,11 @@
       ? window.LeagueFormat.rulesForLeague(resolvedLeague.id)
       : { usesTags: true, usesPoints: false, hasPairs: false };
 
+    // The money options the resolved league offers. Starts conservative (Paid
+    // only) until the server answers, so nothing a league does not offer can be
+    // submitted before the options load.
+    var moneyOptions = checkInOptionsFrom(null);
+
     function resolveLeagueFromUrl() {
       var requested = null;
       try {
@@ -330,6 +337,86 @@
 
       var successTag = document.getElementById('successTagInfo');
       if (successTag) successTag.style.display = rules.usesTags ? '' : 'none';
+    }
+
+    // --- Money options ---
+    // The check-in money options are data-driven from the league's own
+    // settings: Paid is always offered, Ace Pot only when the league sets an
+    // ace pot contribution above zero, and CTP only when it sets a CTP
+    // contribution above zero. A hidden option is never submitted, and the
+    // server independently refuses an option the league does not offer. The
+    // explanation beside the options comes from the same league data.
+
+    function checkInOptionsFrom(data) {
+      var options = (data && data.options) ? data.options : {};
+      var explanation = (data && typeof data.money_explanation === 'string')
+        ? data.money_explanation
+        : '';
+      return {
+        paid: options.paid !== false,
+        ctp: options.ctp === true,
+        ace_pot: options.ace_pot === true,
+        money_explanation: explanation
+      };
+    }
+
+    function applyMoneyOptionsToDom(options) {
+      var opts = options || checkInOptionsFrom(null);
+
+      var ctpLabels = ['checkInCtpLabel', 'registerCtpLabel'];
+      var aceLabels = ['checkInAcePotLabel', 'registerAcePotLabel'];
+      var explanations = ['checkInMoneyExplanation', 'registerMoneyExplanation'];
+      var i;
+
+      for (i = 0; i < ctpLabels.length; i++) {
+        var ctpLabel = document.getElementById(ctpLabels[i]);
+        if (ctpLabel) ctpLabel.style.display = opts.ctp ? '' : 'none';
+      }
+      for (i = 0; i < aceLabels.length; i++) {
+        var aceLabel = document.getElementById(aceLabels[i]);
+        if (aceLabel) aceLabel.style.display = opts.ace_pot ? '' : 'none';
+      }
+      for (i = 0; i < explanations.length; i++) {
+        var explanation = document.getElementById(explanations[i]);
+        if (explanation) {
+          explanation.textContent = opts.money_explanation || '';
+          explanation.style.display = opts.money_explanation ? '' : 'none';
+        }
+      }
+
+      // A hidden box can never leave a stale tick behind.
+      if (!opts.ctp) {
+        var ctpCheckIn = document.getElementById('checkInCtp');
+        var ctpRegister = document.getElementById('registerCtp');
+        if (ctpCheckIn) ctpCheckIn.checked = false;
+        if (ctpRegister) ctpRegister.checked = false;
+      }
+      if (!opts.ace_pot) {
+        var aceCheckIn = document.getElementById('checkInAcePot');
+        var aceRegister = document.getElementById('registerAcePot');
+        if (aceCheckIn) aceCheckIn.checked = false;
+        if (aceRegister) aceRegister.checked = false;
+      }
+    }
+
+    async function loadCheckInOptions() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getCheckInOptions', league: resolvedLeague.id })
+        });
+        var data = await response.json();
+        if (data.status === 'ok') {
+          moneyOptions = checkInOptionsFrom(data);
+          applyMoneyOptionsToDom(moneyOptions);
+          return;
+        }
+      } catch (err) {
+        // Fall through to the conservative Paid-only default.
+      }
+      moneyOptions = checkInOptionsFrom(null);
+      applyMoneyOptionsToDom(moneyOptions);
     }
 
     function renderLeagueIndicator() {
@@ -532,10 +619,14 @@
           name: name,
           udisc_username: udiscUsername || '',
           pdga_number: pdgaNumber || '',
-          paid: paid,
-          ctp: ctp,
-          ace_pot: acePot
+          paid: paid
         };
+
+        // Only the money options the league actually offers are submitted. A
+        // hidden option is omitted so it can never be recorded for a league
+        // that does not run it; the server refuses a disallowed option too.
+        if (moneyOptions.ctp) payload.ctp = ctp;
+        if (moneyOptions.ace_pot) payload.ace_pot = acePot;
 
         // Tag collection belongs to tag-scoring leagues; points-scoring
         // leagues never send in_tag.
@@ -583,6 +674,8 @@
 
     renderLeagueIndicator();
     applyTagVisibility();
+    applyMoneyOptionsToDom(moneyOptions);
+    loadCheckInOptions();
     document.getElementById('searchInput').addEventListener('input', onSearchInput);
   </script>
 </body>
