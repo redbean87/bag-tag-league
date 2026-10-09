@@ -1,0 +1,99 @@
+name: Deploy
+
+# Merging to main is the only manual step. This workflow deploys all three
+# targets from the merged commit in one cheap job:
+#   1. the Apps Script backend (scripts/deploy.sh)
+#   2. the production Cloudflare Worker (bag-tag-league)
+#   3. the dev Cloudflare Worker (bag-tag-league-dev)
+#
+# Both workers serve the same static assets and the same code; the dev worker
+# only changes which leagues the picker offers. They deploy from main together
+# so one merge keeps both addresses in step. No dev branch exists.
+on:
+  push:
+    branches: [main]
+    # Docs-only merges cannot change the deployed app, so skip the runner cost.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  workflow_dispatch:
+
+# Serialize deploys; never cancel one that is already running and might be
+# half-applied.
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+# Least privilege: the deploy authenticates with repository secrets, not with
+# the GITHUB_TOKEN, so the token only needs read access to the checkout.
+permissions:
+  contents: read
+
+env:
+  WRANGLER_SEND_METRICS: 'false'
+
+jobs:
+  deploy:
+    name: Deploy backend and frontends
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Fail before any deploy if a credential is missing, naming every secret
+      # the captain still has to create.
+      - name: Verify required secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLASP_CREDENTIALS_JSON: ${{ secrets.CLASP_CREDENTIALS_JSON }}
+        run: |
+          missing=()
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLASP_CREDENTIALS_JSON; do
+            if [ -z "${!name:-}" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required repository secret(s): ${missing[*]}. Create them per docs/deployment.md."
+            exit 1
+          fi
+          echo "All required repository secrets are present."
+
+      - name: Install deploy tools
+        run: npm install --global --no-fund --no-audit wrangler@4.149.0 @google/clasp@3.4.1
+
+      # clasp reads credentials from ~/.clasprc.json. The secret holds that
+      # file's contents (never committed); validate it so a malformed paste
+      # fails here with a clear message instead of deep inside clasp.
+      - name: Configure clasp credentials
+        env:
+          CLASP_CREDENTIALS_JSON: ${{ secrets.CLASP_CREDENTIALS_JSON }}
+        run: |
+          printf '%s' "$CLASP_CREDENTIALS_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          if ! node -e "JSON.parse(require('fs').readFileSync(process.env.HOME + '/.clasprc.json', 'utf8'))"; then
+            echo "::error::CLASP_CREDENTIALS_JSON is not valid JSON. Copy ~/.clasprc.json after 'clasp login'. See docs/deployment.md."
+            exit 1
+          fi
+
+      # Backend first: the new frontend must never call an action the old
+      # Apps Script deployment does not have yet.
+      - name: Deploy backend (Google Apps Script)
+        run: bash scripts/deploy.sh "Deploy ${GITHUB_SHA} via GitHub Actions"
+
+      - name: Deploy production frontend (Cloudflare Worker)
+        run: wrangler deploy --env=""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy dev frontend (Cloudflare Worker)
+        run: wrangler deploy --env dev
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -37,6 +37,7 @@ All product and technical documentation lives in `docs/`:
 | [Implementation Plan](docs/implementation-plan.md) | Phased build order |
 | [Google Apps Script POC](docs/google-apps-script-poc.md) | POC test results and setup instructions |
 | [Doubles Provisioning](docs/doubles-provisioning.md) | Doubles spreadsheet provisioning, operator scripts, and tests |
+| [Deployment](docs/deployment.md) | Automatic deploys from `main` and the required repository secrets |
 | [Open Decisions](docs/open-decisions.md) | Unresolved questions needing input |
 
 ## Technology
