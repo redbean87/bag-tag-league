@@ -71,13 +71,15 @@ test('Paid is always offered and an unset pot is never offered', () => {
     paid: true,
     ctp: false,
     ace_pot: false,
-    money_explanation: h.bound.DEFAULT_ENTRY_FEE_EXPLANATION
+    money_explanation: h.bound.DEFAULT_ENTRY_FEE_EXPLANATION,
+    money_breakdown: []
   });
   assert.deepEqual(resolve(null), {
     paid: true,
     ctp: false,
     ace_pot: false,
-    money_explanation: h.bound.DEFAULT_ENTRY_FEE_EXPLANATION
+    money_explanation: h.bound.DEFAULT_ENTRY_FEE_EXPLANATION,
+    money_breakdown: []
   });
 });
 
@@ -89,7 +91,8 @@ test('a points league with an ace pot includes the pot and offers no CTP', () =>
     paid: true,
     ctp: false,
     ace_pot: true,
-    money_explanation: h.bound.DEFAULT_ENTRY_FEE_EXPLANATION
+    money_explanation: h.bound.DEFAULT_ENTRY_FEE_EXPLANATION,
+    money_breakdown: []
   });
 });
 
@@ -190,7 +193,7 @@ function functionBody(name) {
 }
 
 function loadMoneyHelpers() {
-  const names = ['checkInOptionsFrom', 'applyMoneyOptionsToDom'];
+  const names = ['checkInOptionsFrom', 'formatBreakdownAmount', 'applyMoneyOptionsToDom'];
   const source = names.map(functionBody).join('\n') +
     '\nreturn {' + names.join(', ') + '};';
   return new Function('document', source);

@@ -52,9 +52,12 @@
    - Players may have traded tags since the last league day
 7. Player sees the money options the league actually offers — Paid always, and
    CTP only when the league sets that contribution above zero — with a
-   plain-language explanation of what the entry fee pays for, then confirms
-   their payment status. When the league sets an ace pot contribution it is
-   included in the entry fee, so it is not a separate choice.
+   plain-language explanation of what the entry fee pays for and, when the
+   league configures an itemised breakdown, the ordered parts of the fee (for
+   example weekly payouts, season payout, ace pot, and club fees). The player
+   then confirms their payment status. When the league sets an ace pot
+   contribution it is included in the entry fee, so it is not a separate
+   choice.
 8. Player submits the check-in
 9. System creates a new row in the WeeklyPlayerRecords tab with:
    - `member_number` linking to the ClubMembers record

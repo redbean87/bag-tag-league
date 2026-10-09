@@ -353,6 +353,14 @@ const LEAGUE_PAYOUT_HEADERS = ['payout_by_place'];
 // money in plain language.
 const LEAGUE_EXPLANATION_HEADERS = ['entry_fee_explanation'];
 
+// League-level itemised entry-fee breakdown: an ordered "label:amount,..."
+// list of the components the per-player entry fee pays for (for example
+// "Weekly payouts:2,Season payout:1,Ace pot:1,Club fees:1"). The sign-in page
+// renders it beside the payment options and the admin warns when the amounts
+// do not sum to the configured entry fee. Blank means the league itemises
+// nothing.
+const LEAGUE_BREAKDOWN_HEADERS = ['entry_fee_breakdown'];
+
 // Shown whenever a league has not written its own explanation. It describes
 // the money this app's league actually collects: the weekly winning team gets
 // paid, the second-place team gets its entry fee back, and the season is paid
@@ -360,11 +368,13 @@ const LEAGUE_EXPLANATION_HEADERS = ['entry_fee_explanation'];
 const DEFAULT_ENTRY_FEE_EXPLANATION = 'Your entry fee pays the weekly winning team, the second-place team their money back, and the season payout from points.';
 
 // The settings columns this writer owns: the points table, the weekly payout
-// table, and the money explanation. Kept together so the save path appends all
-// of them to a pre-settings sheet in one place.
+// table, the money explanation, and the itemised entry-fee breakdown. Kept
+// together so the save path appends all of them to a pre-settings sheet in one
+// place.
 const LEAGUE_SETTINGS_HEADERS = LEAGUE_POINTS_HEADERS
   .concat(LEAGUE_PAYOUT_HEADERS)
-  .concat(LEAGUE_EXPLANATION_HEADERS);
+  .concat(LEAGUE_EXPLANATION_HEADERS)
+  .concat(LEAGUE_BREAKDOWN_HEADERS);
 
 const LEAGUE_SHEET_HEADERS_EXTENDED = LEAGUE_SHEET_HEADERS
   .concat(LEAGUE_SHEET_METADATA_HEADERS)
@@ -603,6 +613,74 @@ function resolvePayoutRules(leagueSettings) {
 }
 
 /**
+ * Parses the compact ordered entry-fee breakdown ("label:amount,...") into an
+ * ordered [{ label, amount }] list. The label may contain spaces and colons;
+ * the amount is everything after the last colon. Blank is valid and yields an
+ * empty list so an un-migrated sheet itemises nothing. Returns
+ * { ok: true, components } or { ok: false, error }.
+ */
+function parseEntryFeeBreakdown(raw) {
+  var components = [];
+  if (raw === '' || raw === null || raw === undefined) return { ok: true, components: components };
+  var text = String(raw).trim();
+  if (text === '') return { ok: true, components: components };
+
+  var entries = text.split(',');
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i].trim();
+    if (entry === '') return { ok: false, error: 'has an empty entry.' };
+    var separator = entry.lastIndexOf(':');
+    if (separator <= 0) return { ok: false, error: 'entry "' + entry + '" must be label:amount.' };
+    var label = entry.slice(0, separator).trim();
+    var amountText = entry.slice(separator + 1).trim();
+    if (label === '') return { ok: false, error: 'entry "' + entry + '" has an empty label.' };
+    var amount = Number(amountText);
+    if (isNaN(amount) || amount < 0) {
+      return { ok: false, error: 'amount "' + amountText + '" must be a non-negative number.' };
+    }
+    components.push({ label: label, amount: amount });
+  }
+  return { ok: true, components: components };
+}
+
+/** Sums the component amounts, rounded to cents so float drift never warns. */
+function entryFeeBreakdownTotal(components) {
+  var total = 0;
+  for (var i = 0; i < (components || []).length; i++) {
+    total += Number(components[i].amount) || 0;
+  }
+  return Math.round(total * 100) / 100;
+}
+
+/**
+ * Resolves the entry-fee breakdown from League settings. A blank or malformed
+ * value yields an empty list so a bad stored value can never throw at read
+ * time. Returns { components, total }.
+ */
+function resolveEntryFeeBreakdown(leagueSettings) {
+  var settings = leagueSettings || {};
+  var parsed = parseEntryFeeBreakdown(settings.entry_fee_breakdown);
+  var components = parsed.ok ? parsed.components : [];
+  return { components: components, total: entryFeeBreakdownTotal(components) };
+}
+
+/**
+ * Reports whether an itemised breakdown fails to sum to the configured entry
+ * fee. A blank entry fee or a breakdown with no components cannot disagree, so
+ * the coordinator sees no warning until both are present. Returns null when
+ * they agree, or { fee, total } when they differ.
+ */
+function entryFeeBreakdownMismatch(entryFee, components) {
+  if (entryFee === '' || entryFee === null || entryFee === undefined) return null;
+  var fee = Number(entryFee);
+  if (isNaN(fee)) return null;
+  if (!components || components.length === 0) return null;
+  var total = entryFeeBreakdownTotal(components);
+  if (Math.abs(total - fee) < 0.005) return null;
+  return { fee: fee, total: total };
+}
+
+/**
  * Resolves the money options a league offers at check-in from its settings.
  * Paid is always offered and CTP only when the league sets a CTP contribution
  * above zero. An ace pot is never a player choice: when the league sets an ace
@@ -624,7 +702,8 @@ function resolveCheckInOptions(leagueSettings) {
     paid: true,
     ctp: !isNaN(ctp) && ctp > 0,
     ace_pot: !isNaN(acePot) && acePot > 0,
-    money_explanation: String(explanation)
+    money_explanation: String(explanation),
+    money_breakdown: resolveEntryFeeBreakdown(settings).components
   };
 }
 
@@ -3313,7 +3392,8 @@ function handleGetCheckInOptions(data) {
       ctp: options.ctp,
       ace_pot: options.ace_pot
     },
-    money_explanation: options.money_explanation
+    money_explanation: options.money_explanation,
+    money_breakdown: options.money_breakdown
   });
 }
 
@@ -3398,6 +3478,18 @@ function handleSaveLeagueSettings(data) {
     const parsedPayout = parsePointsByPlace(settings.payout_by_place);
     if (!parsedPayout.ok) {
       return respond('error', 'Field "payout_by_place" is invalid: ' + parsedPayout.error);
+    }
+  }
+
+  // Validate the itemised entry-fee breakdown. Blank is allowed (the league
+  // itemises nothing); a populated value must parse cleanly so the stored
+  // amounts can never silently disagree with what the admin renders. The
+  // mismatch warning is a coordination aid, not a save gate, so a breakdown
+  // that does not sum to the entry fee is still saved.
+  if (settings.entry_fee_breakdown !== '' && settings.entry_fee_breakdown !== null && settings.entry_fee_breakdown !== undefined) {
+    const parsedBreakdown = parseEntryFeeBreakdown(settings.entry_fee_breakdown);
+    if (!parsedBreakdown.ok) {
+      return respond('error', 'Field "entry_fee_breakdown" is invalid: ' + parsedBreakdown.error);
     }
   }
 

@@ -128,22 +128,23 @@ test('the singles League base columns stay 15 and carry no metadata', () => {
   assert.ok(!h.bound.LEAGUE_SHEET_HEADERS.includes('scoring'));
 });
 
-test('both League schemas extend the base with metadata, points, payout, and explanation settings', () => {
+test('both League schemas extend the base with metadata, points, payout, explanation, and breakdown settings', () => {
   const h = loadCode();
   const extended = h.bound.LEAGUE_SHEET_HEADERS_DOUBLES;
   const base = h.bound.LEAGUE_SHEET_HEADERS;
 
   // Base settings plus the format/scoring metadata, the per-league points
   // table (points_by_place + points_participation), the per-league weekly
-  // payout table (payout_by_place), and the league money explanation
-  // (entry_fee_explanation).
-  assert.equal(extended.length, base.length + 2 + 2 + 1 + 1);
+  // payout table (payout_by_place), the league money explanation
+  // (entry_fee_explanation), and the itemised entry-fee breakdown
+  // (entry_fee_breakdown).
+  assert.equal(extended.length, base.length + 2 + 2 + 1 + 1 + 1);
   assert.deepEqual(extended.slice(0, base.length), base);
   assert.deepEqual(extended.slice(base.length), [
     'league_format', 'scoring', 'points_by_place', 'points_participation', 'payout_by_place',
-    'entry_fee_explanation'
+    'entry_fee_explanation', 'entry_fee_breakdown'
   ]);
-  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 21);
+  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 22);
 });
 
 test('format-specific header accessors gate singles versus doubles', () => {

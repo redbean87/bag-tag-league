@@ -243,13 +243,14 @@ test('the League header builder carries both metadata columns for any pair', () 
     [h.bound.LEAGUE_FORMAT_SINGLES, h.bound.SCORING_POINTS]
   ]) {
     const headers = leagueHeaders(pair[0], pair[1]);
-    assert.equal(headers.length, 21);
+    assert.equal(headers.length, 22);
     assert.ok(headers.includes('league_format'));
     assert.ok(headers.includes('scoring'));
     assert.ok(headers.includes('points_by_place'));
     assert.ok(headers.includes('points_participation'));
     assert.ok(headers.includes('payout_by_place'));
     assert.ok(headers.includes('entry_fee_explanation'));
+    assert.ok(headers.includes('entry_fee_breakdown'));
   }
 });
 

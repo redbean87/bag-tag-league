@@ -63,6 +63,7 @@
     .status.ok { background: #e6f4ea; border: 1px solid #34a853; }
     .status.error { background: #fce8e6; border: 1px solid #ea4335; }
     .status.pending { background: #fff3cd; border: 1px solid #ffc107; }
+    .status.warning { background: #fff3cd; border: 1px solid #ffc107; }
     .status strong { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     code { background: #f0f0f0; padding: 0.125rem 0.25rem; border-radius: 3px; font-size: 0.9em; }
     .help-text { font-size: 0.875rem; color: #666; margin-bottom: 0.75rem; }
@@ -391,6 +392,18 @@
             <label for="ctp_contribution">CTP Contribution</label>
             <input type="number" id="ctp_contribution" step="0.01" min="0" placeholder="">
           </div>
+          <div class="field-group">
+            <label for="entry_fee_breakdown">Entry Fee Breakdown ($ per player)</label>
+            <input type="text" id="entry_fee_breakdown" placeholder="Weekly payouts:2,Season payout:1,Ace pot:1,Club fees:1">
+          </div>
+          <div id="entryFeeBreakdownWarning" class="status warning hidden"></div>
+          <p class="help-text">
+            The itemised parts of the entry fee as ordered
+            <code>label:amount</code> pairs (for example
+            <code>Weekly payouts:2,Season payout:1,Ace pot:1,Club fees:1</code>).
+            Shown beside the check-in payment options. A total that does not
+            match the entry fee is flagged here, but never blocks the save.
+          </p>
           <p class="help-text">
             Shown beside the player check-in payment options, so players can see
             plainly what the entry fee pays for. Leave blank to use the default:
@@ -1036,6 +1049,75 @@
         '<strong>Configuration mismatch.</strong> ' + messages.join(' ') +
         ' The registry value is authoritative; run the gated migration to align the sheet.'
       );
+    }
+
+    // Parses the compact ordered entry-fee breakdown ("label:amount,...") into
+    // [{ label, amount }], mirroring the server. A blank or malformed value
+    // yields an empty list so a bad stored value renders nothing rather than
+    // throwing. The label may contain spaces and colons.
+    function entryFeeBreakdownFrom(raw) {
+      if (raw === '' || raw === null || raw === undefined) return [];
+      var text = String(raw).trim();
+      if (text === '') return [];
+      var components = [];
+      var entries = text.split(',');
+      for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i].trim();
+        if (entry === '') return [];
+        var separator = entry.lastIndexOf(':');
+        if (separator <= 0) return [];
+        var label = entry.slice(0, separator).trim();
+        var amount = Number(entry.slice(separator + 1).trim());
+        if (label === '' || isNaN(amount) || amount < 0) return [];
+        components.push({ label: label, amount: amount });
+      }
+      return components;
+    }
+
+    function entryFeeBreakdownSum(components) {
+      var total = 0;
+      for (var i = 0; i < (components || []).length; i++) {
+        total += Number(components[i].amount) || 0;
+      }
+      return Math.round(total * 100) / 100;
+    }
+
+    // Formats a dollar amount without trailing zeroes so a whole-dollar fee
+    // reads as "$5" rather than "$5.00".
+    function formatDollars(value) {
+      return '$' + (Math.round(Number(value) * 100) / 100);
+    }
+
+    // Returns warning copy when an itemised breakdown does not sum to the
+    // entry fee, or '' when they agree or there is nothing to compare. It only
+    // advises: the save is never blocked, because a coordinator may be mid-edit.
+    function entryFeeBreakdownWarning(feeRaw, breakdownRaw) {
+      if (feeRaw === '' || feeRaw === null || feeRaw === undefined) return '';
+      var fee = Number(feeRaw);
+      if (isNaN(fee)) return '';
+      var components = entryFeeBreakdownFrom(breakdownRaw);
+      if (components.length === 0) return '';
+      var total = entryFeeBreakdownSum(components);
+      if (Math.abs(total - fee) < 0.005) return '';
+      return '<strong>Entry fee breakdown does not add up.</strong> The parts total ' +
+        formatDollars(total) + ' but the entry fee is ' + formatDollars(fee) +
+        '. Update either the parts or the fee so they agree.';
+    }
+
+    // Shows or clears the entry-fee breakdown warning from the current settings.
+    function applyEntryFeeBreakdownWarning(settings) {
+      var el = document.getElementById('entryFeeBreakdownWarning');
+      if (!el) return;
+      var html = settings
+        ? entryFeeBreakdownWarning(settings.entry_fee, settings.entry_fee_breakdown)
+        : '';
+      if (html) {
+        el.className = 'status warning';
+        el.innerHTML = html;
+      } else {
+        el.className = 'status warning hidden';
+        el.innerHTML = '';
+      }
     }
 
     // Builds the picker from the shared league registry so the options list
@@ -1691,15 +1773,18 @@
           document.getElementById('ace_pot_current_total').value = s.ace_pot_current_total !== undefined && s.ace_pot_current_total !== '' ? s.ace_pot_current_total : '';
           document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
           document.getElementById('entry_fee_explanation').value = s.entry_fee_explanation !== undefined && s.entry_fee_explanation !== '' ? s.entry_fee_explanation : '';
+          document.getElementById('entry_fee_breakdown').value = s.entry_fee_breakdown !== undefined && s.entry_fee_breakdown !== '' ? s.entry_fee_breakdown : '';
           document.getElementById('points_by_place').value = s.points_by_place !== undefined && s.points_by_place !== '' ? s.points_by_place : '';
           document.getElementById('points_participation').value = s.points_participation !== undefined && s.points_participation !== '' ? s.points_participation : '';
           document.getElementById('payout_by_place').value = s.payout_by_place !== undefined && s.payout_by_place !== '' ? s.payout_by_place : '';
           applyLeagueSettingsMismatch(s);
+          applyEntryFeeBreakdownWarning(s);
           renderLeagueCopy(getSelectedLeague(), getLeagueRules(), s);
           log('League settings loaded');
         } else {
           cachedLeagueSettings = { weekly_columns: data.weekly_columns };
           setLeagueMismatch('');
+          applyEntryFeeBreakdownWarning(null);
           renderLeagueCopy(getSelectedLeague(), getLeagueRules(), cachedLeagueSettings);
           log('League sheet exists but has no settings row');
         }
@@ -1766,6 +1851,7 @@
         ace_pot_current_total: document.getElementById('ace_pot_current_total').value,
         ctp_contribution: document.getElementById('ctp_contribution').value,
         entry_fee_explanation: document.getElementById('entry_fee_explanation').value.trim(),
+        entry_fee_breakdown: document.getElementById('entry_fee_breakdown').value.trim(),
         points_by_place: document.getElementById('points_by_place').value.trim(),
         points_participation: document.getElementById('points_participation').value,
         payout_by_place: document.getElementById('payout_by_place').value.trim()
@@ -1786,6 +1872,7 @@
 
         if (data.status === 'ok') {
           setLeagueStatus('ok', '<strong>Settings saved.</strong>', 'leagueSaveResult');
+          applyEntryFeeBreakdownWarning(data.settings);
           log('SUCCESS: League settings saved');
         } else {
           setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueSaveResult');
