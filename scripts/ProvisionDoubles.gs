@@ -18,8 +18,8 @@
  *     .setProperty('DOUBLES_SPREADSHEET_ID', '<id>');
  *
  * The guarded test-data reset reads DOUBLES_TEST_SPREADSHEET_ID and defaults to
- * the test-flagged former proof-of-concept workbook, never the production
- * doubles spreadsheet.
+ * the development (POC) doubles workbook, never the production doubles
+ * spreadsheet.
  *
  * No secrets, tokens, or credentials are stored in this file. Running these
  * functions requires the operator's existing Apps Script authorization.
@@ -186,9 +186,8 @@ function applyDetagColumnDrops() {
 /**
  * Operator entry point: dry-run the guarded test-data reset for the doubles
  * test spreadsheet. Writes nothing and reports exactly which rows would be
- * removed. The configured id must be on the test allow-list or the reset
- * refuses, so the production doubles and live Singles spreadsheets can never
- * be targeted.
+ * removed. The configured id must be on the development allow-list or the reset
+ * refuses, so the production spreadsheet can never be targeted.
  *
  * Usage (Apps Script editor): run `previewTestDataReset`.
  */
@@ -207,8 +206,9 @@ function previewTestDataReset() {
 /**
  * Operator entry point: apply the guarded test-data reset to the doubles test
  * spreadsheet, clearing every weekly data row and the roster down to the
- * header-only minimum. Refuses live Singles and any non-test spreadsheet before
- * any write. Run `previewTestDataReset` first to inspect the exact rows.
+ * header-only minimum. Refuses the production spreadsheet and any
+ * non-development spreadsheet before any write. Run `previewTestDataReset`
+ * first to inspect the exact rows.
  *
  * Usage (Apps Script editor): run `applyTestDataReset`.
  */

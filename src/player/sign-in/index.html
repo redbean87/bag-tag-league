@@ -275,10 +275,11 @@
     var selectedMemberNumber = null;
 
     // --- League routing ---
-    // The QR encodes the opaque league id as ?league=<id>. Parse it, validate
-    // it against the shared registry, and fall back to the singles default
-    // when it is absent or unknown. The resolved id is attached to every POST
-    // so a GET -> POST transition cannot silently revert to singles.
+    // The QR encodes the opaque league id as ?league=<id>. Parse it, accept it
+    // only when it is visible in the serving address's environment, and fall
+    // back to that environment's default league when it is absent, unknown, or
+    // belongs to the other address. The resolved id is attached to every POST
+    // so a GET -> POST transition cannot silently revert to a different league.
     var resolvedLeague = resolveLeagueFromUrl();
 
     // Tag collection follows the scoring method. `rules` gates every tag
@@ -301,12 +302,12 @@
         return { id: '', name: 'Unknown league', format: 'singles', unknownParam: false };
       }
 
-      var league = requested ? registry.leagueById(requested) : null;
+      var league = requested ? registry.selectableLeagueById(requested) : null;
       if (league) {
         return { id: league.id, name: league.name, format: league.format, unknownParam: false };
       }
 
-      var fallback = registry.leagueById(registry.DEFAULT_LEAGUE_ID);
+      var fallback = registry.leagueById(registry.defaultLeagueId());
       return { id: fallback.id, name: fallback.name, format: fallback.format, unknownParam: !!requested };
     }
 

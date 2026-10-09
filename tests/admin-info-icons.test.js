@@ -42,7 +42,7 @@ function infoPanels() {
 // covered by tests/league-copy-data-driven.test.js.
 const DESCRIPTIVE_STRINGS = [
   'Choose which league you are managing.',
-  'the first league remains the default.',
+  'the first league visible here is the default.',
   'Configure league settings',
   'Format and scoring are set when a league is provisioned',
   'Select a date to work with. Dates with existing sheets will unlock the workflow.',

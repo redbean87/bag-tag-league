@@ -191,8 +191,8 @@ test('the sign-in page parses, validates, defaults, and propagates the league id
   assert.match(html, /src="\.\.\/\.\.\/shared\/league-format\.js"/);
   assert.match(html, /new URLSearchParams\(window\.location\.search\)\.get\('league'\)/);
   assert.match(html, /function resolveLeagueFromUrl\(\)/);
-  assert.match(html, /registry\.leagueById\(requested\)/);
-  assert.match(html, /registry\.DEFAULT_LEAGUE_ID/);
+  assert.match(html, /registry\.selectableLeagueById\(requested\)/);
+  assert.match(html, /registry\.defaultLeagueId\(\)/);
   // Both POST paths carry the resolved league id.
   assert.match(html, /action: 'searchClubMembers',\s*league: resolvedLeague\.id/);
   assert.match(html, /action: 'submitCheckIn',\s*league: resolvedLeague\.id/);

@@ -271,7 +271,7 @@ test('an insert lands blank season_points and blank current_tag', () => {
 
 // ─── Guard / refusal paths ───────────────────────────────────────────────────
 
-test('the reload refuses live singles and a non-test target and writes nothing', () => {
+test('the reload refuses the singles POC and a non-doubles target and writes nothing', () => {
   const h = loadCode();
   const singles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID);
   const club = singles.insertSheet('ClubMembers');
@@ -288,8 +288,8 @@ test('the reload refuses live singles and a non-test target and writes nothing',
   }));
   assert.equal(live.status, 'error');
   assert.equal(live.refused, true);
-  assert.equal(live.reason, 'live_singles');
-  assert.equal(JSON.stringify(club.rows), before, 'live singles must never be written');
+  assert.equal(live.reason, 'non_doubles');
+  assert.equal(JSON.stringify(club.rows), before, 'the singles POC must never be seeded');
 
   const unknown = h.parse(h.fn('handleSeedRoster')({
     spreadsheetId: 'not-a-real-sheet',

@@ -7,8 +7,10 @@
  * hardcoded Singles/Doubles switch), so a league cannot route according to a
  * stale or independently maintained format value.
  *
- * The first league is the default for every new or existing operator, so an
- * operator who never picks a league keeps the original singles behavior.
+ * The default league is the first league visible in the environment of the
+ * serving address, so an operator who never picks a league (or whose stored
+ * league belongs to the other address) gets that address's first league and
+ * never a hidden one.
  *
  * Loaded as a plain script in the browser (window.LeagueFormat) and as a
  * CommonJS module in tests.
@@ -44,34 +46,45 @@
   var SCORINGS = [SCORING.TAGS, SCORING.POINTS];
 
   // The app is served from two addresses: the live worker and a development
-  // worker (`bag-tag-league-dev`). The serving address decides whether the
-  // test-flagged POC leagues are offered in the admin picker. An environment is
-  // never inferred from anything but the address; see environmentForHost.
+  // worker (`bag-tag-league-dev`). Every league belongs to exactly one
+  // environment, and the serving address decides which are offered in the
+  // admin picker: the production address lists only production leagues, the
+  // development address only development (POC) leagues. No league is visible
+  // on both. An environment is never inferred from anything but the address;
+  // see environmentForHost.
   var ENVIRONMENTS = {
     PRODUCTION: 'production',
     DEVELOPMENT: 'development'
   };
 
   // The leagues this app manages. Each record is the single source of truth
-  // for its id, display name, format, scoring, and spreadsheet. Every league
-  // carries its own format and scoring as data; routing and gating read the
-  // derived capability rules, never a hardcoded switch.
+  // for its id, display name, format, scoring, spreadsheet, and environment.
+  // Every league carries its own format and scoring as data; routing and
+  // gating read the derived capability rules, never a hardcoded switch.
   // Spreadsheet ids are kept in sync with scripts/Code.gs
   // (SPREADSHEET_ID / SPREADSHEET_ID_DOUBLES / SPREADSHEET_ID_DOUBLES_TEST).
+  //
+  // `nightfliers-random-dubs` is the only production league: the doubles
+  // league that actually runs. The other two are development POC surfaces
+  // (the singles POC workbook and the doubles POC workbook), offered only on
+  // the development address. The guarded test-data reset may target the
+  // development surfaces but never the production spreadsheet.
   var LEAGUES = [
+    {
+      id: 'nightfliers-random-dubs',
+      name: 'Nightfliers Random Doubles 💥',
+      format: FORMATS.DOUBLES,
+      scoring: SCORING.POINTS,
+      spreadsheetId: '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g',
+      environment: ENVIRONMENTS.PRODUCTION
+    },
     {
       id: 'b-rads-league',
       name: "B Rad's League",
       format: FORMATS.SINGLES,
       scoring: SCORING.TAGS,
-      spreadsheetId: '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik'
-    },
-    {
-      id: 'nightfliers-random-dubs',
-      name: 'Nightfliers Random Dubs',
-      format: FORMATS.DOUBLES,
-      scoring: SCORING.POINTS,
-      spreadsheetId: '1UPyr7AKEdFy7ypjrrtphpyjzs55YA2P57XOkESpsc1g'
+      spreadsheetId: '1kgTRXIiyyXAzWdLf0q_dY-1U3tpKvPVTwYDl8Ok7lik',
+      environment: ENVIRONMENTS.DEVELOPMENT
     },
     {
       id: 'nightfliers-random-dubs-test',
@@ -79,18 +92,34 @@
       format: FORMATS.DOUBLES,
       scoring: SCORING.POINTS,
       spreadsheetId: '1c8QGftl2bKcLZeqwE2IyzAh5x4I22WRjSSgc7nGgeG8',
-      // Test surface: the guarded test-data reset may write here. The live
-      // Singles and production Doubles leagues are never flagged, so the reset
-      // can never target them. Test-flagged leagues are hidden from the admin
-      // league picker.
-      test: true
+      environment: ENVIRONMENTS.DEVELOPMENT
     }
   ];
 
-  var DEFAULT_LEAGUE_ID = LEAGUES[0].id;
-
   function leagues() {
     return LEAGUES.slice();
+  }
+
+  // Normalizes an unknown environment to the production default so a
+  // malformed value can never expose a development league.
+  function normalizeEnvironment(environment) {
+    return environment === ENVIRONMENTS.DEVELOPMENT
+      ? ENVIRONMENTS.DEVELOPMENT
+      : ENVIRONMENTS.PRODUCTION;
+  }
+
+  // Resolves an environment argument. An explicit value is normalized; an
+  // omitted one falls back to the serving address. Both fail safe to
+  // production.
+  function resolveEnvironment(environment) {
+    return environment ? normalizeEnvironment(environment) : currentEnvironment();
+  }
+
+  // The default league is the first league visible in an environment, so a
+  // hidden league can never be selected by default.
+  function defaultLeagueId(environment) {
+    var visible = selectableLeagues(environment);
+    return visible.length ? visible[0].id : LEAGUES[0].id;
   }
 
   // Resolves the running environment from the host that served the page. The
@@ -124,18 +153,15 @@
     return ENVIRONMENTS.PRODUCTION;
   }
 
-  // The leagues a coordinator can pick. Test-flagged leagues are development
-  // surfaces (the former proof-of-concept workbook): the production address
-  // keeps hiding them, while the development address lists them alongside the
-  // production leagues so POC work can select a disposable sheet. The
-  // environment argument is an ENVIRONMENTS value; anything else, and the
-  // omitted/default case, resolves against the serving address and fails safe
-  // to production.
+  // The leagues a coordinator can pick in an environment. Exactly the leagues
+  // classified for that environment: the production address lists only
+  // production leagues, the development address only development (POC)
+  // leagues, and no league appears on both. An unknown or omitted environment
+  // resolves against the serving address and fails safe to production.
   function selectableLeagues(environment) {
-    var env = environment || currentEnvironment();
+    var env = resolveEnvironment(environment);
     return LEAGUES.filter(function(league) {
-      if (league.test !== true) return true;
-      return env === ENVIRONMENTS.DEVELOPMENT;
+      return league.environment === env;
     });
   }
 
@@ -144,6 +170,15 @@
       if (LEAGUES[i].id === id) return LEAGUES[i];
     }
     return null;
+  }
+
+  // Looks up a league by id, but only when it is visible in an environment.
+  // Returns null for a hidden or unknown league so a caller cannot operate a
+  // league that does not belong to the address it is running on.
+  function selectableLeagueById(id, environment) {
+    var league = leagueById(id);
+    if (!league) return null;
+    return league.environment === resolveEnvironment(environment) ? league : null;
   }
 
   // Normalizes an unknown format to the registry default (singles) instead of
@@ -179,32 +214,36 @@
     };
   }
 
-  function leagueIdForFormat(format) {
+  function leagueIdForFormat(format, environment) {
     var wanted = normalize(format);
-    for (var i = 0; i < LEAGUES.length; i++) {
-      if (LEAGUES[i].format === wanted) return LEAGUES[i].id;
+    var visible = selectableLeagues(environment);
+    for (var i = 0; i < visible.length; i++) {
+      if (visible[i].format === wanted) return visible[i].id;
     }
-    return DEFAULT_LEAGUE_ID;
+    return defaultLeagueId(environment);
   }
 
   function normalizeLeagueId(id) {
-    return leagueById(id) ? id : DEFAULT_LEAGUE_ID;
+    return leagueById(id) ? id : defaultLeagueId();
   }
 
   function readStoredLeagueId(storage) {
+    var environment = currentEnvironment();
     try {
-      if (!storage) return DEFAULT_LEAGUE_ID;
+      if (!storage) return defaultLeagueId(environment);
       var stored = storage.getItem(STORAGE_KEY);
-      if (stored && leagueById(stored)) return stored;
+      if (stored && selectableLeagueById(stored, environment)) return stored;
       var legacyFormat = storage.getItem(LEGACY_STORAGE_KEY);
-      return legacyFormat ? leagueIdForFormat(legacyFormat) : DEFAULT_LEAGUE_ID;
+      if (legacyFormat) return leagueIdForFormat(legacyFormat, environment);
+      return defaultLeagueId(environment);
     } catch (e) {
-      return DEFAULT_LEAGUE_ID;
+      return defaultLeagueId(environment);
     }
   }
 
   function persistLeagueId(storage, id) {
-    var normalized = normalizeLeagueId(id);
+    var environment = currentEnvironment();
+    var normalized = selectableLeagueById(id, environment) ? id : defaultLeagueId(environment);
     try {
       if (storage) storage.setItem(STORAGE_KEY, normalized);
     } catch (e) {
@@ -238,8 +277,8 @@
     return normalize(format);
   }
 
-  function spreadsheetIdForFormat(format) {
-    return spreadsheetIdForLeague(leagueIdForFormat(format));
+  function spreadsheetIdForFormat(format, environment) {
+    return spreadsheetIdForLeague(leagueIdForFormat(format, environment));
   }
 
   return {
@@ -249,12 +288,13 @@
     SCORING: SCORING,
     SCORINGS: SCORINGS,
     LEAGUES: LEAGUES,
-    DEFAULT_LEAGUE_ID: DEFAULT_LEAGUE_ID,
     ENVIRONMENTS: ENVIRONMENTS,
     environmentForHost: environmentForHost,
     currentEnvironment: currentEnvironment,
     leagues: leagues,
     selectableLeagues: selectableLeagues,
+    selectableLeagueById: selectableLeagueById,
+    defaultLeagueId: defaultLeagueId,
     leagueById: leagueById,
     normalizeLeagueId: normalizeLeagueId,
     leagueIdForFormat: leagueIdForFormat,

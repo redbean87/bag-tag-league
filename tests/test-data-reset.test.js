@@ -78,32 +78,39 @@ function resultsByName(report) {
 
 // ─── Test-spreadsheet allow-list ─────────────────────────────────────────────
 
-test('the test allow-list contains only the test doubles surface', () => {
+test('the test allow-list contains exactly the development surfaces', () => {
   const h = loadCode();
 
-  assert.deepEqual(h.bound.TEST_SPREADSHEET_IDS, [h.bound.SPREADSHEET_ID_DOUBLES_TEST]);
+  assert.deepEqual(
+    h.bound.TEST_SPREADSHEET_IDS.slice().sort(),
+    [h.bound.SPREADSHEET_ID, h.bound.SPREADSHEET_ID_DOUBLES_TEST].sort()
+  );
   assert.equal(h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID_DOUBLES_TEST), true);
-  assert.equal(h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID), false);
-  // Production doubles is explicitly not a test surface, so the reset can
-  // never be pointed at the live workbook.
+  assert.equal(
+    h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID),
+    true,
+    'the singles POC workbook is a development surface and is wipe-able'
+  );
+  // Production doubles is not a development surface, so the reset can never
+  // be pointed at the live workbook.
   assert.equal(h.fn('isTestSpreadsheetId')(h.bound.SPREADSHEET_ID_DOUBLES), false);
   assert.equal(h.fn('isTestSpreadsheetId')('some-other-sheet'), false);
 });
 
-test('the guard names live singles separately from any other non-test sheet', () => {
+test('the guard permits development surfaces and refuses production', () => {
   const h = loadCode();
 
   assert.equal(h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID_DOUBLES_TEST).ok, true);
-
-  const singles = h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID);
-  assert.equal(singles.ok, false);
-  assert.equal(singles.reason, 'live_singles');
-  assert.match(singles.error, /live Singles/);
+  assert.equal(
+    h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID).ok,
+    true,
+    'the singles POC workbook is a development surface'
+  );
 
   const other = h.fn('assertTestSpreadsheet')('some-other-sheet');
   assert.equal(other.ok, false);
   assert.equal(other.reason, 'non_test');
-  assert.match(other.error, /non-test spreadsheet/);
+  assert.match(other.error, /non-development spreadsheet/);
 });
 
 test('the guard refuses the production doubles spreadsheet', () => {
@@ -112,7 +119,7 @@ test('the guard refuses the production doubles spreadsheet', () => {
   const production = h.fn('assertTestSpreadsheet')(h.bound.SPREADSHEET_ID_DOUBLES);
   assert.equal(production.ok, false);
   assert.equal(production.reason, 'non_test');
-  assert.match(production.error, /non-test spreadsheet/);
+  assert.match(production.error, /non-development spreadsheet/);
 });
 
 // ─── Pure planner ────────────────────────────────────────────────────────────
@@ -264,10 +271,9 @@ test('apply is idempotent on an already-cleared test spreadsheet', () => {
 
 // ─── Refusal paths ───────────────────────────────────────────────────────────
 
-test('resetTestData refuses live singles and writes nothing', () => {
+test('resetTestData resets the singles POC development surface', () => {
   const h = loadCode();
   const { singles, club, week } = buildSingles(h);
-  const before = snapshot(singles);
 
   const report = h.fn('resetTestData')(singles, {
     spreadsheetId: h.bound.SPREADSHEET_ID,
@@ -275,13 +281,10 @@ test('resetTestData refuses live singles and writes nothing', () => {
     scope: 'full'
   });
 
-  assert.equal(report.applied, false);
-  assert.equal(report.refused, true);
-  assert.equal(report.reason, 'live_singles');
-  assert.match(report.error, /live Singles/);
-  assert.equal(snapshot(singles), before, 'live singles must never be written');
-  assert.equal(club.rows.length, 2);
-  assert.equal(week.rows.length, 2);
+  assert.equal(report.applied, true);
+  assert.equal(report.refused, false);
+  assert.equal(club.rows.length, 1, 'the singles POC roster is wipe-able from the dev surface');
+  assert.equal(week.rows.length, 1);
 });
 
 test('resetTestData refuses any non-test spreadsheet and writes nothing', () => {
@@ -362,11 +365,9 @@ test('the handler applies a full reset to the doubles test spreadsheet', () => {
   assert.equal(week.rows.length, 1);
 });
 
-test('the handler refuses the live singles league and writes nothing', () => {
+test('the handler applies a full reset to the singles POC league', () => {
   const h = loadCode();
-  buildSingles(h);
-  const singles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID);
-  const before = snapshot(singles);
+  const { club, week } = buildSingles(h);
 
   const result = h.parse(h.fn('handleResetTestData')({
     league: h.bound.LEAGUE_ID_SINGLES,
@@ -374,26 +375,26 @@ test('the handler refuses the live singles league and writes nothing', () => {
     scope: 'full'
   }));
 
-  assert.equal(result.status, 'error');
-  assert.equal(result.refused, true);
-  assert.equal(result.reason, 'live_singles');
-  assert.equal(snapshot(singles), before);
+  assert.equal(result.status, 'ok');
+  assert.equal(result.applied, true);
+  assert.equal(club.rows.length, 1);
+  assert.equal(week.rows.length, 1);
 });
 
-test('the handler resolves an unknown selector to singles and refuses', () => {
+test('the handler resolves an unknown selector to the development default and permits it', () => {
   const h = loadCode();
-  buildSingles(h);
-  const singles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID);
-  const before = snapshot(singles);
+  const { club, week } = buildSingles(h);
 
   const result = h.parse(h.fn('handleResetTestData')({
     spreadsheetId: 'not-a-real-sheet',
-    apply: true
+    apply: true,
+    scope: 'full'
   }));
 
-  assert.equal(result.status, 'error');
-  assert.equal(result.refused, true);
-  assert.equal(snapshot(singles), before);
+  assert.equal(result.status, 'ok');
+  assert.equal(result.applied, true);
+  assert.equal(club.rows.length, 1);
+  assert.equal(week.rows.length, 1);
 });
 
 test('a doubles reset never writes the live singles spreadsheet', () => {
@@ -456,15 +457,16 @@ test('the coordinator admin page renders no reset card or button', () => {
   assert.doesNotMatch(visible, /id="btnApplyTestReset"/);
 });
 
-test('the reset stays actionable only behind the dev flag for a test league', () => {
+test('the reset stays actionable only behind the dev flag for a development league', () => {
   const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
 
   // The action and its wiring are not left dead: both entry points still
-  // post resetTestData, and the panel mounts only for a test league when the
-  // non-advertised flag is present.
+  // post resetTestData, and the panel mounts only for a development league
+  // when the non-advertised flag is present.
   assert.match(html, /action: 'resetTestData'/);
   assert.match(html, /var TEST_RESET_DEV_FLAG = 'devTestReset';/);
   assert.match(html, /function testResetDevEnabled\(\)/);
   assert.match(html, /function applyTestResetVisibility\(league\)/);
-  assert.match(html, /league && league\.test === true && testResetDevEnabled\(\)/);
+  assert.match(html, /league\.environment === window\.LeagueFormat\.ENVIRONMENTS\.DEVELOPMENT/);
+  assert.match(html, /testResetDevEnabled\(\)/);
 });
