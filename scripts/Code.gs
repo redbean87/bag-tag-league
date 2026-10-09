@@ -340,9 +340,17 @@ const LEAGUE_SHEET_METADATA_HEADERS = ['league_format', 'scoring'];
 // DEFAULT_POINTS_PARTICIPATION, so an un-migrated sheet keeps today's output.
 const LEAGUE_POINTS_HEADERS = ['points_by_place', 'points_participation'];
 
+// Per-league weekly payout amounts appended after the points settings. Like
+// the points table this is a compact "place:value,..." list; each value is the
+// per-player dollar amount for that placement, so a second-place value can
+// carry an entry-fee refund. Blank means the league pays no weekly money and
+// the app shows no payout figures, keeping today's output byte-identical.
+const LEAGUE_PAYOUT_HEADERS = ['payout_by_place'];
+
 const LEAGUE_SHEET_HEADERS_EXTENDED = LEAGUE_SHEET_HEADERS
   .concat(LEAGUE_SHEET_METADATA_HEADERS)
-  .concat(LEAGUE_POINTS_HEADERS);
+  .concat(LEAGUE_POINTS_HEADERS)
+  .concat(LEAGUE_PAYOUT_HEADERS);
 
 // Kept name for callers written before singles carried metadata; the doubles
 // schema and the extended singles schema are the same settings set now.
@@ -566,6 +574,17 @@ function resolvePointsRules(leagueSettings) {
 }
 
 /**
+ * Resolves the effective weekly payout table from League settings. A blank or
+ * absent table yields an empty map so a league that pays no weekly money shows
+ * no payout figures and its output stays byte-identical. Returns { byPlace }.
+ */
+function resolvePayoutRules(leagueSettings) {
+  var settings = leagueSettings || {};
+  var parsed = parsePointsByPlace(settings.payout_by_place);
+  return { byPlace: parsed.ok ? parsed.byPlace : {} };
+}
+
+/**
  * Resolves the capability rules for a requested selector. The league table is
  * the deploy-time authority for both format and scoring. Capability flags are
  * the only thing handlers branch on, so a future format x scoring league needs
@@ -581,13 +600,15 @@ function getLeagueRules(selector, leagueSettings) {
   var format = normalizeFormat(record ? record.format : null);
   var scoring = normalizeScoring(record ? record.scoring : null);
   var points = resolvePointsRules(leagueSettings);
+  var payout = resolvePayoutRules(leagueSettings);
   return {
     format: format,
     scoring: scoring,
     usesTags: scoring === SCORING_TAGS,
     usesPoints: scoring === SCORING_POINTS,
     hasPairs: format === LEAGUE_FORMAT_DOUBLES,
-    points: points
+    points: points,
+    payout: payout
   };
 }
 
@@ -1595,6 +1616,7 @@ function leagueHeadersMatch(headers, format, scoring) {
   if (rules.format === LEAGUE_FORMAT_DOUBLES &&
       arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(['league_format']))) return true;
   if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS))) return true;
+  if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS).concat(LEAGUE_POINTS_HEADERS))) return true;
   return false;
 }
 
@@ -3270,11 +3292,22 @@ function handleSaveLeagueSettings(data) {
     }
   }
 
-  // The points columns are settings owned by this writer; append them when a
-  // pre-settings sheet lacks them so the write below stays aligned. The
-  // format/scoring enums are provisioned elsewhere and preserved, never written
-  // from this form.
-  ensureLeagueSettingsColumns(sheet, LEAGUE_POINTS_HEADERS);
+  // Validate the weekly payout table. Blank is allowed (the league pays no
+  // weekly money); a populated value must parse cleanly and carry only
+  // non-negative per-player amounts, so a stored payout can never pay a
+  // negative amount or produce NaN at read time.
+  if (settings.payout_by_place !== '' && settings.payout_by_place !== null && settings.payout_by_place !== undefined) {
+    const parsedPayout = parsePointsByPlace(settings.payout_by_place);
+    if (!parsedPayout.ok) {
+      return respond('error', 'Field "payout_by_place" is invalid: ' + parsedPayout.error);
+    }
+  }
+
+  // The points and payout columns are settings owned by this writer; append
+  // them when a pre-settings sheet lacks them so the write below stays aligned.
+  // The format/scoring enums are provisioned elsewhere and preserved, never
+  // written from this form.
+  ensureLeagueSettingsColumns(sheet, LEAGUE_POINTS_HEADERS.concat(LEAGUE_PAYOUT_HEADERS));
 
   const allData = sheet.getDataRange().getValues();
   const now = new Date().toISOString();
@@ -5995,6 +6028,21 @@ function doublesPointsForPosition(positionRaw, rules) {
 }
 
 /**
+ * Pure payout rule for a points league: the per-player dollar amount for a
+ * placement found in the league's payout table, or 0 when the league pays
+ * nothing for that place (including a blank/DNF placement). `rules` is the
+ * getLeagueRules() object; its `.payout` table is per-league.
+ */
+function payoutForPosition(positionRaw, rules) {
+  var byPlace = (rules && rules.payout && rules.payout.byPlace) ? rules.payout.byPlace : {};
+  var place = parseInt(positionRaw, 10);
+  if (!isNaN(place) && byPlace[place] !== undefined) {
+    return byPlace[place];
+  }
+  return 0;
+}
+
+/**
  * Builds the read-only per-row results view for one doubles week tab. Pure:
  * reads the already-fetched values only and performs no writes. Points are
  * derived from the committed placement with the same rule the import commit
@@ -6125,7 +6173,7 @@ function pointsSummary(rows) {
  * is its own group. Each group carries the shared place and points so the
  * table reads Pair / Place / Points from one deterministic source.
  */
-function groupDoublesPointsPairs(rows) {
+function groupDoublesPointsPairs(rows, rules) {
   var order = [];
   var map = {};
   for (var i = 0; i < rows.length; i++) {
@@ -6158,6 +6206,9 @@ function groupDoublesPointsPairs(rows) {
       if (points === null) points = member.points;
     }
 
+    // The per-player payout is the same for every member of a placed team; a
+    // keyless solo row is its own team of one.
+    var perPlayerPayout = payoutForPosition(positionRaw, rules);
     pairs.push({
       pair_key: map[order[g]].pair_key,
       label: names.join(' / '),
@@ -6165,7 +6216,9 @@ function groupDoublesPointsPairs(rows) {
       place: hasPosition ? positionLabel : '',
       place_raw: positionRaw,
       has_position: hasPosition,
-      points: points === null ? 0 : points
+      points: points === null ? 0 : points,
+      payout_per_player: perPlayerPayout,
+      payout_total: perPlayerPayout * members.length
     });
   }
   return pairs;
@@ -6192,6 +6245,11 @@ function handleCalculatePoints(data) {
   var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate, rules);
   if (tab.error) return respond('error', tab.error);
 
+  var pairs = groupDoublesPointsPairs(tab.rows, rules);
+  var payoutByPlace = (rules.payout && rules.payout.byPlace) ? rules.payout.byPlace : {};
+  var payoutTotal = 0;
+  for (var p = 0; p < pairs.length; p++) payoutTotal += pairs[p].payout_total;
+
   return respond('ok', 'Points results loaded. No writes were made.', {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: gate.leagueDate,
@@ -6200,7 +6258,12 @@ function handleCalculatePoints(data) {
     total_players: tab.rows.length,
     warnings: tab.warnings,
     players: tab.rows.map(pointsRowResponse),
-    pairs: groupDoublesPointsPairs(tab.rows),
+    pairs: pairs,
+    payout: {
+      by_place: payoutByPlace,
+      configured: Object.keys(payoutByPlace).length > 0,
+      total: payoutTotal
+    },
     summary: pointsSummary(tab.rows)
   });
 }
