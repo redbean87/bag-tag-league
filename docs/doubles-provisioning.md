@@ -184,11 +184,86 @@ spreadsheet. The UI and the mutation read the same check, so they can never
 disagree. Singles provisioning is unchanged; the doubles action targets the
 doubles spreadsheet only.
 
+## Seed-only roster reload
+
+A `scope: 'full'` test-data reset clears the roster but deliberately keeps the
+`League` settings and the tabs, so the workbook stays **provisioned** and
+`provisionDoubles` refuses. `seedRoster` is the replacement path for that
+state: it reloads roster rows only, by `member_number`, and is the supported
+action right after a full reset. It is never blocked by the re-provisioning
+guard and never creates a tab.
+
+The action takes an **explicit member payload**. It never reads or writes the
+Singles spreadsheet, so the payload is the only source of truth and the result
+is deterministic by construction: explicit row payload in, exact roster out.
+
+### Input
+
+```json
+{
+  "action": "seedRoster",
+  "league": "nightfliers-random-dubs",
+  "apply": false,
+  "members": [
+    {
+      "member_number": 1,
+      "name": "Cortez Ashley",
+      "udisc_username": "cortez",
+      "pdga_number": "151236",
+      "is_active": true,
+      "created_at": "2026-10-09T00:00:00.000Z",
+      "updated_at": "2026-10-09T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+`members` is required: an array of plain objects keyed by `ClubMembers` header
+name. `member_number` is required on every entry and is copied exactly. A
+missing, blank, or duplicate `member_number` is rejected before any write. The
+selector (`league`, or the deprecated `spreadsheetId`) must resolve to the
+doubles test spreadsheet.
+
+### Steps
+
+1. Resolve the selector through the league allow-list; an unknown selector
+   resolves to Singles.
+2. Require the resolved id to be on the test-spreadsheet allow-list. Live
+   Singles is refused with `reason: "live_singles"` and any other spreadsheet
+   with `reason: "non_test"`, before a row is read or written.
+3. Validate the payload: must be a non-empty array, every entry an object with
+   a present and unique `member_number`.
+4. Plan: index the existing `ClubMembers` rows by `member_number` and classify
+   each payload member as `insert` (new number), `update` (existing number with
+   a changed identity field), or `unchanged` (identical identity fields).
+5. With `apply: false` (the default) return the plan and write nothing.
+
+### End state with `apply: true`
+
+- Each payload member is upserted into `ClubMembers` by `member_number`:
+  existing rows are rewritten in place, new rows are appended. No member is
+  ever renumbered and no row is ever duplicated.
+- `current_tag` is always blank (a points roster carries no tag), and
+  `season_points` is never written: a new row lands blank and an existing cache
+  is preserved. The seed owns the identity fields only.
+- Weekly sheets and the `Week template` are never touched.
+- Re-sending the same payload is a true no-op (`inserted: 0`, `updated: 0`,
+  `sheets_changed: 0`).
+- The `League` settings are unchanged, so the workbook stays provisioned and a
+  later week or UDisc import works normally.
+
+The response reports `inserted`, `updated`, `unchanged`, `total_members`,
+`sheets_changed`, the per-bucket `member_number` lists, and a per-member
+`results` array of `{ member_number, action, changed_fields }`.
+
 ## Tests
 
 `npm test` runs the unit suite with Node's built-in test runner. The suite uses
 an in-memory SpreadsheetApp fake, so it needs no Google credentials and performs
 no live sheet writes. It covers spreadsheet routing/defaults, `league_format`
 and `scoring` gating, header constants, doubles provisioning, roster-seed
-`member_number` preservation, the doubles provisioning-state guard, and the
-disabled re-provisioning UI.
+`member_number` preservation, the doubles provisioning-state guard, the
+disabled re-provisioning UI, the guarded test-data reset, and the seed-only
+roster reload (`member_number` exactness after a full reset, upsert
+idempotency, blank `current_tag`, the preserved `season_points` cache, and the
+test-sheet refusal).
