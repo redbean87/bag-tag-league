@@ -69,3 +69,34 @@ test('an unprovisioned sheet with a metadata mismatch banners the drift', () => 
   assert.match(apply, /Configuration mismatch\./);
   assert.match(apply, /backfill the metadata columns/);
 });
+
+test('the provisioning and setup cards are unified and grouped at the bottom', () => {
+  const provisionIndex = html.indexOf('id="doublesProvisionCard"');
+  const clubIndex = html.indexOf('id="clubMembersCard"');
+  const lastWorkflowIndex = html.indexOf('id="pointsCalcCard"');
+  const activityIndex = html.indexOf('<!-- 10. Activity Log -->');
+  assert.notEqual(provisionIndex, -1, 'expected the doubles provisioning card');
+  assert.notEqual(clubIndex, -1, 'expected the setup club members card');
+  assert.notEqual(activityIndex, -1, 'expected the activity log');
+
+  // The setup cards form one group below the weekly workflow, in event-setup
+  // order: provision the spreadsheet first, then set up the club members.
+  assert.ok(provisionIndex > lastWorkflowIndex, 'provisioning sits below the workflow');
+  assert.ok(provisionIndex < clubIndex, 'provisioning precedes club-member setup');
+  assert.ok(clubIndex < activityIndex, 'the setup group stays above the activity log');
+
+  // The setup card mirrors the provisioning card's single-panel structure:
+  // one heading, one help paragraph, one action button, one status line.
+  const clubCard = html.slice(clubIndex, html.indexOf('<!-- Dev-only test-data reset.'));
+  assert.match(clubCard, /<h2>Setup Club Members<\/h2>/);
+  assert.match(clubCard, /class="help-text"/);
+  assert.match(clubCard, /id="btnCreateMaster" onclick="createClubMembersTab\(\)"/);
+  assert.match(clubCard, /id="masterResult" class="status hidden"/);
+  assert.doesNotMatch(clubCard, /clubMembersMissing|clubMembersExists/);
+
+  // The setup card mirrors the provisioning disabled state for an existing
+  // roster instead of swapping in a separate panel.
+  const apply = functionBody('applyClubMembersState');
+  assert.match(apply, /btn\.disabled = exists/);
+  assert.match(apply, /'Club Members Set Up'/);
+});

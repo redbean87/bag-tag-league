@@ -238,40 +238,6 @@
     <p class="help-text" id="leagueStatus" style="margin:0;"></p>
   </div>
 
-  <!-- 0b. Doubles Provisioning (doubles mode only) -->
-  <div class="card" id="doublesProvisionCard" style="display:none;">
-    <h2>Doubles Provisioning</h2>
-    <p class="help-text">
-      Create the League (with <code>league_format=doubles</code>), ClubMembers,
-      and Week template tabs in the Doubles spreadsheet, and seed its roster
-      from the Singles league. Safe to run repeatedly; the Singles
-      spreadsheet is never written.
-    </p>
-    <button type="button" id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet()">Provision Doubles Spreadsheet</button>
-    <div id="doublesProvisionResult" class="status hidden"></div>
-  </div>
-
-  <!-- 0c. Test Data Reset (test league only) -->
-  <div class="card" id="testResetCard" style="display:none;">
-    <h2>Test Data Reset</h2>
-    <p class="help-text">
-      Clear test data from the doubles test spreadsheet. The preview lists
-      every row that would be removed and writes nothing; the reset then
-      deletes those rows down to the header. Live Singles and any non-test
-      spreadsheet are refused by the server before any write.
-    </p>
-    <div class="field-group">
-      <label for="testResetScope">Scope</label>
-      <select id="testResetScope">
-        <option value="weekly">Weekly rows only</option>
-        <option value="full">Weekly rows + roster (empty)</option>
-      </select>
-    </div>
-    <button type="button" id="btnPreviewTestReset" onclick="previewTestDataReset()">Preview Reset</button>
-    <button type="button" id="btnApplyTestReset" onclick="applyTestDataReset()">Reset Test Data</button>
-    <div id="testResetResult" class="status hidden"></div>
-  </div>
-
   <!-- 1. League Settings -->
   <details class="card" id="leagueCard">
     <summary>
@@ -349,22 +315,6 @@
       </div>
     </div>
   </details>
-
-  <!-- 2. Setup Club Members -->
-  <div class="card">
-    <h2>Setup Club Members</h2>
-    <div id="clubMembersMissing">
-      <p class="help-text">
-        Create the <code>ClubMembers</code> tab if it doesn't exist. This is a one-time setup step.
-        Players will register themselves during check-in.
-      </p>
-      <button type="button" id="btnCreateMaster" onclick="createClubMembersTab()">Create Club Members Tab</button>
-      <div id="masterResult" class="status hidden"></div>
-    </div>
-    <div id="clubMembersExists" style="display:none;">
-      <p class="help-text">The Club Members sheet is already set up.</p>
-    </div>
-  </div>
 
   <!-- 2b. Members (doubles mode only) -->
   <div class="card" id="membersCard" style="display:none;">
@@ -554,6 +504,63 @@
     </div>
 
   </div>
+
+  <!-- Setup cards. One-time provisioning and setup live together at the
+       bottom of the page so the recurring weekly workflow stays on top. The
+       order follows the event setup sequence: provision the spreadsheet
+       first, then set up the club members. Both cards share one structure:
+       a heading, one help paragraph, one action button, and one status
+       line. -->
+  <div class="card" id="doublesProvisionCard" style="display:none;">
+    <h2>Doubles Provisioning</h2>
+    <p class="help-text">
+      Create the League (with <code>league_format=doubles</code>), ClubMembers,
+      and Week template tabs in the Doubles spreadsheet, and seed its roster
+      from the Singles league. Safe to run repeatedly; the Singles
+      spreadsheet is never written.
+    </p>
+    <button type="button" id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet()">Provision Doubles Spreadsheet</button>
+    <div id="doublesProvisionResult" class="status hidden"></div>
+  </div>
+
+  <div class="card" id="clubMembersCard">
+    <h2>Setup Club Members</h2>
+    <p class="help-text">
+      Create the <code>ClubMembers</code> tab if it does not exist. This is a
+      one-time setup step; players register themselves during check-in. Safe
+      to run repeatedly; existing members are never changed.
+    </p>
+    <button type="button" id="btnCreateMaster" onclick="createClubMembersTab()">Create Club Members Tab</button>
+    <div id="masterResult" class="status hidden"></div>
+  </div>
+
+  <!-- Dev-only test-data reset. The reset is a testing tool, not a
+       coordinator feature, so the coordinator page never renders it. The
+       panel is inert markup: it mounts only when the page is opened with the
+       non-advertised ?devTestReset=1 flag while a test league is selected,
+       and the server allow-list still refuses every non-test spreadsheet. -->
+  <template id="testResetDevTemplate">
+    <div class="card" id="testResetCard">
+      <h2>Test Data Reset (dev)</h2>
+      <p class="help-text">
+        Clear test data from the doubles test spreadsheet. The preview lists
+        every row that would be removed and writes nothing; the reset then
+        deletes those rows down to the header. Live Singles and any non-test
+        spreadsheet are refused by the server before any write.
+      </p>
+      <div class="field-group">
+        <label for="testResetScope">Scope</label>
+        <select id="testResetScope">
+          <option value="weekly">Weekly rows only</option>
+          <option value="full">Weekly rows + roster (empty)</option>
+        </select>
+      </div>
+      <button type="button" id="btnPreviewTestReset" onclick="previewTestDataReset()">Preview Reset</button>
+      <button type="button" id="btnApplyTestReset" onclick="applyTestDataReset()">Reset Test Data</button>
+      <div id="testResetResult" class="status hidden"></div>
+    </div>
+  </template>
+  <div id="testResetDevMount"></div>
 
   <!-- 10. Activity Log -->
   <details>
@@ -753,11 +760,11 @@
       var provisionCard = document.getElementById('doublesProvisionCard');
       if (provisionCard) provisionCard.style.display = rules.hasPairs ? '' : 'none';
 
-      // The test-data reset only ever appears for a league the registry flags
-      // as a test surface; the server enforces the same allow-list, so a live
-      // league never shows (or can use) the wipe path.
-      var testResetCard = document.getElementById('testResetCard');
-      if (testResetCard) testResetCard.style.display = league && league.test === true ? '' : 'none';
+      // The test-data reset is a dev-only tool, never part of the coordinator
+      // page. It mounts only for a test league when the non-advertised dev
+      // flag is present; the server enforces the same allow-list, so a live
+      // league can never use the wipe path.
+      applyTestResetVisibility(league);
 
       // Points tooling follows the scoring method.
       var pointsCard = document.getElementById('pointsCalcCard');
@@ -966,6 +973,40 @@
           btn.disabled = false;
           btn.textContent = 'Provision Doubles Spreadsheet';
         }
+      }
+    }
+
+    // ─── Dev-only test-data reset ─────────────────────────────────────────
+    // The reset wipes the disposable doubles test spreadsheet, so it is a
+    // worker/testing tool rather than a coordinator feature. The coordinator
+    // page renders no reset card or button: the panel lives in an inert
+    // <template> and mounts only when the page is opened with the
+    // non-advertised flag below while a test league is selected. The server
+    // allow-list still refuses every non-test spreadsheet.
+    var TEST_RESET_DEV_FLAG = 'devTestReset';
+
+    function testResetDevEnabled() {
+      try {
+        return new URLSearchParams(window.location.search).get(TEST_RESET_DEV_FLAG) === '1';
+      } catch (err) {
+        return false;
+      }
+    }
+
+    function applyTestResetVisibility(league) {
+      var mount = document.getElementById('testResetDevMount');
+      if (!mount) return;
+      var enabled = !!(league && league.test === true && testResetDevEnabled());
+      var mounted = document.getElementById('testResetCard');
+      if (enabled && !mounted) {
+        var template = document.getElementById('testResetDevTemplate');
+        if (template && template.content) {
+          mount.appendChild(template.content.cloneNode(true));
+        }
+        return;
+      }
+      if (!enabled && mounted) {
+        mount.innerHTML = '';
       }
     }
 
@@ -1233,6 +1274,23 @@
       el.innerHTML = html;
     }
 
+    // Reflects the club-members state on the setup control with the same
+    // pattern as doubles provisioning: an unset roster offers the create
+    // action, an existing roster disables it and states the state explicitly.
+    function applyClubMembersState(state) {
+      var exists = state === 'exists';
+      var btn = document.getElementById('btnCreateMaster');
+      if (btn) {
+        btn.disabled = exists;
+        btn.textContent = exists ? 'Club Members Set Up' : 'Create Club Members Tab';
+      }
+      if (exists) {
+        setMasterStatus('ok', '<strong>Club Members set up.</strong> Re-running is disabled.');
+      } else {
+        setMasterStatus('hidden', '');
+      }
+    }
+
     async function loadClubMembersStatus() {
       try {
         var response = await fetch(API_URL, {
@@ -1248,14 +1306,12 @@
         }
 
         if (data.state === 'missing') {
-          document.getElementById('clubMembersMissing').style.display = '';
-          document.getElementById('clubMembersExists').style.display = 'none';
+          applyClubMembersState('missing');
           log('ClubMembers sheet not found — create prompt shown');
           return;
         }
 
-        document.getElementById('clubMembersMissing').style.display = 'none';
-        document.getElementById('clubMembersExists').style.display = '';
+        applyClubMembersState('exists');
         log('ClubMembers sheet exists');
       } catch (err) {
         setMasterStatus('error', '<strong>Request failed:</strong> ' + err.message);
@@ -1265,11 +1321,15 @@
 
     async function createClubMembersTab() {
       var btn = document.getElementById('btnCreateMaster');
-      btn.disabled = true;
-      btn.textContent = 'Creating...';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Creating...';
+      }
       setMasterStatus('pending', 'Creating ClubMembers tab...');
 
       log('Creating ClubMembers tab');
+
+      var created = false;
 
       try {
         var response = await fetch(API_URL, {
@@ -1283,13 +1343,11 @@
         var data = await response.json();
 
         if (data.status === 'ok') {
-          if (data.alreadyExisted) {
-            log('ClubMembers tab already existed');
-          } else {
-            log('SUCCESS: ClubMembers tab created');
-          }
-          document.getElementById('clubMembersMissing').style.display = 'none';
-          document.getElementById('clubMembersExists').style.display = '';
+          created = true;
+          log(data.alreadyExisted
+            ? 'ClubMembers tab already existed'
+            : 'SUCCESS: ClubMembers tab created');
+          applyClubMembersState('exists');
         } else {
           setMasterStatus('error', '<strong>Error:</strong> ' + data.message);
           log('ERROR: ' + data.message);
@@ -1298,8 +1356,10 @@
         setMasterStatus('error', '<strong>Request failed:</strong> ' + err.message);
         log('FAILED: ' + err.message);
       } finally {
-        btn.disabled = false;
-        btn.textContent = 'Create Club Members Tab';
+        if (btn && !created) {
+          btn.disabled = false;
+          btn.textContent = 'Create Club Members Tab';
+        }
       }
     }
 
