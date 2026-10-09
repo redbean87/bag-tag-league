@@ -91,6 +91,58 @@ test('singles commit appends a new weekly row for an existing club member', () =
   assert.equal(value(week, dataRows(week)[0], 'checked_in'), true);
 });
 
+test('singles commit snapshots the roster identity for an existing member', () => {
+  const h = loadCode();
+  const { week } = buildSingles(h, []);
+
+  // The roster holds member 1 with name/PDGA 111; the export carries a
+  // different name and PDGA. The new row snapshots the roster, while the
+  // import columns record what the export actually said.
+  const result = commit(h, [{ name: 'UDisc Alias', username: 'existing', pdga_number: '999999' }]);
+
+  assert.equal(result.summary.existing_member_weekly_created, 1);
+  const row = dataRows(week)[0];
+  assert.equal(value(week, row, 'player_name_snapshot'), 'Existing Member');
+  assert.equal(value(week, row, 'udisc_username_snapshot'), 'existing');
+  assert.equal(value(week, row, 'pdga_number_snapshot'), '111');
+  assert.equal(value(week, row, 'udisc_name_import'), 'UDisc Alias');
+  assert.equal(value(week, row, 'udisc_pdga_number_import'), '999999');
+});
+
+test('singles commit falls back to the import PDGA when the roster has none', () => {
+  const h = loadCode();
+  const { week, club } = buildSingles(h, []);
+  club.appendRow([3, 'No Pdga', 'nopdga', '', '', true, '', '']);
+
+  const result = commit(h, [{ name: 'No Pdga', username: 'nopdga', pdga_number: '555' }]);
+
+  assert.equal(result.summary.existing_member_weekly_created, 1);
+  const row = dataRows(week)[0];
+  assert.equal(value(week, row, 'player_name_snapshot'), 'No Pdga');
+  assert.equal(value(week, row, 'pdga_number_snapshot'), '555');
+});
+
+test('singles re-import leaves an existing row snapshot untouched', () => {
+  const h = loadCode();
+  const { week } = buildSingles(h, [
+    makeWeeklyRow(h, {
+      member_number: 1,
+      player_name_snapshot: 'Existing Member',
+      udisc_username_snapshot: 'existing',
+      pdga_number_snapshot: '777777',
+      checked_in: true
+    })
+  ]);
+
+  const result = commit(h, [{ name: 'Existing Member', username: 'existing', pdga_number: '111' }]);
+
+  assert.equal(result.summary.matched_updated, 1);
+  assert.equal(dataRows(week).length, 1);
+  const row = dataRows(week)[0];
+  assert.equal(value(week, row, 'pdga_number_snapshot'), '777777');
+  assert.equal(value(week, row, 'udisc_pdga_number_import'), '111');
+});
+
 test('singles commit creates a ClubMembers row and weekly row for a new identity', () => {
   const h = loadCode();
   const { week, club } = buildSingles(h, []);
