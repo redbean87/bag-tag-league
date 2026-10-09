@@ -302,9 +302,9 @@ test('a re-import leaves a legacy stored udisc_ending_tag value untouched', () =
 
 // ─── Singles: tag lifecycle byte-identical regression ────────────────────────
 
-test('singles check-in still requires, persists, and echoes the tag', () => {
+test('singles check-in still requires and echoes the tag but never persists it to the roster', () => {
   const h = loadCode();
-  const { club, week } = buildSingles(h, [[1, 'Existing', 'ex', '', '', true, '', '']]);
+  const { club, week } = buildSingles(h, [[1, 'Existing', 'ex', '', 5, true, '', '']]);
 
   const missing = h.parse(h.fn('handleSubmitCheckIn')({
     member_number: 1,
@@ -313,6 +313,8 @@ test('singles check-in still requires, persists, and echoes the tag', () => {
   assert.equal(missing.status, 'error');
   assert.match(missing.message, /in_tag is required/);
 
+  const before = value(club, 'current_tag', 1);
+
   const ok = h.parse(h.fn('handleSubmitCheckIn')({
     member_number: 1,
     name: 'Existing',
@@ -320,8 +322,59 @@ test('singles check-in still requires, persists, and echoes the tag', () => {
   }));
   assert.equal(ok.status, 'ok');
   assert.equal(ok.in_tag, 7);
-  assert.equal(value(club, 'current_tag', 1), 7);
+  // The roster tag is never written at check-in; it changes only at finalization.
+  assert.strictEqual(value(club, 'current_tag', 1), before);
+  assert.equal(value(club, 'current_tag', 1), 5);
   assert.equal(value(week, 'in_tag', 1), 7);
+});
+
+test('a dedupe check-in leaves the roster tag value byte-identical', () => {
+  const h = loadCode();
+  const { club, week } = buildSingles(h, [[1, 'Dedupe Player', 'dedupe', '', 11, true, '', '']]);
+
+  const before = value(club, 'current_tag', 1);
+
+  const result = h.parse(h.fn('handleSubmitCheckIn')({
+    name: 'Dedupe Player',
+    in_tag: 98
+  }));
+  assert.equal(result.status, 'ok');
+  assert.strictEqual(value(club, 'current_tag', 1), before);
+  assert.equal(value(club, 'current_tag', 1), 11);
+  assert.equal(value(week, 'in_tag', 1), 98);
+  assert.equal(club.getLastRow(), 2, 'the dedupe must reuse the existing roster row');
+});
+
+test('a new-member check-in leaves the roster tag blank', () => {
+  const h = loadCode();
+  const { club, week } = buildSingles(h, []);
+
+  const result = h.parse(h.fn('handleSubmitCheckIn')({
+    name: 'Brand New',
+    in_tag: 42
+  }));
+  assert.equal(result.status, 'ok');
+  assert.equal(club.getLastRow(), 2, 'the new member was appended');
+  assert.strictEqual(value(club, 'current_tag', 1), '');
+  assert.equal(value(week, 'in_tag', 1), 42);
+});
+
+test('end-of-night finalization still writes the roster tag', () => {
+  const h = loadCode();
+  const { club, week } = buildSingles(h, [[1, 'Alice Smith', 'alice', '', 3, true, '', '']]);
+  const headers = h.bound.WEEKLY_RECORD_HEADERS;
+  const row = new Array(headers.length).fill('');
+  row[idx(headers, 'member_number')] = 1;
+  row[idx(headers, 'player_name_snapshot')] = 'Alice Smith';
+  row[idx(headers, 'in_tag')] = 3;
+  row[idx(headers, 'out_tag')] = 3;
+  week.appendRow(row);
+
+  const result = h.parse(h.fn('handleFinalizeRound')({ league_date: WEEK_DATE }));
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.summary.updated_count, 1);
+  assert.equal(value(club, 'current_tag', 1), 3, 'finalization is the only writer of the roster tag');
 });
 
 test('singles search results still include current_tag', () => {
