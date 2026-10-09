@@ -1,8 +1,8 @@
 'use strict';
 
 // Structural checks for the admin UI cleanup: the redundant "sheet exists"
-// and "league already created" status texts are gone while the state logic
-// that drives them remains.
+// and "League Already Created" status texts stay removed while the creation
+// signal is restored fresh on the Create League Day card.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -42,4 +42,24 @@ test('the date/day state logic stays even though its text is removed', () => {
   const createWeek = functionBody('createWeeklyTab');
   assert.match(createWeek, /if \(sheetExistsForDate\(leagueDate\)\)/);
   assert.doesNotMatch(createWeek, /Already Created/);
+});
+
+test('the create card signals a created league day only when the sheet exists', () => {
+  const createDay = functionBody('updateCreateLeagueDayStatus');
+  const present = createDay.slice(createDay.indexOf('if (sheetExistsForDate(activeDate))'));
+  const absent = present.slice(present.indexOf('} else {'));
+
+  // Present: a fresh created line is written and the create form hides.
+  assert.match(present, /existsEl\.innerHTML = '<p class="status ok"[^']*League day created/);
+  assert.match(present, /existsEl\.style\.display = ''/);
+  assert.match(present, /formEl\.style\.display = 'none'/);
+
+  // Absent: the signal is cleared and the create form returns.
+  assert.match(absent, /existsEl\.innerHTML = ''/);
+  assert.match(absent, /existsEl\.style\.display = 'none'/);
+  assert.match(absent, /formEl\.style\.display = ''/);
+
+  // The restored signal is written fresh, not either removed string.
+  assert.doesNotMatch(createDay, /Sheet exists:/);
+  assert.doesNotMatch(createDay, /League Already Created/);
 });

@@ -1183,9 +1183,16 @@
       }
 
       if (sheetExistsForDate(activeDate)) {
+        // The week already exists, so the card states that plainly instead of
+        // offering the create action. This is the one creation signal kept
+        // from the removed status texts; it is written fresh and only shows
+        // for a date whose sheet actually exists.
+        existsEl.innerHTML = '<p class="status ok" style="margin-bottom:0;"><strong>League day created</strong> for <code>Week ' + activeDate + '</code>.</p>';
         existsEl.style.display = '';
         formEl.style.display = 'none';
       } else {
+        // Quiet when the selected date has no sheet yet.
+        existsEl.innerHTML = '';
         existsEl.style.display = 'none';
         formEl.style.display = '';
       }
