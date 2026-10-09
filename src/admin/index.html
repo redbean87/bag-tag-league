@@ -102,6 +102,7 @@
       margin: 0;
       list-style: none;
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       border-radius: 8px;
@@ -198,6 +199,14 @@
     .card-info .help-text { margin-bottom: 0; }
     /* Accordion cards: the icon rides the summary row next to the chevron. */
     details.card > summary .info-toggle { margin-left: auto; }
+    /* An accordion card's help panel lives on the summary row so it can open
+       without changing the card's expanded state. */
+    details.card > summary .card-info {
+      flex: 0 0 100%;
+      width: 100%;
+      order: 1;
+      margin: 0.75rem 0 0;
+    }
     /* Members accordion: one full-width summary row and a horizontally
        scrollable table keep it usable on a phone, and the summary and
        Refresh button become comfortable touch targets. */
@@ -315,15 +324,15 @@
         <h2>League Settings</h2>
       </div>
       <button type="button" class="info-toggle" aria-expanded="false" aria-controls="leagueCardInfo" aria-label="About League Settings" onclick="toggleCardInfo(event, 'leagueCardInfo')">i</button>
-    </summary>
-    <div class="card-body">
-      <div class="card-info" id="leagueCardInfo" role="note" hidden>
+      <div class="card-info" id="leagueCardInfo" role="note" hidden onclick="event.preventDefault(); event.stopPropagation()">
         <p class="help-text">Configure league settings</p>
         <p class="help-text">
           Format and scoring are set when a league is provisioned and are
           shown here read-only; the registry is authoritative for routing.
         </p>
       </div>
+    </summary>
+    <div class="card-body">
       <div id="leagueMissing">
         <p class="help-text">
           The <code>League</code> sheet does not exist in the spreadsheet yet.
@@ -396,9 +405,7 @@
         <h2>Members</h2>
       </div>
       <button type="button" class="info-toggle" aria-expanded="false" aria-controls="membersCardInfo" aria-label="About Members" onclick="toggleCardInfo(event, 'membersCardInfo')">i</button>
-    </summary>
-    <div class="card-body">
-      <div class="card-info" id="membersCardInfo" role="note" hidden>
+      <div class="card-info" id="membersCardInfo" role="note" hidden onclick="event.preventDefault(); event.stopPropagation()">
         <p class="help-text">Doubles season totals</p>
         <p class="help-text">
           Doubles members with their <strong>Season Total</strong>: the sum of
@@ -406,6 +413,8 @@
           shows 0.
         </p>
       </div>
+    </summary>
+    <div class="card-body">
       <button type="button" id="btnLoadMembers" onclick="loadMembers()">Refresh Members</button>
       <div id="membersTable" style="display:none;"></div>
       <div id="membersResult" class="status hidden"></div>
@@ -763,11 +772,6 @@
       var willOpen = panel.hidden;
       closeCardInfo();
       if (!willOpen) return;
-      // A panel inside a collapsed accordion needs the card open to be seen.
-      if (button && button.closest) {
-        var details = button.closest('details');
-        if (details) details.open = true;
-      }
       panel.hidden = false;
       if (button) button.setAttribute('aria-expanded', 'true');
     }

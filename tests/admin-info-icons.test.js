@@ -112,15 +112,75 @@ test('toggling opens one panel, marks it expanded, and Escape closes it', () => 
   assert.match(toggle, /closeCardInfo\(\)/);
   assert.match(toggle, /panel\.hidden = false/);
   assert.match(toggle, /setAttribute\('aria-expanded', 'true'\)/);
-  // A panel inside a collapsed accordion forces the card open.
-  assert.match(toggle, /button\.closest\('details'\)/);
-  assert.match(toggle, /details\.open = true/);
+  // Opening help must never change the card's expanded state.
+  assert.doesNotMatch(toggle, /details\.open/);
+  assert.doesNotMatch(toggle, /closest\('details'\)/);
 
   const close = functionBody('closeCardInfo');
   assert.match(close, /panels\[i\]\.hidden = true/);
   assert.match(close, /setAttribute\('aria-expanded', 'false'\)/);
 
   assert.match(html, /addEventListener\('keydown'[\s\S]*?Escape[\s\S]*?closeCardInfo\(\)/);
+});
+
+test('an info icon tap leaves the accordion state unchanged', () => {
+  // Drive the real toggle/close functions against a tiny fake DOM: the icon
+  // must reveal the panel without touching its parent <details> open state.
+  const panel = {
+    hidden: true,
+    attrs: {},
+    setAttribute(key, value) { this.attrs[key] = value; },
+    getAttribute(key) { return this.attrs[key]; }
+  };
+  const details = { open: false };
+  const button = {
+    attrs: {},
+    setAttribute(key, value) { this.attrs[key] = value; },
+    getAttribute(key) { return this.attrs[key]; },
+    closest(selector) { return selector === 'details' ? details : null; }
+  };
+  const doc = {
+    addEventListener() {},
+    getElementById(id) { return id === 'cardInfo' ? panel : null; },
+    querySelectorAll(selector) {
+      if (selector === '.card-info') return [panel];
+      if (selector === '.info-toggle') return [button];
+      return [];
+    }
+  };
+  const load = new Function('document',
+    functionBody('closeCardInfo') + '\n' + functionBody('toggleCardInfo') +
+    '\nreturn toggleCardInfo;');
+  const toggle = load(doc);
+
+  toggle({ preventDefault() {}, stopPropagation() {}, currentTarget: button }, 'cardInfo');
+
+  assert.equal(panel.hidden, false, 'the help panel opens');
+  assert.equal(button.getAttribute('aria-expanded'), 'true', 'the icon reports expanded');
+  assert.equal(details.open, false, 'the accordion state is left exactly as it was');
+});
+
+test('accordion help panels render on the summary row, not the collapsible body', () => {
+  // The panel must stay visible while its card is collapsed, so it belongs to
+  // the <summary> (always rendered) rather than the hidden card body.
+  for (const id of ['leagueCardInfo', 'membersCardInfo']) {
+    const panelAt = html.indexOf('id="' + id + '"');
+    assert.notEqual(panelAt, -1, 'expected ' + id);
+    const summaryOpenAt = html.lastIndexOf('<summary>', panelAt);
+    const summaryCloseAt = html.indexOf('</summary>', panelAt);
+    assert.ok(summaryOpenAt !== -1 && panelAt < summaryCloseAt, id + ' must sit inside its summary');
+    assert.ok(panelAt < html.indexOf('class="card-body"', panelAt), id + ' must precede the card body');
+  }
+});
+
+test('tapping the header still toggles the accordion', () => {
+  // Native <details> toggling stays intact: the toggle code never mutates the
+  // card, and the header text carries no handler that would swallow a tap.
+  const summaryText = html.match(/<div class="summary-text">[\s\S]*?<\/div>/g) || [];
+  assert.ok(summaryText.length >= 2, 'expected accordion summary text');
+  for (const block of summaryText) {
+    assert.doesNotMatch(block, /onclick=/, 'header text must not intercept taps');
+  }
 });
 
 test('the info icon is a phone-sized touch target', () => {
