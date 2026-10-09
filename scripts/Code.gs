@@ -230,17 +230,18 @@ function orderWeeklyHeaders(columns, humanFirstGroups) {
   return ordered;
 }
 
-// WeeklyPlayerRecords column headers, human-first (48 columns). Names, score,
-// then the singles bag-tag columns lead; the remaining 41 keep their order.
+// WeeklyPlayerRecords column headers, human-first. Names, score, then the
+// singles bag-tag columns lead; the remaining columns keep their order. The
+// exact count is whatever the capability-derived pool builds.
 const WEEKLY_RECORD_HEADERS = orderWeeklyHeaders(
   WEEKLY_RECORD_HEADERS_LEGACY,
   [WEEKLY_RECORD_NAME_HEADERS, WEEKLY_RECORD_SCORE_HEADERS, WEEKLY_RECORD_TAG_HEADERS]
 );
 
-// Doubles WeeklyPlayerRecords headers, human-first (51 columns). Names, pair
-// linkage, score, and the points lifecycle lead, then the remaining tag-free
-// columns in their historical order. The tag columns are gone from the
-// doubles schema; a pre-detag sheet is recognized by
+// Doubles WeeklyPlayerRecords headers, human-first. Names, pair linkage,
+// score, and the points lifecycle lead, then the remaining tag-free columns in
+// their historical order. The tag columns are gone from the doubles schema; a
+// pre-detag sheet is recognized by
 // WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED until the gated drop migration runs.
 const WEEKLY_RECORD_HEADERS_DOUBLES = orderWeeklyHeaders(
   WEEKLY_RECORD_HEADERS_LEGACY_DOUBLES,
@@ -271,16 +272,19 @@ const WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED = orderWeeklyHeaders(
 // kept in the header schema so existing spreadsheets migrate cleanly, but no
 // code reads or writes a lifecycle status anymore.
 
-// Decided doubles scoring rule: team placement 1st/2nd/3rd earns 2/1.5/1 and
-// every other participant (including a blank/DNF placement) earns 0.5 showing
-// up credit. Both partners receive the identical value; a solo receives the
-// full value. Keeping the map as data makes the matrix easy to audit.
-const DOUBLES_POINTS_BY_PLACE = {
+// Default points-by-place matrix for a points-scoring league, and the day-one
+// doubles matrix: team placement 1st/2nd/3rd earns 2/1.5/1 and every other
+// participant (including a blank/DNF placement) earns 0.5 showing-up credit.
+// Both partners receive the identical value; a solo receives the full value.
+// This is only the fallback for a League sheet that carries no points table.
+// A league overrides it in its own settings (points_by_place +
+// points_participation) with no code edit.
+const DEFAULT_POINTS_BY_PLACE = {
   1: 2,
   2: 1.5,
   3: 1
 };
-const DOUBLES_POINTS_PARTICIPATION = 0.5;
+const DEFAULT_POINTS_PARTICIPATION = 0.5;
 
 // Batch-map scope sentinel for solo (keyless) rows. A solo never fabricates a
 // pair_key; inside the commit batch it still needs a scope key so a solo row
@@ -310,14 +314,23 @@ const LEAGUE_SHEET_HEADERS = [
 // League metadata columns appended to every League sheet: the stored format
 // and scoring string enums. The registry (LEAGUE_SPREADSHEETS) is the routing
 // authority; the sheet records the same values as per-spreadsheet confirmation
-// so drift is visible. Decided 2026-10-08: singles sheets extend to 17 columns,
-// so both formats carry both metadata columns.
+// so drift is visible. Decided 2026-10-08: singles sheets extend to the same
+// metadata schema, so both formats carry both columns.
 const LEAGUE_SHEET_METADATA_HEADERS = ['league_format', 'scoring'];
 
-const LEAGUE_SHEET_HEADERS_EXTENDED = LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS);
+// Per-league points settings appended after the metadata columns. These move
+// the points matrix out of code: `points_by_place` is a compact
+// "place:value,..." list and `points_participation` is the showing-up credit.
+// A blank value falls back to DEFAULT_POINTS_BY_PLACE /
+// DEFAULT_POINTS_PARTICIPATION, so an un-migrated sheet keeps today's output.
+const LEAGUE_POINTS_HEADERS = ['points_by_place', 'points_participation'];
+
+const LEAGUE_SHEET_HEADERS_EXTENDED = LEAGUE_SHEET_HEADERS
+  .concat(LEAGUE_SHEET_METADATA_HEADERS)
+  .concat(LEAGUE_POINTS_HEADERS);
 
 // Kept name for callers written before singles carried metadata; the doubles
-// schema and the extended singles schema are the same 17-column set now.
+// schema and the extended singles schema are the same settings set now.
 const LEAGUE_SHEET_HEADERS_DOUBLES = LEAGUE_SHEET_HEADERS_EXTENDED;
 
 // ─── Spreadsheet routing ─────────────────────────────────────────────────────
@@ -436,22 +449,132 @@ function normalizeScoring(scoring) {
 }
 
 /**
+ * Parses a compact points-by-place setting ("1:2,2:1.5,3:1") into a
+ * place-keyed map. Blank is valid and yields an empty map so the caller can
+ * fall back to the defaults. Returns { ok: true, byPlace } or
+ * { ok: false, error }.
+ */
+function parsePointsByPlace(raw) {
+  var byPlace = {};
+  if (raw === '' || raw === null || raw === undefined) return { ok: true, byPlace: byPlace };
+  var text = String(raw).trim();
+  if (text === '') return { ok: true, byPlace: byPlace };
+
+  var entries = text.split(',');
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i].trim();
+    if (entry === '') return { ok: false, error: 'has an empty entry.' };
+    var parts = entry.split(':');
+    if (parts.length !== 2) return { ok: false, error: 'entry "' + entry + '" must be place:value.' };
+    var placeText = parts[0].trim();
+    var valueText = parts[1].trim();
+    var place = parseInt(placeText, 10);
+    var value = Number(valueText);
+    if (isNaN(place) || place < 1 || String(place) !== placeText) {
+      return { ok: false, error: 'place "' + placeText + '" must be a positive integer.' };
+    }
+    if (isNaN(value) || value < 0) {
+      return { ok: false, error: 'value "' + valueText + '" must be a non-negative number.' };
+    }
+    if (byPlace[place] !== undefined) {
+      return { ok: false, error: 'lists place ' + place + ' more than once.' };
+    }
+    byPlace[place] = value;
+  }
+  return { ok: true, byPlace: byPlace };
+}
+
+/** Serializes a place-keyed map to the compact "place:value,..." form. */
+function formatPointsByPlace(byPlace) {
+  var places = Object.keys(byPlace || {}).map(function(place) {
+    return parseInt(place, 10);
+  }).sort(function(a, b) { return a - b; });
+  return places.map(function(place) {
+    return place + ':' + byPlace[place];
+  }).join(',');
+}
+
+/** Copies a place-keyed map so callers cannot mutate the shared default. */
+function clonePointsByPlace(byPlace) {
+  var copy = {};
+  for (var place in byPlace) {
+    if (Object.prototype.hasOwnProperty.call(byPlace, place)) copy[place] = byPlace[place];
+  }
+  return copy;
+}
+
+/**
+ * Resolves the effective points table from League settings. A blank or absent
+ * table falls back to the day-one defaults, so an un-migrated sheet keeps
+ * byte-identical output. Returns { byPlace, participation }.
+ */
+function resolvePointsRules(leagueSettings) {
+  var settings = leagueSettings || {};
+  var parsed = parsePointsByPlace(settings.points_by_place);
+  var byPlace = parsed.ok && Object.keys(parsed.byPlace).length > 0
+    ? parsed.byPlace
+    : clonePointsByPlace(DEFAULT_POINTS_BY_PLACE);
+
+  var rawParticipation = settings.points_participation;
+  var participation = (rawParticipation === '' || rawParticipation === null || rawParticipation === undefined)
+    ? DEFAULT_POINTS_PARTICIPATION
+    : Number(rawParticipation);
+  if (isNaN(participation) || participation < 0) participation = DEFAULT_POINTS_PARTICIPATION;
+
+  return { byPlace: byPlace, participation: participation };
+}
+
+/**
  * Resolves the capability rules for a requested selector. The league table is
  * the deploy-time authority for both format and scoring. Capability flags are
  * the only thing handlers branch on, so a future format x scoring league needs
  * no handler change.
+ *
+ * `leagueSettings` is the optional, already-read League settings object keyed
+ * by header. When supplied, its points table overrides the day-one defaults, so
+ * the same `rules` a handler already holds carries the per-league matrix. When
+ * omitted the defaults apply and no spreadsheet is opened.
  */
-function getLeagueRules(selector) {
+function getLeagueRules(selector, leagueSettings) {
   var record = leagueRecordById(resolveLeagueId(selector));
   var format = normalizeFormat(record ? record.format : null);
   var scoring = normalizeScoring(record ? record.scoring : null);
+  var points = resolvePointsRules(leagueSettings);
   return {
     format: format,
     scoring: scoring,
     usesTags: scoring === SCORING_TAGS,
     usesPoints: scoring === SCORING_POINTS,
-    hasPairs: format === LEAGUE_FORMAT_DOUBLES
+    hasPairs: format === LEAGUE_FORMAT_DOUBLES,
+    points: points
   };
+}
+
+/**
+ * Reads the League settings row into a header-keyed object. Returns {} when the
+ * sheet is missing, empty, or has no settings row, so the defaults apply.
+ */
+function readLeagueSettingsRow(sheet) {
+  if (!sheet || sheet.getLastRow() < 2 || sheet.getLastColumn() < 1) return {};
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) return {};
+  var headers = data[0];
+  var row = data[1];
+  var settings = {};
+  for (var i = 0; i < headers.length; i++) {
+    var value = row[i];
+    settings[headers[i]] = (value === null || value === undefined) ? '' : value;
+  }
+  return settings;
+}
+
+/**
+ * Capability rules for a league whose spreadsheet is already open: the League
+ * settings row is read once and its points table merged into the rules.
+ */
+function getLeagueRulesForSpreadsheet(selector, spreadsheet) {
+  var sheet = spreadsheet ? spreadsheet.getSheetByName('League') : null;
+  return getLeagueRules(selector, readLeagueSettingsRow(sheet));
 }
 
 /**
@@ -684,6 +807,7 @@ function ensureLeagueSheetForFormat(spreadsheet, format, scoring) {
     return { sheet: sheet, created: true };
   }
 
+  ensureLeagueSettingsColumns(existing, headers);
   ensureLeagueMetadataValues(existing, rules.format, rules.scoring);
 
   if (existing.getIndex() !== 1) {
@@ -700,6 +824,25 @@ function ensureLeagueSheetForFormat(spreadsheet, format, scoring) {
 function ensureLeagueMetadataValues(sheet, format, scoring) {
   ensureLeagueFormatValue(sheet, format);
   ensureLeagueScoringValue(sheet, scoring);
+}
+
+/**
+ * Appends any missing League settings columns (format, scoring, and the
+ * per-league points table) to the right of the existing header row. Idempotent
+ * and non-destructive: existing columns and their data are never moved. Used by
+ * provisioning and by the settings save so a pre-settings sheet gains the
+ * points columns without a separate migration.
+ */
+function ensureLeagueSettingsColumns(sheet, headers) {
+  var expected = headers || LEAGUE_SHEET_HEADERS_EXTENDED;
+  var lastColumn = Math.max(sheet.getLastColumn(), 1);
+  var current = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  for (var i = 0; i < expected.length; i++) {
+    if (current.indexOf(expected[i]) !== -1) continue;
+    var nextCol = sheet.getLastColumn() + 1;
+    sheet.getRange(1, nextCol).setValue(expected[i]);
+    sheet.getRange(1, nextCol).setFontWeight('bold');
+  }
 }
 
 /**
@@ -1396,10 +1539,11 @@ function readLeagueScoring(sheet) {
 
 /**
  * Whether a League header row matches the expected metadata schema for a
- * (format, scoring) pair. The current 17-column layout is required; the two
- * pre-migration layouts (bare 15-column singles, 16-column doubles) are also
- * accepted as "known but un-migrated" so the topology check does not fail on a
- * sheet the gated extension has not reached yet.
+ * (format, scoring) pair. The current layout carries the format/scoring
+ * metadata and the per-league points settings; the pre-migration layouts (bare
+ * 15-column singles, 16-column doubles, and the 17-column metadata-only
+ * schema) are also accepted as "known but un-migrated" so the topology check
+ * does not fail on a sheet the settings save has not extended yet.
  */
 function leagueHeadersMatch(headers, format, scoring) {
   var rules = rulesForEnums(format, scoring);
@@ -1407,6 +1551,7 @@ function leagueHeadersMatch(headers, format, scoring) {
   if (rules.format === LEAGUE_FORMAT_SINGLES && arraysEqual(headers, LEAGUE_SHEET_HEADERS)) return true;
   if (rules.format === LEAGUE_FORMAT_DOUBLES &&
       arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(['league_format']))) return true;
+  if (arraysEqual(headers, LEAGUE_SHEET_HEADERS.concat(LEAGUE_SHEET_METADATA_HEADERS))) return true;
   return false;
 }
 
@@ -2344,13 +2489,13 @@ function doPost(e) {
     if (data.action === 'previewUdiscImport') {
       return handlePreviewUdiscImport(data);
     }
-    if (data.action === 'previewUdiscImportDoubles') {
+    if (data.action === 'previewUdiscImportDoubles' || data.action === 'previewUdiscImportPairs') {
       return handlePreviewUdiscImportDoubles(data);
     }
     if (data.action === 'commitUdiscImport') {
       return handleCommitUdiscImport(data);
     }
-    if (data.action === 'commitUdiscImportDoubles') {
+    if (data.action === 'commitUdiscImportDoubles' || data.action === 'commitUdiscImportPairs') {
       return handleCommitUdiscImportDoubles(data);
     }
     if (data.action === 'calculatePoints') {
@@ -2365,10 +2510,13 @@ function doPost(e) {
     if (data.action === 'finalizeRound') {
       return handleFinalizeRound(data);
     }
-    if (data.action === 'provisionDoubles') {
+    // Format-neutral aliases: the pairs/provisioning actions answer to their
+    // neutral names, and the original doubles names stay wired as deprecated
+    // aliases so an already-deployed client keeps working.
+    if (data.action === 'provisionDoubles' || data.action === 'provisionLeague') {
       return handleProvisionDoubles(data);
     }
-    if (data.action === 'getDoublesProvisioningState') {
+    if (data.action === 'getDoublesProvisioningState' || data.action === 'getProvisioningState') {
       return handleGetDoublesProvisioningState(data);
     }
     if (data.action === 'migrateWeeklyColumnOrder') {
@@ -2461,7 +2609,7 @@ function handleCreateClubMembersTab(data) {
 
 /**
  * Creates a new weekly tab in the spreadsheet for the given league date.
- * Uses the documented WeeklyPlayerRecords schema (48 columns) as the template.
+ * Uses the WeeklyPlayerRecords schema from the header builder as the template.
  * Prevents duplicate tabs for the same date.
  * Ensures League (position 1) and ClubMembers (position 2) exist first.
  * Inserts the new Week sheet into the correct chronological position.
@@ -2956,12 +3104,20 @@ function handleCreateLeagueSheet(data) {
  *   - "ok" if the sheet exists and contains settings
  */
 function handleGetLeagueSettings(data) {
-  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  const selector = leagueSelectorFrom(data);
+  const spreadsheet = resolveSpreadsheet(selector);
   const sheet = spreadsheet.getSheetByName('League');
+
+  // The weekly column count is derived from the same header builder the sheet
+  // writer uses, so league-varying copy (roster template size) never hardcodes
+  // a stale count.
+  const rules = getLeagueRules(selector);
+  const weeklyColumns = getWeeklyRecordHeaders(rules.format, rules.scoring).length;
 
   if (!sheet) {
     return respond('ok', 'League sheet not found.', {
-      state: 'missing'
+      state: 'missing',
+      weekly_columns: weeklyColumns
     });
   }
 
@@ -2969,7 +3125,8 @@ function handleGetLeagueSettings(data) {
 
   if (allData.length < 2) {
     return respond('ok', 'League sheet exists but has no settings.', {
-      state: 'empty'
+      state: 'empty',
+      weekly_columns: weeklyColumns
     });
   }
 
@@ -2986,7 +3143,8 @@ function handleGetLeagueSettings(data) {
 
   return respond('ok', 'League settings loaded.', {
     state: 'ok',
-    settings: settings
+    settings: settings,
+    weekly_columns: weeklyColumns
   });
 }
 
@@ -3047,36 +3205,58 @@ function handleSaveLeagueSettings(data) {
     }
   }
 
+  // Validate the per-league points table. Blank is allowed (it falls back to
+  // the day-one defaults); a populated value must parse cleanly so the stored
+  // matrix can never produce NaN points at commit time.
+  if (settings.points_by_place !== '' && settings.points_by_place !== null && settings.points_by_place !== undefined) {
+    const parsed = parsePointsByPlace(settings.points_by_place);
+    if (!parsed.ok) {
+      return respond('error', 'Field "points_by_place" is invalid: ' + parsed.error);
+    }
+  }
+  if (settings.points_participation !== '' && settings.points_participation !== null && settings.points_participation !== undefined) {
+    const participation = Number(settings.points_participation);
+    if (isNaN(participation) || participation < 0) {
+      return respond('error', 'Field "points_participation" must be a non-negative number.');
+    }
+  }
+
+  // The points columns are settings owned by this writer; append them when a
+  // pre-settings sheet lacks them so the write below stays aligned. The
+  // format/scoring enums are provisioned elsewhere and preserved, never written
+  // from this form.
+  ensureLeagueSettingsColumns(sheet, LEAGUE_POINTS_HEADERS);
+
   const allData = sheet.getDataRange().getValues();
   const now = new Date().toISOString();
   const hasExistingRow = allData.length >= 2;
+  const headers = allData[0];
+  const existingRow = hasExistingRow ? allData[1] : [];
 
   // Preserve created_at from existing row, or set new
   let createdAt = now;
   if (hasExistingRow) {
-    const headers = allData[0];
-    const existingRow = allData[1];
     const createdAtIdx = headers.indexOf('created_at');
     if (createdAtIdx !== -1 && existingRow[createdAtIdx]) {
       createdAt = existingRow[createdAtIdx];
     }
   }
 
-  // Build the row values in header order
-  const newRow = [];
-  for (const header of LEAGUE_SHEET_HEADERS) {
-    if (header === 'created_at') {
-      newRow.push(createdAt);
-    } else if (header === 'updated_at') {
-      newRow.push(now);
-    } else if (numericFields.indexOf(header) !== -1) {
-      const raw = settings[header];
-      newRow.push((raw === '' || raw === null || raw === undefined) ? '' : Number(raw));
-    } else {
-      const val = settings[header];
-      newRow.push((val === null || val === undefined) ? '' : val);
+  // Build the row values in the sheet's actual header order. Text fields come
+  // from this save; the metadata enums are preserved from the existing row.
+  const newRow = headers.map(function(header, index) {
+    if (header === 'created_at') return createdAt;
+    if (header === 'updated_at') return now;
+    if (header === 'league_format' || header === 'scoring') {
+      return existingRow[index] === undefined ? '' : existingRow[index];
     }
-  }
+    if (numericFields.indexOf(header) !== -1) {
+      const raw = settings[header];
+      return (raw === '' || raw === null || raw === undefined) ? '' : Number(raw);
+    }
+    const val = settings[header];
+    return (val === null || val === undefined) ? '' : val;
+  });
 
   if (hasExistingRow) {
     sheet.getRange(2, 1, 1, newRow.length).setValues([newRow]);
@@ -3086,8 +3266,8 @@ function handleSaveLeagueSettings(data) {
 
   // Return the saved settings as an object
   const saved = {};
-  for (let i = 0; i < LEAGUE_SHEET_HEADERS.length; i++) {
-    saved[LEAGUE_SHEET_HEADERS[i]] = newRow[i];
+  for (let i = 0; i < headers.length; i++) {
+    saved[headers[i]] = newRow[i];
   }
 
   return respond('ok', 'League settings saved.', {
@@ -4426,9 +4606,9 @@ function applyFieldsByName(target, headers, fields) {
 }
 
 /**
- * Builds a full new weekly row (singles 48-column or doubles 54-column) with
- * the same fixed defaults the singles committer uses. `pairFields` is applied
- * last so doubles-only columns ride the same write.
+ * Builds a full new weekly row using the league's capability-derived weekly
+ * record schema with the same fixed defaults the singles committer uses.
+ * `pairFields` is applied last so doubles-only columns ride the same write.
  */
 function buildNewWeeklyRecord(headers, identity, importFields, pairFields, now) {
   var record = new Array(headers.length).fill('');
@@ -4538,7 +4718,7 @@ function normalizeDoublesOverrides(overrides, rowIndex) {
 }
 
 /** Builds the doubles-only columns written onto one partner's weekly row. */
-function buildDoublesPairFields(headers, udiscRow, memberNumber, pairKey, isSolo) {
+function buildDoublesPairFields(headers, udiscRow, memberNumber, pairKey, isSolo, rules) {
   var row = udiscRow || {};
   var fields = {};
   if (headers.indexOf('pair_key') !== -1) {
@@ -4556,10 +4736,11 @@ function buildDoublesPairFields(headers, udiscRow, memberNumber, pairKey, isSolo
     fields.team_position_raw = row.position_raw !== undefined ? row.position_raw : '';
   }
   if (headers.indexOf('weekly_points') !== -1) {
-    // Points are computed here, at import commit, from the committed placement.
-    // Because it is a pure function of the placement, a re-import recomputes
-    // and overwrites the same value instead of accumulating.
-    fields.weekly_points = doublesPointsForPosition(row.position_raw);
+    // Points are computed here, at import commit, from the committed placement
+    // and the league's own points table. Because it is a pure function of the
+    // placement, a re-import recomputes and overwrites the same value instead
+    // of accumulating.
+    fields.weekly_points = doublesPointsForPosition(row.position_raw, rules);
   }
   if (headers.indexOf('weekly_points_status') !== -1) {
     // The status column is retired: a committed row is identified by its
@@ -4791,7 +4972,7 @@ function commitDoublesPairUnderLock(context) {
       var item = plan[w];
       var memberNumber = item.member_number;
       var importFields = buildDoublesImportFields(udiscRow, item.partner, rules);
-      var pairFields = buildDoublesPairFields(freshHeaders, udiscRow, memberNumber, pairKey, isSolo);
+      var pairFields = buildDoublesPairFields(freshHeaders, udiscRow, memberNumber, pairKey, isSolo, rules);
       var fields = {};
       var key;
       for (key in importFields) fields[key] = importFields[key];
@@ -4884,6 +5065,11 @@ function handleCommitUdiscImportDoubles(data) {
   if (!clubSheet) {
     return respond('error', 'ClubMembers tab not found.');
   }
+
+  // Merge the League sheet's own points table into the rules so the commit
+  // writes this league's matrix, not the deploy-time default. The isPairs gate
+  // above ran against the pure registry rules before any sheet was opened.
+  rules = getLeagueRulesForSpreadsheet(leagueSelectorFrom(data), spreadsheet);
 
   // Re-read and revalidate all data server-side. The raw rows are the only
   // authority; any client-supplied verdict or match is deliberately ignored.
@@ -5741,13 +5927,22 @@ function handleFinalizeRound(data) {
 // functions reads or writes in_tag / out_tag / current_tag, so a tag event can
 // never enter points math and points math can never mutate tag state.
 
-/** Pure scoring rule: placement 1/2/3 -> 2/1.5/1, anything else -> 0.5. */
-function doublesPointsForPosition(positionRaw) {
+/**
+ * Pure scoring rule for a points league: a placement found in the league's
+ * points table earns its value, anything else earns the participation credit.
+ * `rules` is the getLeagueRules() object (its `.points` table is per-league);
+ * an absent table falls back to the day-one defaults.
+ */
+function doublesPointsForPosition(positionRaw, rules) {
+  var points = (rules && rules.points) ? rules.points : {
+    byPlace: DEFAULT_POINTS_BY_PLACE,
+    participation: DEFAULT_POINTS_PARTICIPATION
+  };
   var place = parseInt(positionRaw, 10);
-  if (!isNaN(place) && DOUBLES_POINTS_BY_PLACE[place] !== undefined) {
-    return DOUBLES_POINTS_BY_PLACE[place];
+  if (!isNaN(place) && points.byPlace[place] !== undefined) {
+    return points.byPlace[place];
   }
-  return DOUBLES_POINTS_PARTICIPATION;
+  return points.participation;
 }
 
 /**
@@ -5755,9 +5950,10 @@ function doublesPointsForPosition(positionRaw) {
  * reads the already-fetched values only and performs no writes. Points are
  * derived from the committed placement with the same rule the import commit
  * applies, so the results view is always reproducible from the sheet. A blank
- * or non-numeric placement earns 0.5 showing-up credit and emits a warning.
+ * or non-numeric placement earns the league's participation credit and emits a
+ * warning.
  */
-function buildDoublesPointsPlan(weeklyData, headers) {
+function buildDoublesPointsPlan(weeklyData, headers, rules) {
   var hMember = headers.indexOf('member_number');
   var hName = headers.indexOf('player_name_snapshot');
   var hPair = headers.indexOf('pair_key');
@@ -5800,7 +5996,7 @@ function buildDoublesPointsPlan(weeklyData, headers) {
       team_position: hTeamPosition !== -1 ? (row[hTeamPosition] || '') : '',
       team_position_raw: rawPosition === undefined ? '' : rawPosition,
       has_position: hasPosition,
-      points: doublesPointsForPosition(rawPosition),
+      points: doublesPointsForPosition(rawPosition, rules),
       stored_points: hPoints !== -1 ? row[hPoints] : '',
       warning: warning
     });
@@ -5813,7 +6009,7 @@ function buildDoublesPointsPlan(weeklyData, headers) {
  * Opens and validates the doubles weekly results tab for a league date.
  * Returns { error } instead of a tab when the request cannot be served.
  */
-function readDoublesPointsTab(spreadsheet, leagueDate) {
+function readDoublesPointsTab(spreadsheet, leagueDate, rules) {
   var tabName = 'Week ' + leagueDate;
   var weeklySheet = spreadsheet.getSheetByName(tabName);
   if (!weeklySheet) {
@@ -5827,7 +6023,7 @@ function readDoublesPointsTab(spreadsheet, leagueDate) {
     return { error: 'Weekly tab is not a doubles points tab: ' + tabName + '.' };
   }
 
-  var plan = buildDoublesPointsPlan(weeklyData, headers);
+  var plan = buildDoublesPointsPlan(weeklyData, headers, rules);
   return {
     tab_name: tabName,
     sheet: weeklySheet,
@@ -5939,8 +6135,12 @@ function handleCalculatePoints(data) {
   var gate = validateDoublesPointsRequest(data);
   if (gate.error) return respond('error', gate.error);
 
-  var spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
-  var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate);
+  var selector = leagueSelectorFrom(data);
+  var spreadsheet = resolveSpreadsheet(selector);
+  // Merge the League sheet's own points table so the read-only view shows the
+  // same values the import commit wrote for this league.
+  var rules = getLeagueRulesForSpreadsheet(selector, spreadsheet);
+  var tab = readDoublesPointsTab(spreadsheet, gate.leagueDate, rules);
   if (tab.error) return respond('error', tab.error);
 
   return respond('ok', 'Points results loaded. No writes were made.', {

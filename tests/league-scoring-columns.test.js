@@ -60,7 +60,7 @@ test('handleCreateLeagueSheet records both metadata enums for singles', () => {
   }));
 
   assert.equal(result.status, 'ok');
-  assert.equal(result.columns, 17);
+  assert.equal(result.columns, h.bound.LEAGUE_SHEET_HEADERS_DOUBLES.length);
   const league = singles.getSheetByName('League');
   assert.deepEqual(h.fn('getSheetHeaders')(league), h.bound.LEAGUE_SHEET_HEADERS_DOUBLES);
   assert.equal(leagueValue(league, 'league_format'), h.bound.LEAGUE_FORMAT_SINGLES);
@@ -243,9 +243,11 @@ test('the League header builder carries both metadata columns for any pair', () 
     [h.bound.LEAGUE_FORMAT_SINGLES, h.bound.SCORING_POINTS]
   ]) {
     const headers = leagueHeaders(pair[0], pair[1]);
-    assert.equal(headers.length, 17);
+    assert.equal(headers.length, 19);
     assert.ok(headers.includes('league_format'));
     assert.ok(headers.includes('scoring'));
+    assert.ok(headers.includes('points_by_place'));
+    assert.ok(headers.includes('points_participation'));
   }
 });
 

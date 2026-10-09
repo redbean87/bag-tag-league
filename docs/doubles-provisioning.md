@@ -15,7 +15,7 @@ topology. It is deterministic and safe to run repeatedly:
 
 | Tab | Headers | Notes |
 |-----|---------|-------|
-| `League` | 15 base columns + `league_format` + `scoring` | Settings row records `league_format=doubles` and `scoring=points` |
+| `League` | 15 base columns + `league_format` + `scoring` + `points_by_place` + `points_participation` | Settings row records `league_format=doubles` and `scoring=points`; the points columns carry the per-league matrix |
 | `ClubMembers` | The 8 tag-free roster columns | One row per member, `member_number` preserved; `season_points` caches the live season total |
 | `Week template` | The 51 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
 | `Week YYYY-MM-DD` | The 51 human-first weekly columns | Created on demand for a league date |
@@ -40,10 +40,14 @@ where they apply, then the remaining columns in their historical relative
 order. The singles header names and counts are unchanged; the doubles schema
 drops the singles tag columns entirely. Every reader resolves a column by name,
 so only the physical layout changed. The 15 base `LEAGUE_SHEET_HEADERS`
-columns are unchanged; both leagues append the same two metadata columns
-(`league_format` and `scoring`), so a League sheet is 17 columns. The registry
-is authoritative for routing and the sheet records the same values as
-per-spreadsheet confirmation; a mismatch is reported, never auto-corrected.
+columns are unchanged; both leagues append the same metadata columns
+(`league_format` and `scoring`) plus the per-league points settings
+(`points_by_place` and `points_participation`), so a League sheet is 19 columns.
+`points_by_place` is a compact `place:value,...` list and
+`points_participation` is the showing-up credit; a blank values falls back to
+the day-one `1:2,2:1.5,3:1` and `0.5`. The registry is authoritative for
+routing and the sheet records the same values as per-spreadsheet confirmation;
+a mismatch is reported, never auto-corrected.
 
 ## Roster seeding
 
@@ -106,8 +110,12 @@ registry (`src/shared/league-format.js`). Each league carries its own format as
 data, and the selected league id is persisted in `localStorage`
 (`bagTagLeague.leagueId`); the first league (Singles) remains the default. Every
 action request carries the derived `spreadsheetId`. When a league whose format
-is `doubles` is selected, the **Doubles Provisioning** card calls the
-`provisionDoubles` web-app action, and the singles-only tag tooling is hidden.
+is `doubles` is selected, the **<League name> Provisioning** card (the title,
+help, button, and status strings are rendered from the selected league's
+registry record) calls the format-neutral `provisionLeague` web-app action, and
+the singles-only tag tooling is hidden. The server keeps `provisionDoubles` and
+`getDoublesProvisioningState` wired as deprecated aliases of
+`provisionLeague`/`getProvisioningState`.
 
 ## Detag column-drop migration
 
@@ -159,7 +167,8 @@ Two scopes are available:
 | `full` | Weekly data rows **and** the `ClubMembers` roster, returning the test spreadsheet to empty |
 
 The header row and the `League` settings (including the `league_format` and
-`scoring` metadata) are never removed, so routing and topology stay intact.
+`scoring` metadata and the per-league points table) are never removed, so
+routing and topology stay intact.
 The web-app action `resetTestData` accepts `league`/`spreadsheetId`, `apply`,
 and `scope`; the dev-only panel's `previewTestDataReset` and
 `applyTestDataReset` entry points run the selected scope (`weekly` by default)
@@ -178,8 +187,8 @@ following are true, as reported by the single backend helper
 - the `League` sheet records `scoring=points`;
 - the `Week template` sheet is present.
 
-When provisioned, the admin card disables the button and shows **"Doubles
-provisioned."**. The `provisionDoubles` action runs the same check before any
+When provisioned, the admin card disables the button and shows **"<League name>
+provisioned."**. The `provisionLeague` action runs the same check before any
 write: if it reports provisioned, the request returns the `already_provisioned`
 status and creates no tabs, rows, or templates. This closes the race where a
 second admin clicks provision after another admin has already provisioned the
@@ -264,7 +273,8 @@ The response reports `inserted`, `updated`, `unchanged`, `total_members`,
 `npm test` runs the unit suite with Node's built-in test runner. The suite uses
 an in-memory SpreadsheetApp fake, so it needs no Google credentials and performs
 no live sheet writes. It covers spreadsheet routing/defaults, `league_format`
-and `scoring` gating, header constants, doubles provisioning, roster-seed
+and `scoring` gating, header constants, the per-league points settings,
+doubles provisioning, roster-seed
 `member_number` preservation, the doubles provisioning-state guard, the
 disabled re-provisioning UI, the guarded test-data reset, and the seed-only
 roster reload (`member_number` exactness after a full reset, upsert

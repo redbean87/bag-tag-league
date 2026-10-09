@@ -20,7 +20,9 @@ function functionBody(name) {
 }
 
 test('the provision card loads authoritative state from the backend', () => {
-  assert.match(html, /action: 'getDoublesProvisioningState'/);
+  // The client uses the format-neutral action name; the server keeps the
+  // doubles name as a deprecated alias.
+  assert.match(html, /action: 'getProvisioningState'/);
   assert.match(html, /spreadsheetId: getSpreadsheetId\(\)/);
   assert.match(html, /function loadDoublesProvisioningState\(\)/);
 
@@ -32,15 +34,16 @@ test('a provisioned state disables the action and states it explicitly', () => {
   const apply = functionBody('applyDoublesProvisioningState');
   assert.match(apply, /state\.provisioned/);
   assert.match(apply, /btn\.disabled = provisioned/);
-  assert.match(apply, /btn\.textContent = 'Doubles Provisioned'/);
-  assert.match(apply, /Doubles provisioned\./);
+  // The button and status wording come from the league record's copy.
+  assert.match(apply, /copy\.provisionedButton/);
+  assert.match(apply, /copy\.provisionedStatus/);
 });
 
 test('the already_provisioned response is handled without a false success or retry', () => {
   const provision = functionBody('provisionDoublesSpreadsheet');
   assert.match(provision, /data\.status === 'already_provisioned'/);
   assert.match(provision, /applyDoublesProvisioningState\(data\.state/);
-  assert.match(provision, /no action taken/);
+  assert.match(provision, /copy\.logAlready/);
 
   // Only an explicit ok may present the seed success message.
   const okIndex = provision.indexOf("data.status === 'ok'");
@@ -49,9 +52,9 @@ test('the already_provisioned response is handled without a false success or ret
   assert.notEqual(alreadyIndex, -1, 'expected an already_provisioned branch');
   assert.ok(okIndex < alreadyIndex, 'the ok branch owns the success message');
   const okBranch = provision.slice(okIndex, alreadyIndex);
-  assert.match(okBranch, /Roster seeded/);
+  assert.match(okBranch, /copy\.successStatus/);
   const alreadyBranch = provision.slice(alreadyIndex);
-  assert.doesNotMatch(alreadyBranch, /Roster seeded/);
+  assert.doesNotMatch(alreadyBranch, /copy\.successStatus/);
 });
 
 test('the club-members setup card and its wiring are removed', () => {
@@ -95,8 +98,8 @@ test('the provisioning card is the only setup card and sits above the log', () =
   // The provisioning card keeps its single-panel structure: one heading, one
   // help paragraph, one action button, one status line.
   const provisionCard = html.slice(provisionIndex, activityIndex);
-  assert.match(provisionCard, /<h2>Doubles Provisioning<\/h2>/);
-  assert.match(provisionCard, /class="help-text"/);
+  assert.match(provisionCard, /<h2 id="provisionCardTitle">League Provisioning<\/h2>/);
+  assert.match(provisionCard, /id="doublesProvisionInfo" role="note" hidden/);
   assert.match(provisionCard, /id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet\(\)"/);
   assert.match(provisionCard, /id="doublesProvisionResult" class="status hidden"/);
 });
