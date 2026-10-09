@@ -27,6 +27,14 @@
       margin-bottom: 1rem;
     }
     .league-indicator.warn { background: #fff3cd; border-color: #ffc107; color: #856404; }
+    .league-image {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      max-height: 96px;
+      margin: 0 auto 0.5rem;
+    }
+    .league-image.hidden { display: none; }
     .card {
       background: white;
       border-radius: 8px;
@@ -139,6 +147,7 @@
 <body>
   <h1>Bag Tag League</h1>
   <p class="subtitle">Player Check-In</p>
+  <img id="leagueImage" class="league-image hidden" alt="">
   <p id="leagueIndicator" class="league-indicator"></p>
 
   <!-- SEARCH VIEW -->
@@ -272,6 +281,7 @@
   </div>
 
   <script src="../../shared/league-format.js"></script>
+  <script src="league-image.js"></script>
   <script>
     var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
     var searchTimeout = null;
@@ -448,6 +458,19 @@
       }
       moneyOptions = checkInOptionsFrom(null);
       applyMoneyOptionsToDom(moneyOptions);
+    }
+
+    // Shows the resolved league's checked-in image when one exists. The
+    // league-name text is rendered independently by renderLeagueIndicator and
+    // stays the fallback and the accessible label, so a league with no image
+    // file keeps today's text-only header.
+    function renderLeagueImage() {
+      var img = document.getElementById('leagueImage');
+      if (!img || !window.LeagueImage) return;
+      window.LeagueImage.mountLeagueImage({
+        img: img,
+        league: { id: resolvedLeague.id, name: resolvedLeague.name }
+      });
     }
 
     function renderLeagueIndicator() {
@@ -704,6 +727,7 @@
     // --- Init ---
 
     renderLeagueIndicator();
+    renderLeagueImage();
     applyTagVisibility();
     applyMoneyOptionsToDom(moneyOptions);
     loadCheckInOptions();
