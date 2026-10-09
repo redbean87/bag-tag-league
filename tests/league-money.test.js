@@ -2,8 +2,9 @@
 
 // Weekly money: the per-league payout table on the League settings and the
 // ace-pot count. Payouts are derived from the committed team placements at
-// read time; the ace pot counts only check-ins whose Ace Pot box was ticked.
-// Runs in a Node VM with in-memory Sheets fakes; no live sheet is touched.
+// read time; the ace pot is included in the entry fee, so every checked-in
+// player contributes when the league configures a pot. Runs in a Node VM with
+// in-memory Sheets fakes; no live sheet is touched.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -273,9 +274,9 @@ test('handleSaveLeagueSettings appends the payout column to a pre-payout sheet',
   );
 });
 
-// ─── Ace pot counting from a check-in ────────────────────────────────────────
+// ─── Ace pot included in the entry fee ───────────────────────────────────────
 
-test('a check-in with Ace Pot ticked increments the pot count and total', () => {
+test('every checked-in player contributes to the pot', () => {
   const h = loadCode();
   buildDoubles(h, {
     leagueSettings: { ace_pot_contribution: 1, ace_pot_current_total: 0 }
@@ -285,8 +286,7 @@ test('a check-in with Ace Pot ticked increments the pot count and total', () => 
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
     member_number: 1,
     name: 'Damon Forsythe',
-    paid: true,
-    ace_pot: true
+    paid: true
   }));
   assert.equal(checkIn.status, 'ok');
 
@@ -295,76 +295,105 @@ test('a check-in with Ace Pot ticked increments the pot count and total', () => 
   assert.equal(review.participating_count, 1);
   assert.equal(review.ace_pot_participant_count, 1);
   assert.equal(review.ace_pot_contribution, 1);
-  assert.equal(review.ace_pot_calculated_total, 1, 'contribution times ace participants');
+  assert.equal(review.ace_pot_calculated_total, 1, 'contribution times participants');
 });
 
-test('a check-in with Ace Pot unticked leaves the pot unchanged', () => {
+test('a legacy unticked row still counts toward the pot', () => {
   const h = loadCode();
   buildDoubles(h, {
-    leagueSettings: { ace_pot_contribution: 1, ace_pot_current_total: 0 }
+    leagueSettings: { ace_pot_contribution: 1, ace_pot_current_total: 5 },
+    weekRows: [
+      makeWeekRow(h, {
+        member_number: 1,
+        player_name_snapshot: 'Damon Forsythe',
+        checked_in: true,
+        paid: true,
+        ace_pot: false
+      })
+    ]
+  });
+
+  const review = call(h, 'handleGetPreRoundReview');
+  assert.equal(review.participating_count, 1);
+  assert.equal(review.ace_pot_participant_count, 1);
+  // Carry-in 5 plus the one included participant at 1 each.
+  assert.equal(review.ace_pot_calculated_total, 6);
+});
+
+test('a league with no ace pot counts no pot participants', () => {
+  const h = loadCode();
+  buildDoubles(h, {
+    leagueSettings: { ace_pot_contribution: 0, ace_pot_current_total: 0 }
   });
 
   const checkIn = h.parse(h.fn('handleSubmitCheckIn')({
     spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
     member_number: 1,
     name: 'Damon Forsythe',
-    paid: true,
-    ace_pot: false
+    paid: true
   }));
   assert.equal(checkIn.status, 'ok');
 
   const review = call(h, 'handleGetPreRoundReview');
-  assert.equal(review.participating_count, 1, 'the player still counts as checked in');
-  assert.equal(review.ace_pot_participant_count, 0, 'but not as an ace-pot participant');
-  assert.equal(review.ace_pot_calculated_total, 0);
-});
-
-test('a missing Ace Pot flag is treated as unticked, never silently ticked', () => {
-  const h = loadCode();
-  buildDoubles(h, {
-    leagueSettings: { ace_pot_contribution: 1, ace_pot_current_total: 0 }
-  });
-
-  h.fn('handleSubmitCheckIn')({
-    spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
-    member_number: 1,
-    name: 'Damon Forsythe',
-    paid: true
-  });
-
-  const review = call(h, 'handleGetPreRoundReview');
+  assert.equal(review.participating_count, 1);
   assert.equal(review.ace_pot_participant_count, 0);
   assert.equal(review.ace_pot_calculated_total, 0);
 });
 
-test('the sign-in page ships the Ace Pot checkbox through to the check-in payload', () => {
+test('the sign-in page hides the Ace Pot checkbox and never submits one', () => {
   const html = fs.readFileSync(
     path.join(REPO_ROOT, 'src', 'player', 'sign-in', 'index.html'),
     'utf8'
   );
 
-  // The box exists in both the returning-member and registration forms and is
-  // read into the payload the server counts, but only when the league actually
-  // offers the ace pot. This is the UI half of the ticked-vs-unticked contract
-  // the server tests above prove.
-  assert.match(html, /id="checkInAcePot"/);
-  assert.match(html, /id="registerAcePot"/);
-  assert.match(html, /var acePot = document\.getElementById\(prefix \+ 'AcePot'\)\.checked;/);
-  assert.match(html, /if \(moneyOptions\.ace_pot\) payload\.ace_pot = acePot;/);
+  // The ace pot is part of the entry fee, so the box ships hidden and no
+  // ace_pot field is added to the check-in payload.
+  assert.match(html, /id="checkInAcePotLabel" style="display:none;"/);
+  assert.match(html, /id="registerAcePotLabel" style="display:none;"/);
+  assert.doesNotMatch(html, /payload\.ace_pot/);
+  assert.doesNotMatch(html, /moneyOptions\.ace_pot/);
 });
 
-test('only ticked check-ins count toward the pot across a full field', () => {
+test('every checked-in player counts toward the pot across a full field', () => {
   const h = loadCode();
   buildDoubles(h, {
     leagueSettings: { ace_pot_contribution: 1, ace_pot_current_total: 5 }
   });
 
   const members = [
+    [1, 'Damon Forsythe'],
+    [2, 'Brad Stevenson'],
+    [3, 'Brian Corlew'],
+    [4, 'Cortez Ashley'],
+    [5, 'Josh Moen']
+  ];
+  members.forEach((entry) => {
+    const result = h.parse(h.fn('handleSubmitCheckIn')({
+      spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+      member_number: entry[0],
+      name: entry[1],
+      paid: true
+    }));
+    assert.equal(result.status, 'ok');
+  });
+
+  const review = call(h, 'handleGetPreRoundReview');
+  assert.equal(review.participating_count, 5);
+  assert.equal(review.ace_pot_participant_count, 5);
+  // Carry-in 5 plus 5 participants at 1 each.
+  assert.equal(review.ace_pot_calculated_total, 10);
+});
+
+test('CTP stays an explicit choice and only ticked rows count', () => {
+  const h = loadCode();
+  buildDoubles(h, {
+    leagueSettings: { ace_pot_contribution: 1, ctp_contribution: 2, ace_pot_current_total: 0 }
+  });
+
+  const members = [
     [1, 'Damon Forsythe', true],
     [2, 'Brad Stevenson', false],
-    [3, 'Brian Corlew', true],
-    [4, 'Cortez Ashley', true],
-    [5, 'Josh Moen', false]
+    [3, 'Brian Corlew', true]
   ];
   members.forEach((entry) => {
     const result = h.parse(h.fn('handleSubmitCheckIn')({
@@ -372,14 +401,45 @@ test('only ticked check-ins count toward the pot across a full field', () => {
       member_number: entry[0],
       name: entry[1],
       paid: true,
-      ace_pot: entry[2]
+      ctp: entry[2]
     }));
     assert.equal(result.status, 'ok');
   });
 
   const review = call(h, 'handleGetPreRoundReview');
-  assert.equal(review.participating_count, 5);
+  assert.equal(review.ctp_participant_count, 2);
+  assert.equal(review.ctp_calculated_total, 4);
+  // The ace pot counts all three checked-in players.
   assert.equal(review.ace_pot_participant_count, 3);
-  // Carry-in 5 plus 3 participants at 1 each.
-  assert.equal(review.ace_pot_calculated_total, 8);
+  assert.equal(review.ace_pot_calculated_total, 3);
+});
+
+test('saving the pre-round review recalculates the pot from all participants', () => {
+  const h = loadCode();
+  buildDoubles(h, {
+    leagueSettings: { ace_pot_contribution: 1, ctp_contribution: 2, ace_pot_current_total: 0 }
+  });
+
+  const members = [
+    [1, 'Damon Forsythe', true],
+    [2, 'Brad Stevenson', false]
+  ];
+  members.forEach((entry) => {
+    const result = h.parse(h.fn('handleSubmitCheckIn')({
+      spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES,
+      member_number: entry[0],
+      name: entry[1],
+      paid: true,
+      ctp: entry[2]
+    }));
+    assert.equal(result.status, 'ok');
+  });
+
+  const saved = call(h, 'handleSavePreRoundReview', {
+    ace_pot_total: 2,
+    ctp_total: 2
+  });
+  assert.equal(saved.status, 'ok');
+  assert.equal(saved.ace_pot_calculated_total, 2, 'two participants at 1 each');
+  assert.equal(saved.ctp_calculated_total, 2, 'one CTP and one non-CTP');
 });

@@ -1,11 +1,13 @@
 'use strict';
 
 // Data-driven check-in money options. The options a league offers come from its
-// own settings: Paid is always offered, Ace Pot only when the league sets an
-// ace pot contribution above zero, and CTP only when it sets a CTP contribution
-// above zero. The explanation beside the options is the league's own text with
-// a sensible default. The server refuses an option the league does not offer.
-// Runs in a Node VM with in-memory Sheets fakes; no live sheet is touched.
+// own settings: Paid is always offered and CTP only when the league sets a CTP
+// contribution above zero. An ace pot is not a choice - when a league configures
+// one it is part of the entry fee - so the sign-in page renders no ace pot
+// checkbox and the pre-round review counts every checked-in player toward the
+// pot. The explanation beside the options is the league's own text with a
+// sensible default. The server refuses a CTP the league does not offer. Runs in
+// a Node VM with in-memory Sheets fakes; no live sheet is touched.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -79,7 +81,7 @@ test('Paid is always offered and an unset pot is never offered', () => {
   });
 });
 
-test('a points league with an ace pot offers Paid and Ace Pot but no CTP', () => {
+test('a points league with an ace pot includes the pot and offers no CTP', () => {
   const h = loadCode();
   const resolve = h.fn('resolveCheckInOptions');
 
@@ -103,7 +105,7 @@ test('a league that configures CTP offers it, and zero or malformed stays off', 
 
 // ─── The server's public view of the options ─────────────────────────────────
 
-test('getCheckInOptions reports a points league as Paid and Ace Pot only', () => {
+test('getCheckInOptions reports a points league as Paid and an included ace pot', () => {
   const h = loadCode();
   const result = getOptions(h, { ace_pot_contribution: 1, ctp_contribution: 0 });
 
@@ -207,7 +209,7 @@ function fakeDocument() {
   };
 }
 
-test('the form shows Paid and Ace Pot but hides CTP for a points league', () => {
+test('the form shows Paid only and hides CTP for a league with an ace pot', () => {
   const document = fakeDocument();
   const helpers = loadMoneyHelpers()(document);
 
@@ -218,8 +220,24 @@ test('the form shows Paid and Ace Pot but hides CTP for a points league', () => 
 
   assert.equal(document.elements.checkInCtpLabel.style.display, 'none');
   assert.equal(document.elements.registerCtpLabel.style.display, 'none');
-  assert.equal(document.elements.checkInAcePotLabel.style.display, '');
-  assert.equal(document.elements.registerAcePotLabel.style.display, '');
+  // The ace pot is part of the entry fee, so its box is never rendered.
+  assert.equal(document.elements.checkInAcePotLabel.style.display, 'none');
+  assert.equal(document.elements.registerAcePotLabel.style.display, 'none');
+});
+
+test('the form shows Paid only for a league with neither an ace pot nor CTP', () => {
+  const document = fakeDocument();
+  const helpers = loadMoneyHelpers()(document);
+
+  helpers.applyMoneyOptionsToDom(helpers.checkInOptionsFrom({
+    options: { paid: true, ctp: false, ace_pot: false },
+    money_explanation: ''
+  }));
+
+  assert.equal(document.elements.checkInCtpLabel.style.display, 'none');
+  assert.equal(document.elements.registerCtpLabel.style.display, 'none');
+  assert.equal(document.elements.checkInAcePotLabel.style.display, 'none');
+  assert.equal(document.elements.registerAcePotLabel.style.display, 'none');
 });
 
 test('the form shows CTP when the league configures it', () => {
@@ -258,6 +276,7 @@ test('a hidden option is cleared and never sent from the sign-in page', () => {
   const document = fakeDocument();
   const helpers = loadMoneyHelpers()(document);
   document.getElementById('checkInCtp').checked = true;
+  document.getElementById('checkInAcePot').checked = true;
 
   helpers.applyMoneyOptionsToDom(helpers.checkInOptionsFrom({
     options: { paid: true, ctp: false, ace_pot: false },
@@ -265,7 +284,11 @@ test('a hidden option is cleared and never sent from the sign-in page', () => {
   }));
 
   assert.equal(document.getElementById('checkInCtp').checked, false);
+  // The ace pot is included in the entry fee, so its hidden box is cleared and
+  // never sent even when a stale tick was left behind.
+  assert.equal(document.getElementById('checkInAcePot').checked, false);
   assert.match(SIGN_IN_HTML, /if \(moneyOptions\.ctp\) payload\.ctp = ctp;/);
-  assert.match(SIGN_IN_HTML, /if \(moneyOptions\.ace_pot\) payload\.ace_pot = acePot;/);
+  assert.doesNotMatch(SIGN_IN_HTML, /payload\.ace_pot/);
+  assert.doesNotMatch(SIGN_IN_HTML, /moneyOptions\.ace_pot/);
   assert.match(SIGN_IN_HTML, /action: 'getCheckInOptions', league: resolvedLeague\.id/);
 });

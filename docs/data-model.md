@@ -89,7 +89,7 @@ One row per player per weekly league. Created during sign-in only.
 | signed_in_at | string (ISO 8601) | Timestamp when the player signed in through the app |
 | paid | boolean | Payment status (confirmed during check-in) |
 | ctp | boolean | Closest-to-pin status |
-| ace_pot | boolean | Ace pot status |
+| ace_pot | boolean | Ace pot inclusion. Set TRUE when the league configures an ace pot; the pot counts every checked-in player, not a per-player choice. |
 | udisc_name_import | string | Player name as imported from UDisc (nullable) |
 | udisc_username_import | string | UDisc username as imported from UDisc (nullable) |
 | udisc_pdga_number_import | string | PDGA number as imported from UDisc (nullable) |
@@ -203,7 +203,7 @@ Potential settings:
 
 ### Admin sees on the weekly sheet:
 - All fields listed above
-- Paid, CTP, Ace pot toggles
+- Paid and CTP toggles, and the ace pot inclusion
 - Score and UDisc data after import
 - Calculated out_tag
 - Notes
