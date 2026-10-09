@@ -153,9 +153,13 @@ bag-tag-league/
 
 ### Production
 
-- Static files hosted on Cloudflare Pages (current preference)
+- Static files hosted on Cloudflare Workers (static assets), deployed with Wrangler
 - Google Apps Script web app serves as the API layer
 - Single Google Spreadsheet serves as the database
+
+Merging to `main` deploys all of the above automatically; see
+[Deployment](deployment.md) for the workflows and the required repository
+secrets.
 
 ### Scaling
 

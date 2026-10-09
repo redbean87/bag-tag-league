@@ -1,0 +1,34 @@
+name: CI
+
+# One lightweight test job per pull request. Actions minutes are precious on
+# this account, so there is no matrix and superseded runs on the same branch
+# are cancelled instead of queued.
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: the test job only needs to read the checkout.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # The suite has no runtime dependencies, so it runs straight from the
+      # checkout with no install step.
+      - name: Run test suite
+        run: npm test
