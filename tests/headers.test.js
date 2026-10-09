@@ -135,16 +135,18 @@ test('both League schemas extend the base with metadata, points, payout, explana
 
   // Base settings plus the format/scoring metadata, the per-league points
   // table (points_by_place + points_participation), the per-league weekly
-  // payout table (payout_by_place), the league money explanation
+  // payout pool (payout_contribution, payout_second_amount,
+  // payout_second_min_players), the league money explanation
   // (entry_fee_explanation), and the itemised entry-fee breakdown
   // (entry_fee_breakdown).
-  assert.equal(extended.length, base.length + 2 + 2 + 1 + 1 + 1);
+  assert.equal(extended.length, base.length + 2 + 2 + 3 + 1 + 1);
   assert.deepEqual(extended.slice(0, base.length), base);
   assert.deepEqual(extended.slice(base.length), [
-    'league_format', 'scoring', 'points_by_place', 'points_participation', 'payout_by_place',
+    'league_format', 'scoring', 'points_by_place', 'points_participation',
+    'payout_contribution', 'payout_second_amount', 'payout_second_min_players',
     'entry_fee_explanation', 'entry_fee_breakdown'
   ]);
-  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 22);
+  assert.equal(h.bound.LEAGUE_SHEET_HEADERS_EXTENDED.length, 24);
 });
 
 test('format-specific header accessors gate singles versus doubles', () => {

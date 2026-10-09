@@ -394,21 +394,22 @@
           </div>
           <div class="field-group">
             <label for="entry_fee_breakdown">Entry Fee Breakdown ($ per player)</label>
-            <input type="text" id="entry_fee_breakdown" placeholder="Weekly payouts:2,Season payout:1,Ace pot:1,Club fees:1">
+            <input type="text" id="entry_fee_breakdown" placeholder="Weekly payouts:3,Season payout:1,Ace pot:1">
           </div>
           <div id="entryFeeBreakdownWarning" class="status warning hidden"></div>
           <p class="help-text">
             The itemised parts of the entry fee as ordered
             <code>label:amount</code> pairs (for example
-            <code>Weekly payouts:2,Season payout:1,Ace pot:1,Club fees:1</code>).
+            <code>Weekly payouts:3,Season payout:1,Ace pot:1</code>).
             Shown beside the check-in payment options. A total that does not
             match the entry fee is flagged here, but never blocks the save.
           </p>
           <p class="help-text">
             Shown beside the player check-in payment options, so players can see
             plainly what the entry fee pays for. Leave blank to use the default:
-            <em>Your entry fee pays the weekly winning team, the second-place
-            team their money back, and the season payout from points.</em>
+            <em>Your entry fee builds the weekly payout pool and pays the season
+            payout. Second place takes its share back when enough players show;
+            otherwise the winning team takes the whole pool.</em>
           </p>
           <div class="field-group">
             <label for="entry_fee_explanation">Entry Fee Explanation</label>
@@ -431,14 +432,24 @@
               <input type="number" id="points_participation" step="0.01" min="0" placeholder="0.5">
             </div>
             <p class="help-text">
-              Optional per-player weekly payouts, keyed by team placement as
-              <code>place:amount</code> (for example <code>1:2,2:5</code>). The
-              amount is paid to each member of that team; a second-place amount
-              can carry the entry-fee refund. Blank pays no weekly money.
+              The weekly payout pool. Every player contributes the per-player
+              amount, so the pool is that amount times the number of players.
+              Second place takes the flat amount back only when at least the
+              minimum number of players show; the winning team takes the rest
+              (or the whole pool below the threshold). Leave the contribution
+              blank to pay no weekly money.
             </p>
             <div class="field-group">
-              <label for="payout_by_place">Weekly Payout by Place ($ per player)</label>
-              <input type="text" id="payout_by_place" placeholder="1:2,2:5">
+              <label for="payout_contribution">Weekly Payout Contribution ($ per player)</label>
+              <input type="number" id="payout_contribution" step="0.01" min="0" placeholder="3">
+            </div>
+            <div class="field-group">
+              <label for="payout_second_amount">Second-Place Payout ($)</label>
+              <input type="number" id="payout_second_amount" step="0.01" min="0" placeholder="10">
+            </div>
+            <div class="field-group">
+              <label for="payout_second_min_players">Second-Place Minimum Players</label>
+              <input type="number" id="payout_second_min_players" step="1" min="0" placeholder="10">
             </div>
           </div>
 
@@ -1776,7 +1787,9 @@
           document.getElementById('entry_fee_breakdown').value = s.entry_fee_breakdown !== undefined && s.entry_fee_breakdown !== '' ? s.entry_fee_breakdown : '';
           document.getElementById('points_by_place').value = s.points_by_place !== undefined && s.points_by_place !== '' ? s.points_by_place : '';
           document.getElementById('points_participation').value = s.points_participation !== undefined && s.points_participation !== '' ? s.points_participation : '';
-          document.getElementById('payout_by_place').value = s.payout_by_place !== undefined && s.payout_by_place !== '' ? s.payout_by_place : '';
+          document.getElementById('payout_contribution').value = s.payout_contribution !== undefined && s.payout_contribution !== '' ? s.payout_contribution : '';
+          document.getElementById('payout_second_amount').value = s.payout_second_amount !== undefined && s.payout_second_amount !== '' ? s.payout_second_amount : '';
+          document.getElementById('payout_second_min_players').value = s.payout_second_min_players !== undefined && s.payout_second_min_players !== '' ? s.payout_second_min_players : '';
           applyLeagueSettingsMismatch(s);
           applyEntryFeeBreakdownWarning(s);
           renderLeagueCopy(getSelectedLeague(), getLeagueRules(), s);
@@ -1854,7 +1867,9 @@
         entry_fee_breakdown: document.getElementById('entry_fee_breakdown').value.trim(),
         points_by_place: document.getElementById('points_by_place').value.trim(),
         points_participation: document.getElementById('points_participation').value,
-        payout_by_place: document.getElementById('payout_by_place').value.trim()
+        payout_contribution: document.getElementById('payout_contribution').value,
+        payout_second_amount: document.getElementById('payout_second_amount').value,
+        payout_second_min_players: document.getElementById('payout_second_min_players').value
       };
 
       log('Saving league settings');
@@ -3192,17 +3207,23 @@
       }
 
       if (showPayout) {
-        var payoutPlaces = Object.keys(data.payout.by_place).map(function(key) {
-          return parseInt(key, 10);
-        }).sort(function(a, b) { return a - b; });
-        var payoutParts = payoutPlaces.map(function(place) {
-          return ordinalLabel(place) + '=$' + Number(data.payout.by_place[place]).toFixed(2);
-        });
+        var payout = data.payout;
+        var pool = Number(payout.pool || 0);
+        var contribution = Number(payout.contribution || 0);
+        var payoutPlayers = Number(payout.players || data.summary.total_rows || 0);
+        var secondAmount = Number(payout.second_amount || 0);
+        var minPlayers = Number(payout.second_min_players || 0);
+
         html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Weekly Payouts</h3>';
         html += '<div class="field-group">';
-        html += '<p>Total for the week: <strong>$' + (data.payout.total || 0).toFixed(2) + '</strong></p>';
-        html += '<p>Per player: ' + escHtml(payoutParts.join(', ')) + '</p>';
-        html += '<p style="color:#888; font-style:italic;">Derived from each committed team placement. Every member of a placed team receives the per-player amount; a second-place amount can carry the entry-fee refund.</p>';
+        html += '<p>Pool: <strong>$' + pool.toFixed(2) + '</strong> ($' + contribution.toFixed(2) + ' per player x ' + payoutPlayers + ' players)</p>';
+        if (payout.second_paid) {
+          html += '<p>Second place: <strong>$' + Number(payout.second_total || 0).toFixed(2) + '</strong></p>';
+        } else {
+          html += '<p style="color:#b06000;"><strong>Second place is not paid:</strong> ' + escHtml(String(minPlayers)) + ' players are needed and ' + escHtml(String(payoutPlayers)) + ' showed.</p>';
+        }
+        html += '<p>Winning team: <strong>$' + Number(payout.winners_total || 0).toFixed(2) + '</strong></p>';
+        html += '<p style="color:#888; font-style:italic;">Each player adds $' + contribution.toFixed(2) + ' to the pool. Second place takes $' + secondAmount.toFixed(2) + ' back when at least ' + minPlayers + ' players show; the winning team takes the rest.</p>';
         html += '</div>';
       }
 
