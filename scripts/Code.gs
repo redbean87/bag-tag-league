@@ -2611,6 +2611,9 @@ function doPost(e) {
     if (data.action === 'getWeeklyTabs') {
       return handleGetWeeklyTabs(data);
     }
+    if (data.action === 'getWeekView') {
+      return handleGetWeekView(data);
+    }
     if (data.action === 'getPreRoundReview') {
       return handleGetPreRoundReview(data);
     }
@@ -3474,6 +3477,65 @@ function handleGetWeeklyTabs(data) {
 
   return respond('ok', 'Weekly tabs loaded.', {
     weeks: weekTabs
+  });
+}
+
+/**
+ * Admin action: read-only dump of one week tab.
+ *
+ * Returns the tab's header row and every stored row with all cells, a
+ * per-header record view of each row, and the list of import columns the tab
+ * is missing. Read-only: it never writes.
+ *
+ * Inputs: league_date (required, YYYY-MM-DD format)
+ */
+function handleGetWeekView(data) {
+  var leagueDate = data.league_date;
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return respond('error', 'Invalid or missing league_date. Expected YYYY-MM-DD format.');
+  }
+
+  var selector = leagueSelectorFrom(data);
+  var spreadsheet = resolveSpreadsheet(selector);
+  // Merge the League sheet's own settings so the expected-column check uses
+  // this league's capability rules, not only the deploy-time registry.
+  var rules = getLeagueRulesForSpreadsheet(selector, spreadsheet);
+  var tabName = 'Week ' + leagueDate;
+  var sheet = spreadsheet.getSheetByName(tabName);
+  if (!sheet) {
+    return respond('error', 'Weekly tab not found: ' + tabName + '.');
+  }
+
+  var values = sheet.getDataRange().getValues();
+  var headers = (values[0] || []).map(function(header) {
+    return header === null || header === undefined ? '' : String(header);
+  });
+
+  var rows = [];
+  var records = [];
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r].map(function(cell) {
+      return cell === null || cell === undefined ? '' : cell;
+    });
+    rows.push(row);
+    var record = {};
+    for (var c = 0; c < headers.length; c++) record[headers[c]] = row[c];
+    records.push(record);
+  }
+
+  return respond('ok', 'Week view loaded. No writes were made.', {
+    format: rules.format,
+    scoring: rules.scoring,
+    league_date: leagueDate,
+    sheet_name: tabName,
+    writes: false,
+    column_count: headers.length,
+    row_count: rows.length,
+    headers: headers,
+    rows: rows,
+    records: records,
+    missing_import_columns: missingWeeklyImportColumns(headers, rules.format, rules.scoring),
+    expected_import_columns: expectedWeeklyImportColumns(rules.format, rules.scoring)
   });
 }
 
@@ -4768,6 +4830,69 @@ function buildDoublesImportFields(udiscRow, partner, rules) {
   return fields;
 }
 
+/**
+ * Every weekly column the UDisc import mapping writes. The commit validates
+ * the target tab against this list before any write, so a tab that lacks a
+ * score or UDisc-detail column fails loudly instead of silently dropping the
+ * field. Derived from the capability rules so singles and doubles each require
+ * exactly the columns their writer emits.
+ */
+function expectedWeeklyImportColumns(format, scoring) {
+  var rules = rulesForEnums(format, scoring);
+  var columns = [
+    'udisc_name_import',
+    'udisc_username_import',
+    'udisc_pdga_number_import',
+    'score',
+    'round_relative_score',
+    'round_rating',
+    'event_relative_score',
+    'event_total_score',
+    'udisc_checked_in',
+    'udisc_paid',
+    'starting_hole',
+    'start_time',
+    'division',
+    'udisc_position',
+    'udisc_position_raw',
+    'updated_at'
+  ];
+  for (var h = 1; h <= 18; h++) columns.push('hole_' + h);
+  if (rules.usesTags) columns.push('udisc_ending_tag');
+  if (rules.hasPairs) {
+    columns.push('pair_key', 'partner_member_number', 'team_position', 'team_position_raw');
+  }
+  if (rules.usesPoints) {
+    columns.push('weekly_points', 'weekly_points_status');
+  }
+  return columns;
+}
+
+/** Returns the expected import columns missing from a weekly header row. */
+function missingWeeklyImportColumns(headers, format, scoring) {
+  var expected = expectedWeeklyImportColumns(format, scoring);
+  var missing = [];
+  for (var i = 0; i < expected.length; i++) {
+    if (!headers || headers.indexOf(expected[i]) === -1) missing.push(expected[i]);
+  }
+  return missing;
+}
+
+/**
+ * Loud commit gate: every column the import mapping writes must exist on the
+ * target week tab. Returns a response to return unchanged when a column is
+ * missing, or null when the tab is complete. Runs before any write, so a
+ * partial schema can never silently drop a score or UDisc-detail field.
+ */
+function weeklyImportColumnsGuard(headers, format, scoring) {
+  var missing = missingWeeklyImportColumns(headers, format, scoring);
+  if (missing.length === 0) return null;
+  return respond('error', 'Weekly tab is missing required import columns: ' + missing.join(', ') + '. No data was written.', {
+    missing_columns: missing,
+    writes: false
+  });
+}
+
 /** Writes a { header: value } map onto a row array by header index. */
 function applyFieldsByName(target, headers, fields) {
   for (var key in fields) {
@@ -5246,6 +5371,12 @@ function handleCommitUdiscImportDoubles(data) {
   // authority; any client-supplied verdict or match is deliberately ignored.
   var weeklyData = weeklySheet.getDataRange().getValues();
   var weeklyHeaders = weeklyData[0];
+
+  // A tab missing an import column would silently drop that field on write, so
+  // refuse before any member or weekly row is touched.
+  var columnsGuard = weeklyImportColumnsGuard(weeklyHeaders, rules.format, rules.scoring);
+  if (columnsGuard) return columnsGuard;
+
   var weeklyIndexes = buildWeeklyMatchIndexes(weeklyData, weeklyHeaders);
 
   var clubData = clubSheet.getDataRange().getValues();
@@ -5456,6 +5587,13 @@ function handleCommitUdiscImport(data) {
   // Re-read and revalidate all data server-side (do not trust preview payload)
   var weeklyData = weeklySheet.getDataRange().getValues();
   var weeklyHeaders = weeklyData[0];
+
+  // A tab missing an import column would silently drop that field on write, so
+  // refuse before any row is touched.
+  var singlesRules = getLeagueRules(leagueSelectorFrom(data));
+  var columnsGuard = weeklyImportColumnsGuard(weeklyHeaders, singlesRules.format, singlesRules.scoring);
+  if (columnsGuard) return columnsGuard;
+
   var weeklyIndexes = buildWeeklyMatchIndexes(weeklyData, weeklyHeaders);
 
   var clubData = clubSheet.getDataRange().getValues();

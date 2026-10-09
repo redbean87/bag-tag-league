@@ -649,6 +649,24 @@
       <div id="pointsResult" class="status hidden"></div>
     </div>
 
+    <!-- 9c. Week View (read-only) -->
+    <div class="card" id="weekViewCard">
+      <div class="card-header">
+        <h2>Week View</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="weekViewInfo" aria-label="About Week View" onclick="toggleCardInfo(event, 'weekViewInfo')">i</button>
+      </div>
+      <div class="card-info" id="weekViewInfo" role="note" hidden>
+        <p class="help-text">
+          Read-only dump of the selected week's tab: the header row and every
+          stored row with all cells, so you can see exactly what a week holds
+          without opening the sheet. Nothing is written.
+        </p>
+      </div>
+      <button type="button" id="btnLoadWeekView" onclick="loadWeekView()">Load Week</button>
+      <div id="weekViewPreview" style="display:none;"></div>
+      <div id="weekViewResult" class="status hidden"></div>
+    </div>
+
   </div>
 
   <!-- Setup card. One-time provisioning lives at the bottom of the page so
@@ -1562,6 +1580,13 @@
         pointsPreview.innerHTML = '';
       }
       clearPointsStatus();
+
+      var weekViewPreview = document.getElementById('weekViewPreview');
+      if (weekViewPreview) {
+        weekViewPreview.style.display = 'none';
+        weekViewPreview.innerHTML = '';
+      }
+      clearWeekViewStatus();
     }
 
     async function createWeeklyTab(e) {
@@ -3150,7 +3175,107 @@
       previewEl.style.display = '';
     }
 
-    // Init
+    // ─── Week View (read-only) ────────────────────────────────────────────
+    // A raw, read-only dump of one week's tab: the header row and every
+    // stored row with all cells, plus a loud banner when an expected import
+    // column is absent. It never writes and never interprets the values.
+
+    function setWeekViewStatus(type, html) {
+      var el = document.getElementById('weekViewResult');
+      if (!el) return;
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearWeekViewStatus() {
+      var el = document.getElementById('weekViewResult');
+      if (!el) return;
+      el.className = 'status hidden';
+      el.innerHTML = '';
+    }
+
+    async function loadWeekView() {
+      var leagueDate = getActiveLeagueDate();
+      if (!leagueDate) {
+        setWeekViewStatus('error', '<strong>Please select an Active League Date.</strong>');
+        return;
+      }
+
+      var btn = document.getElementById('btnLoadWeekView');
+      if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+      clearWeekViewStatus();
+      document.getElementById('weekViewPreview').style.display = 'none';
+      log('Loading week view for ' + leagueDate);
+
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({
+            action: 'getWeekView', spreadsheetId: getSpreadsheetId(),
+            league_date: leagueDate
+          })
+        });
+        var data = await response.json();
+
+        if (data.status !== 'ok') {
+          setWeekViewStatus('error', '<strong>Error:</strong> ' + data.message);
+          log('ERROR: ' + data.message);
+          return;
+        }
+
+        renderWeekView(data);
+        log('Week view loaded for ' + leagueDate + ': ' + data.row_count + ' row(s), ' + data.column_count + ' column(s). No writes made.');
+      } catch (err) {
+        setWeekViewStatus('error', '<strong>Load failed:</strong> ' + err.message);
+        log('FAILED to load week view: ' + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Load Week'; }
+      }
+    }
+
+    function renderWeekView(data) {
+      var previewEl = document.getElementById('weekViewPreview');
+      var headers = data.headers || [];
+      var rows = data.rows || [];
+      var missing = data.missing_import_columns || [];
+
+      var html = '';
+      html += '<h3 style="font-size:1rem; margin-bottom:0.75rem; color:#555;">Summary</h3>';
+      html += '<div class="field-group">';
+      html += '<p>Weekly tab: <strong>' + escHtml(data.sheet_name) + '</strong></p>';
+      html += '<p>Rows: <strong>' + data.row_count + '</strong> · Columns: <strong>' + data.column_count + '</strong></p>';
+      html += '<p style="color:#888; font-style:italic;">Read-only. Every stored cell is shown exactly as the sheet holds it.</p>';
+      html += '</div>';
+
+      if (missing.length > 0) {
+        html += '<div class="status error" style="margin-top:0.5rem;">Missing expected import columns: ' +
+          escHtml(missing.join(', ')) + '</div>';
+      } else {
+        html += '<div class="status ok" style="margin-top:0.5rem;">All expected import columns are present.</div>';
+      }
+
+      html += '<div style="overflow:auto; max-height:60vh; border:1px solid #ddd; margin-top:0.75rem;">';
+      html += '<table style="border-collapse:collapse; font-size:0.8rem; white-space:nowrap;">';
+      html += '<tr>';
+      for (var h = 0; h < headers.length; h++) {
+        html += '<th style="padding:0.35rem; border:1px solid #ddd; text-align:left; position:sticky; top:0; background:#f0f0f0;">' +
+          escHtml(headers[h]) + '</th>';
+      }
+      html += '</tr>';
+      for (var r = 0; r < rows.length; r++) {
+        html += '<tr>';
+        for (var c = 0; c < headers.length; c++) {
+          html += '<td style="padding:0.35rem; border:1px solid #ddd;">' +
+            escHtml(String(rows[r][c])) + '</td>';
+        }
+        html += '</tr>';
+      }
+      html += '</table></div>';
+
+      previewEl.innerHTML = html;
+      previewEl.style.display = '';
+    }
     (function init() {
       var today = new Date();
       var yyyy = today.getFullYear();
