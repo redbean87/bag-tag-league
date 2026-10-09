@@ -247,6 +247,56 @@ test('commits a new solo by creating a member and a keyless weekly row', () => {
   assert.equal(dataRows(week)[0][h_index(week, 'pair_key')], '');
 });
 
+test('doubles commit snapshots the roster PDGA for an import-only member row', () => {
+  const h = loadCode();
+  const { week } = buildDoubles(h, []);
+
+  // Damon is on the roster with PDGA 151236; the export carries a different
+  // number. The import-created row snapshots the roster, not the export.
+  const result = commit(h, [{ name: 'Damon Forsythe', username: 'damon31', pdga_number: '999999', position: 4 }]);
+
+  assert.equal(result.summary.committed, 1);
+  const row = rowByMember(week, 3);
+  assert.equal(row[h_index(week, 'pdga_number_snapshot')], '151236');
+  assert.equal(row[h_index(week, 'player_name_snapshot')], 'Damon Forsythe');
+  assert.equal(row[h_index(week, 'udisc_username_snapshot')], 'damon31');
+  // The import column still records what the export said.
+  assert.equal(row[h_index(week, 'udisc_pdga_number_import')], '999999');
+});
+
+test('doubles commit falls back to the import PDGA when the roster has none', () => {
+  const h = loadCode();
+  const { week } = buildDoubles(h, []);
+
+  // Alice (member 21) has no roster PDGA; the export's number fills the snapshot.
+  const result = commit(h, [{ name: 'Alice Smith', username: 'alice', pdga_number: '777', position: 4 }]);
+
+  assert.equal(result.summary.committed, 1);
+  const row = rowByMember(week, 21);
+  assert.equal(row[h_index(week, 'pdga_number_snapshot')], '777');
+  assert.equal(row[h_index(week, 'player_name_snapshot')], 'Alice Smith');
+});
+
+test('doubles re-import preserves an existing row snapshot', () => {
+  const h = loadCode();
+  const { week } = buildDoubles(h, [
+    makeWeeklyRow(h, {
+      member_number: 3,
+      player_name_snapshot: 'Damon Forsythe',
+      udisc_username_snapshot: 'damon31',
+      pdga_number_snapshot: '111111',
+      pair_key: ''
+    })
+  ]);
+
+  const result = commit(h, [{ name: 'Damon Forsythe', username: 'damon31', pdga_number: '999999', position: 4 }]);
+
+  assert.equal(result.summary.committed, 1);
+  const row = rowByMember(week, 3);
+  assert.equal(row[h_index(week, 'pdga_number_snapshot')], '111111');
+  assert.equal(row[h_index(week, 'udisc_pdga_number_import')], '999999');
+});
+
 test('commits a mixed payload of pairs and solos independently', () => {
   const h = loadCode();
   const { week } = buildDoubles(h, []);

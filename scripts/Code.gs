@@ -4952,7 +4952,8 @@ function buildClubMatchIndexes(clubData, headers) {
     byMember[memberNumber] = {
       member_number: memberNumber,
       name: name,
-      udisc_username: row[udiscCol] || ''
+      udisc_username: row[udiscCol] || '',
+      pdga_number: pdga
     };
   }
 
@@ -5572,14 +5573,29 @@ function commitDoublesPairUnderLock(context) {
       if (target && doublesSameScope(target.pair_key, pairKey, isSolo)) {
         updateWeeklyImportRow(weeklySheet, target.index + 1, freshHeaders, fields, now);
       } else {
-        var snapshotName = item.partner.match && item.partner.match.matched_name
+        // A brand-new row snapshots the member's roster identity when the
+        // roster knows it, falling back to the import's own values only when
+        // the roster has nothing. Existing rows are never rewritten here.
+        var rosterMember = context.clubIndexes && context.clubIndexes.byMember
+          ? context.clubIndexes.byMember[memberNumber]
+          : null;
+        var matchedName = item.partner.match && item.partner.match.matched_name
           ? item.partner.match.matched_name
-          : item.partner.name;
+          : '';
+        var snapshotName = (rosterMember && rosterMember.name)
+          ? rosterMember.name
+          : (matchedName || item.partner.name);
+        var snapshotUsername = (rosterMember && rosterMember.udisc_username)
+          ? rosterMember.udisc_username
+          : item.partner.username;
+        var snapshotPdga = (rosterMember && rosterMember.pdga_number)
+          ? rosterMember.pdga_number
+          : item.partner.pdga_number;
         var record = buildNewWeeklyRecord(freshHeaders, {
           member_number: memberNumber,
           name: snapshotName,
-          username: item.partner.username,
-          pdga: item.partner.pdga_number
+          username: snapshotUsername,
+          pdga: snapshotPdga
         }, importFields, pairFields, now);
         weeklySheet.appendRow(record);
         appendedWeekly.push({ sheet: weeklySheet, position: weeklySheet.getLastRow() });
@@ -5802,6 +5818,7 @@ function handleCommitUdiscImportDoubles(data) {
         weeklyHeaders: weeklyHeaders,
         clubSheet: clubSheet,
         clubHeaders: clubHeaders,
+        clubIndexes: clubIndexes,
         parsed: parsed,
         plan: plan,
         pairKey: pairKey,
@@ -5945,6 +5962,8 @@ function handleCommitUdiscImport(data) {
       // --- Not a weekly record match — check ClubMembers ---
       var existingMemberNum = null;
       var existingMemberName = '';
+      var existingMemberUsername = '';
+      var existingMemberPdga = '';
 
       if (uUsername) {
         existingMemberNum = clubIndexes.byUsername[uUsername.toLowerCase()];
@@ -5960,6 +5979,8 @@ function handleCommitUdiscImport(data) {
           if (clubData[c][clubIndexes.memberCol] === existingMemberNum &&
               (clubData[c][clubIndexes.activeCol] === true || clubData[c][clubIndexes.activeCol] === 'TRUE')) {
             existingMemberName = clubData[c][clubIndexes.nameCol] || '';
+            existingMemberUsername = (clubData[c][clubIndexes.udiscCol] || '').toString();
+            existingMemberPdga = (clubData[c][clubIndexes.pdgaCol] || '').toString();
             memberStillValid = true;
             break;
           }
@@ -5982,11 +6003,14 @@ function handleCommitUdiscImport(data) {
         if (alreadyExists) continue;
 
         // --- Path 2: Existing ClubMembers player, create new weekly row ---
+        // A brand-new row snapshots the member's roster identity when the
+        // roster knows it, falling back to the import's own values only when
+        // the roster has nothing. Existing rows are never rewritten here.
         var newRecord = buildNewWeeklyRecord(WEEKLY_RECORD_HEADERS, {
           member_number: existingMemberNum,
-          name: existingMemberName,
-          username: uUsername,
-          pdga: uPdga
+          name: existingMemberName || uName,
+          username: existingMemberUsername || uUsername,
+          pdga: existingMemberPdga || uPdga
         }, importFields, null, now);
         weeklySheet.appendRow(newRecord);
         existingMemberWeeklyCreated++;
@@ -6008,17 +6032,21 @@ function handleCommitUdiscImport(data) {
           if (batchMemberNumbers[doubleCheck]) continue;
           batchMemberNumbers[doubleCheck] = true;
           var cmName = '';
+          var cmUsername = '';
+          var cmPdga = '';
           for (var cc = 1; cc < clubData.length; cc++) {
             if (clubData[cc][clubIndexes.memberCol] === doubleCheck) {
               cmName = clubData[cc][clubIndexes.nameCol] || '';
+              cmUsername = (clubData[cc][clubIndexes.udiscCol] || '').toString();
+              cmPdga = (clubData[cc][clubIndexes.pdgaCol] || '').toString();
               break;
             }
           }
           var newRecord2 = buildNewWeeklyRecord(WEEKLY_RECORD_HEADERS, {
             member_number: doubleCheck,
-            name: cmName,
-            username: uUsername,
-            pdga: uPdga
+            name: cmName || uName,
+            username: cmUsername || uUsername,
+            pdga: cmPdga || uPdga
           }, importFields, null, now);
           weeklySheet.appendRow(newRecord2);
           existingMemberWeeklyCreated++;
