@@ -54,10 +54,18 @@ test('the already_provisioned response is handled without a false success or ret
   assert.doesNotMatch(alreadyBranch, /Roster seeded/);
 });
 
-test('singles provisioning controls are unchanged', () => {
-  assert.match(html, /id="btnCreateMaster" onclick="createClubMembersTab\(\)"/);
-  assert.match(html, /function createClubMembersTab\(\)/);
-  // The provisioning card stays hidden for the singles league.
+test('the club-members setup card and its wiring are removed', () => {
+  // Provisioning seeds the roster, so the separate setup surface is gone:
+  // no card, no button/status elements, and no client functions or calls.
+  assert.doesNotMatch(html, /id="clubMembersCard"/);
+  assert.doesNotMatch(html, /id="btnCreateMaster"/);
+  assert.doesNotMatch(html, /id="masterResult"/);
+  assert.doesNotMatch(html, /function createClubMembersTab\(/);
+  assert.doesNotMatch(html, /function loadClubMembersStatus\(/);
+  assert.doesNotMatch(html, /function applyClubMembersState\(/);
+  assert.doesNotMatch(html, /getClubMembersStatus/);
+
+  // The provisioning card itself is untouched and stays hidden for singles.
   const apply = functionBody('applyLeague');
   assert.match(apply, /provisionCard\.style\.display = rules\.hasPairs \? '' : 'none'/);
 });
@@ -70,33 +78,25 @@ test('an unprovisioned sheet with a metadata mismatch banners the drift', () => 
   assert.match(apply, /backfill the metadata columns/);
 });
 
-test('the provisioning and setup cards are unified and grouped at the bottom', () => {
+test('the provisioning card is the only setup card and sits above the log', () => {
   const provisionIndex = html.indexOf('id="doublesProvisionCard"');
-  const clubIndex = html.indexOf('id="clubMembersCard"');
   const lastWorkflowIndex = html.indexOf('id="pointsCalcCard"');
   const activityIndex = html.indexOf('<!-- 10. Activity Log -->');
   assert.notEqual(provisionIndex, -1, 'expected the doubles provisioning card');
-  assert.notEqual(clubIndex, -1, 'expected the setup club members card');
   assert.notEqual(activityIndex, -1, 'expected the activity log');
 
-  // The setup cards form one group below the weekly workflow, in event-setup
-  // order: provision the spreadsheet first, then set up the club members.
+  // Provisioning sits below the weekly workflow and above the activity log.
   assert.ok(provisionIndex > lastWorkflowIndex, 'provisioning sits below the workflow');
-  assert.ok(provisionIndex < clubIndex, 'provisioning precedes club-member setup');
-  assert.ok(clubIndex < activityIndex, 'the setup group stays above the activity log');
+  assert.ok(provisionIndex < activityIndex, 'provisioning stays above the activity log');
 
-  // The setup card mirrors the provisioning card's single-panel structure:
-  // one heading, one help paragraph, one action button, one status line.
-  const clubCard = html.slice(clubIndex, html.indexOf('<!-- Dev-only test-data reset.'));
-  assert.match(clubCard, /<h2>Setup Club Members<\/h2>/);
-  assert.match(clubCard, /class="help-text"/);
-  assert.match(clubCard, /id="btnCreateMaster" onclick="createClubMembersTab\(\)"/);
-  assert.match(clubCard, /id="masterResult" class="status hidden"/);
-  assert.doesNotMatch(clubCard, /clubMembersMissing|clubMembersExists/);
+  // No club-members setup card remains anywhere on the page.
+  assert.equal(html.indexOf('id="clubMembersCard"'), -1, 'no setup club members card');
 
-  // The setup card mirrors the provisioning disabled state for an existing
-  // roster instead of swapping in a separate panel.
-  const apply = functionBody('applyClubMembersState');
-  assert.match(apply, /btn\.disabled = exists/);
-  assert.match(apply, /'Club Members Set Up'/);
+  // The provisioning card keeps its single-panel structure: one heading, one
+  // help paragraph, one action button, one status line.
+  const provisionCard = html.slice(provisionIndex, activityIndex);
+  assert.match(provisionCard, /<h2>Doubles Provisioning<\/h2>/);
+  assert.match(provisionCard, /class="help-text"/);
+  assert.match(provisionCard, /id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet\(\)"/);
+  assert.match(provisionCard, /id="doublesProvisionResult" class="status hidden"/);
 });

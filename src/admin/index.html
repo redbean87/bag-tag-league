@@ -146,6 +146,19 @@
     details.card > .card-body {
       padding: 0 1.25rem 1.25rem;
     }
+    /* Members accordion: one full-width summary row and a horizontally
+       scrollable table keep it usable on a phone, and the summary and
+       Refresh button become comfortable touch targets. */
+    details#membersCard > summary {
+      min-height: 48px;
+    }
+    #membersTable {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    #membersCard button {
+      min-height: 44px;
+    }
     #log {
       font-family: monospace;
       font-size: 0.8125rem;
@@ -317,17 +330,24 @@
   </details>
 
   <!-- 2b. Members (doubles mode only) -->
-  <div class="card" id="membersCard" style="display:none;">
-    <h2>Members</h2>
-    <p class="help-text">
-      Doubles members with their <strong>Season Total</strong>: the sum of
-      each member's points for every week played. A member with no points yet
-      shows 0.
-    </p>
-    <button type="button" id="btnLoadMembers" onclick="loadMembers()">Refresh Members</button>
-    <div id="membersTable" style="display:none;"></div>
-    <div id="membersResult" class="status hidden"></div>
-  </div>
+  <details class="card" id="membersCard" style="display:none;">
+    <summary>
+      <div class="summary-text">
+        <h2>Members</h2>
+        <span class="summary-hint">Doubles season totals</span>
+      </div>
+    </summary>
+    <div class="card-body">
+      <p class="help-text">
+        Doubles members with their <strong>Season Total</strong>: the sum of
+        each member's points for every week played. A member with no points yet
+        shows 0.
+      </p>
+      <button type="button" id="btnLoadMembers" onclick="loadMembers()">Refresh Members</button>
+      <div id="membersTable" style="display:none;"></div>
+      <div id="membersResult" class="status hidden"></div>
+    </div>
+  </details>
 
   <!-- 3. Active League Date -->
   <div class="card" id="activeLeagueDateCard">
@@ -347,9 +367,7 @@
       Create a new tab in the spreadsheet for the Active League Date. The tab will be named
       <code>Week YYYY-MM-DD</code> with the standard 48-column roster template.
     </p>
-    <div id="createLeagueDaySheetExists" style="display:none;">
-      <p class="status ok" style="margin-bottom:0;"><strong>League Already Created</strong></p>
-    </div>
+    <div id="createLeagueDaySheetExists" style="display:none;"></div>
     <form id="createForm" onsubmit="createWeeklyTab(event)" style="display:none;">
       <button type="submit" id="btnCreate">Create League Day</button>
     </form>
@@ -505,12 +523,9 @@
 
   </div>
 
-  <!-- Setup cards. One-time provisioning and setup live together at the
-       bottom of the page so the recurring weekly workflow stays on top. The
-       order follows the event setup sequence: provision the spreadsheet
-       first, then set up the club members. Both cards share one structure:
-       a heading, one help paragraph, one action button, and one status
-       line. -->
+  <!-- Setup card. One-time provisioning lives at the bottom of the page so
+       the recurring weekly workflow stays on top. Member setup is covered by
+       provisioning, so no separate club-members card is rendered. -->
   <div class="card" id="doublesProvisionCard" style="display:none;">
     <h2>Doubles Provisioning</h2>
     <p class="help-text">
@@ -521,17 +536,6 @@
     </p>
     <button type="button" id="btnProvisionDoubles" onclick="provisionDoublesSpreadsheet()">Provision Doubles Spreadsheet</button>
     <div id="doublesProvisionResult" class="status hidden"></div>
-  </div>
-
-  <div class="card" id="clubMembersCard">
-    <h2>Setup Club Members</h2>
-    <p class="help-text">
-      Create the <code>ClubMembers</code> tab if it does not exist. This is a
-      one-time setup step; players register themselves during check-in. Safe
-      to run repeatedly; existing members are never changed.
-    </p>
-    <button type="button" id="btnCreateMaster" onclick="createClubMembersTab()">Create Club Members Tab</button>
-    <div id="masterResult" class="status hidden"></div>
   </div>
 
   <!-- Dev-only test-data reset. The reset is a testing tool, not a
@@ -721,7 +725,6 @@
       applyLeague(leagueId);
       clearStaleSectionData();
       loadLeagueSettings();
-      loadClubMembersStatus();
       loadWeeklyTabs();
       log('Switched to league ' + leagueId);
     }
@@ -955,7 +958,6 @@
             (seed.seeded || 0) + ' member(s).');
           log('SUCCESS: Doubles provisioned; seeded ' + (seed.seeded || 0) + ' member(s)');
           await loadLeagueSettings();
-          await loadClubMembersStatus();
         } else if (data.status === 'already_provisioned') {
           // Another admin provisioned it between the state read and the click.
           provisioned = true;
@@ -1161,7 +1163,9 @@
         return;
       }
       if (sheetExistsForDate(activeDate)) {
-        statusEl.innerHTML = '<p class="help-text" style="margin-bottom:0; color:#34a853;">Sheet exists: <code>Week ' + activeDate + '</code></p>';
+        // The date already has a sheet; the Create League Day card owns the
+        // action, so the status line stays quiet instead of restating it.
+        statusEl.innerHTML = '';
       } else {
         statusEl.innerHTML = '<p class="help-text" style="margin-bottom:0; color:#888;">No sheet for this date yet.</p>';
       }
@@ -1226,8 +1230,9 @@
         return;
       }
 
+      // Defensive guard: the form is hidden when the date already has a
+      // sheet, so this only stops a duplicate create if one races in.
       if (sheetExistsForDate(leagueDate)) {
-        setStatus('error', '<strong>League Already Created</strong> for ' + leagueDate + '.');
         return;
       }
 
@@ -1265,101 +1270,6 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Create League Day';
-      }
-    }
-
-    function setMasterStatus(type, html) {
-      var el = document.getElementById('masterResult');
-      el.className = 'status ' + type;
-      el.innerHTML = html;
-    }
-
-    // Reflects the club-members state on the setup control with the same
-    // pattern as doubles provisioning: an unset roster offers the create
-    // action, an existing roster disables it and states the state explicitly.
-    function applyClubMembersState(state) {
-      var exists = state === 'exists';
-      var btn = document.getElementById('btnCreateMaster');
-      if (btn) {
-        btn.disabled = exists;
-        btn.textContent = exists ? 'Club Members Set Up' : 'Create Club Members Tab';
-      }
-      if (exists) {
-        setMasterStatus('ok', '<strong>Club Members set up.</strong> Re-running is disabled.');
-      } else {
-        setMasterStatus('hidden', '');
-      }
-    }
-
-    async function loadClubMembersStatus() {
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getClubMembersStatus', spreadsheetId: getSpreadsheetId() })
-        });
-        var data = await response.json();
-
-        if (data.status !== 'ok') {
-          setMasterStatus('error', '<strong>Error:</strong> ' + data.message);
-          return;
-        }
-
-        if (data.state === 'missing') {
-          applyClubMembersState('missing');
-          log('ClubMembers sheet not found — create prompt shown');
-          return;
-        }
-
-        applyClubMembersState('exists');
-        log('ClubMembers sheet exists');
-      } catch (err) {
-        setMasterStatus('error', '<strong>Request failed:</strong> ' + err.message);
-        log('FAILED to load club members status: ' + err.message);
-      }
-    }
-
-    async function createClubMembersTab() {
-      var btn = document.getElementById('btnCreateMaster');
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Creating...';
-      }
-      setMasterStatus('pending', 'Creating ClubMembers tab...');
-
-      log('Creating ClubMembers tab');
-
-      var created = false;
-
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({
-            action: 'createClubMembersTab',
-            spreadsheetId: getSpreadsheetId()
-          })
-        });
-        var data = await response.json();
-
-        if (data.status === 'ok') {
-          created = true;
-          log(data.alreadyExisted
-            ? 'ClubMembers tab already existed'
-            : 'SUCCESS: ClubMembers tab created');
-          applyClubMembersState('exists');
-        } else {
-          setMasterStatus('error', '<strong>Error:</strong> ' + data.message);
-          log('ERROR: ' + data.message);
-        }
-      } catch (err) {
-        setMasterStatus('error', '<strong>Request failed:</strong> ' + err.message);
-        log('FAILED: ' + err.message);
-      } finally {
-        if (btn && !created) {
-          btn.disabled = false;
-          btn.textContent = 'Create Club Members Tab';
-        }
       }
     }
 
@@ -2871,7 +2781,6 @@
       applyLeague(getLeagueId());
       log('Admin page loaded');
       loadLeagueSettings();
-      loadClubMembersStatus();
       loadWeeklyTabs();
     })();
   </script>
