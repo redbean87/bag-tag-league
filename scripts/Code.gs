@@ -6,6 +6,7 @@
  *
  * Deploy as: Web App -> Execute as: Me -> Who has access: Anyone
  */
+// Navigation map with line ranges: scripts/CODE_MAP.md (regenerate: node scripts/gen-code-map.js).
 
 // Singles POC spreadsheet. It is a development surface: offered only on the
 // development address and targetable by the guarded test-data reset. It is the
