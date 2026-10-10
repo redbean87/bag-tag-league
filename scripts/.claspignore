@@ -1,0 +1,9 @@
+# clasp pushes every supported file under rootDir (scripts/) unless this file
+# excludes it, and the Apps Script parser rejects Node/bash helper scripts
+# (gen-code-map.js's shebang broke the first Deploy run from the
+# navigation-map merge). Deny everything first so a future helper script is
+# ignored by default, then allowlist exactly the Apps Script files.
+**/**
+!appsscript.json
+!Code.gs
+!ProvisionDoubles.gs
