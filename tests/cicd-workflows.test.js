@@ -65,3 +65,62 @@ test('every secret the workflows read is an allow-listed, documented name', () =
     assert.ok(docs.includes(name), 'docs/deployment.md must document ' + name);
   }
 });
+
+// ─── clasp push surface ──────────────────────────────────────────────────────
+
+const SCRIPTS = path.join(REPO_ROOT, 'scripts');
+const CLASP_IGNORE = path.join(SCRIPTS, '.claspignore');
+
+// clasp (rootDir: scripts/) pushes every supported file it is not told to
+// ignore, and the Apps Script parser rejects Node helper scripts - pushing
+// gen-code-map.js's shebang failed the Deploy run from the navigation-map
+// merge. Only the manifest and the two .gs sources may ever reach the API.
+const CLASP_ALLOWED = ['Code.gs', 'ProvisionDoubles.gs', 'appsscript.json'];
+
+function claspIgnorePatterns() {
+  return read(CLASP_IGNORE)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+}
+
+function claspAllowlist() {
+  return claspIgnorePatterns()
+    .filter((pattern) => pattern.startsWith('!'))
+    .map((pattern) => pattern.slice(1));
+}
+
+// The deny-all first pattern is what makes a future helper script safe by
+// default: an unlisted file is never pushed, so it cannot break a deploy
+// until someone deliberately allowlists it (which fails this test first).
+test('scripts/.claspignore denies everything except the allowlisted app files', () => {
+  const patterns = claspIgnorePatterns();
+
+  assert.equal(
+    patterns[0],
+    '**/**',
+    'the first pattern must deny everything so an unlisted file is never pushed'
+  );
+
+  assert.deepEqual(
+    [...claspAllowlist()].sort(),
+    [...CLASP_ALLOWED].sort(),
+    'only the manifest and the .gs sources may be allowlisted for clasp push'
+  );
+});
+
+// The allowlist must also match the files that actually exist, so a rename or
+// deletion cannot leave clasp pushing a stale name or nothing at all.
+test('every file clasp would push under scripts/ exists and is a .gs source or the manifest', () => {
+  const present = fs.readdirSync(SCRIPTS);
+
+  const missing = CLASP_ALLOWED.filter((file) => !present.includes(file));
+  assert.deepEqual(missing, [], 'allowlisted app files must exist under scripts/');
+
+  const pushedNonGs = claspAllowlist().filter((file) => !file.endsWith('.gs'));
+  assert.deepEqual(
+    pushedNonGs,
+    ['appsscript.json'],
+    'the manifest is the only non-.gs file that may be pushed'
+  );
+});
