@@ -18,13 +18,13 @@ function valueByName(h, sheet, header, rowIndex) {
   return sheet.rows[rowIndex][headers.indexOf(header)];
 }
 
-/** Builds a pre-detag doubles spreadsheet: 54-col weeks + 9-col roster. */
+/** Builds a pre-detag doubles spreadsheet: 54-col weeks + roster w/ caches. */
 function taggedDoubles(h) {
   const doubles = h.makeSpreadsheet(h.bound.SPREADSHEET_ID_DOUBLES);
 
   const club = doubles.insertSheet('ClubMembers');
-  club.appendRow(h.bound.CLUB_MEMBER_HEADERS.concat(['season_points']));
-  club.appendRow([3, 'Damon', 'damon31', '151236', 7, true, 't', 't', 2]);
+  club.appendRow(h.bound.CLUB_MEMBER_HEADERS.concat(['season_points', 'season_earnings']));
+  club.appendRow([3, 'Damon', 'damon31', '151236', 7, true, 't', 't', 2, 10.5]);
 
   const week = doubles.insertSheet('Week ' + WEEK_DATE);
   week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
@@ -136,7 +136,7 @@ test('dry run reports every planned drop and writes nothing', () => {
   // Untouched: every sheet still carries the pre-detag tag columns.
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
   assert.deepEqual(h.fn('getSheetHeaders')(template), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
-  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS.concat(['season_points']));
+  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS.concat(['season_points', 'season_earnings']));
 });
 
 test('apply proceeds without any approval token and drops exactly the previewed columns', () => {
@@ -171,7 +171,7 @@ test('apply drops the tag columns and preserves every other value', () => {
   assert.deepEqual(h.fn('getSheetHeaders')(template), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
   assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
   assert.equal(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES.length, 51);
-  assert.equal(h.bound.CLUB_MEMBER_HEADERS_DOUBLES.length, 8);
+  assert.equal(h.bound.CLUB_MEMBER_HEADERS_DOUBLES.length, 9);
 
   // Values that were not dropped move with their column.
   assert.equal(valueByName(h, week, 'score', 1), 'v_score');

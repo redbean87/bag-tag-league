@@ -53,7 +53,7 @@ One row per player. Updated only during league finalization or admin correction.
 | name | string | Player's display name |
 | udisc_username | string | UDisc username (nullable) |
 | pdga_number | string | PDGA number (nullable) |
-| current_tag | integer | Last-known calculated bag tag number. Singles only: the doubles roster is tag-free (it carries `season_points` instead). Only updated during league finalization with the player's `out_tag`. Not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`. |
+| current_tag | integer | Last-known calculated bag tag number. Singles only: the doubles roster is tag-free (it carries `season_points` and `season_earnings` instead). Only updated during league finalization with the player's `out_tag`. Not guaranteed to represent the player's current physical tag because players may trade tags between league days. The next check-in must require the player's actual `in_tag`. |
 | is_active | boolean | Active/inactive status |
 | created_at | string (ISO 8601) | Record creation |
 | updated_at | string (ISO 8601) | Last modification |
@@ -153,7 +153,20 @@ singles tabs above:
   `partner_member_number`, `team_position`, `team_position_raw`,
   `weekly_points`, and `weekly_points_status` (**51 columns**).
 - Doubles `ClubMembers` is the **tag-free** roster: the singles roster minus
-  `current_tag`, plus the `season_points` cache (**8 columns**).
+  `current_tag`, plus the `season_points` and `season_earnings` caches
+  (**9 columns**).
+
+`season_points` sums the committed `weekly_points`; `season_earnings` sums each
+member's per-player payout share across the committed weeks (even split: a
+pair's share is divided equally, a solo takes the full amount; the ace pot is
+never included). Payout was never persisted per week, so earnings are re-derived
+at read time from committed placements under the league's **current** payout
+settings — the same figure the Week Results table shows for those weeks. A
+change to the payout settings therefore changes every week's re-derived
+earnings, including past ones; historical totals are not a record of cash
+handed out. Both caches are recomputed from scratch after every import commit
+and by the `syncSeasonCaches` maintenance action, so a replay, a correction, or
+a backfill can never double-count.
 
 A pre-detag doubles sheet (54 weekly columns and a 9-column roster carrying
 `current_tag`) is brought forward by the `migrateDetagColumnDrops` migration.

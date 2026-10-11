@@ -72,19 +72,20 @@ const CLUB_MEMBER_HEADERS_DETAG = CLUB_MEMBER_HEADERS.filter(function(header) {
 });
 
 const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS_DETAG.concat([
-  'season_points'
+  'season_points',
+  'season_earnings'
 ]);
 
 // ClubMembers columns the seed-only roster reload must never take from the
 // caller's payload. `current_tag` is a singles tag field that has no meaning on
 // a points roster and must stay blank, so the reload always writes it empty
 // (this only matters for a legacy roster that still carries the column).
-// `season_points` is a derived cache recomputed from committed weeks, so an
-// existing value is preserved rather than overwritten and a new row lands
-// blank. Neither column is ever part of the seed's identity comparison, so a
-// re-seed with an unchanged payload is a true no-op.
+// `season_points` and `season_earnings` are derived caches recomputed from
+// committed weeks, so an existing value is preserved rather than overwritten
+// and a new row lands blank. None of these columns is ever part of the seed's
+// identity comparison, so a re-seed with an unchanged payload is a true no-op.
 const ROSTER_SEED_BLANK_HEADERS = ['current_tag'];
-const ROSTER_SEED_PRESERVE_HEADERS = ['season_points'];
+const ROSTER_SEED_PRESERVE_HEADERS = ['season_points', 'season_earnings'];
 
 // Payload field that carries a member's join date. The seed-only roster reload
 // maps it onto the ClubMembers `created_at` column, so a reload restores the
@@ -990,7 +991,7 @@ function getLeagueSheetHeaders(format, scoring) {
 function getClubMemberHeaders(format, scoring) {
   var rules = rulesForEnums(format, scoring);
   var columns = (rules.usesTags ? CLUB_MEMBER_HEADERS : CLUB_MEMBER_HEADERS_DETAG).slice();
-  if (rules.usesPoints) columns = columns.concat(['season_points']);
+  if (rules.usesPoints) columns = columns.concat(['season_points', 'season_earnings']);
   return columns;
 }
 
@@ -1928,15 +1929,19 @@ function leagueHeadersMatch(headers, format, scoring) {
 /**
  * Whether a ClubMembers header row matches a (format, scoring) pair. A roster
  * provisioned before the detag may still carry the now-dropped current_tag
- * column, and a points roster may or may not yet carry season_points, so those
- * pre-migration layouts are accepted as "known but un-migrated" until the
- * gated drop runs. Totals are aggregated live and never read the cache.
+ * column, and a points roster may or may not yet carry the season_points and
+ * season_earnings caches, so those pre-migration layouts are accepted as
+ * "known but un-migrated" until the in-place ensure helpers bring them
+ * current. Totals are aggregated live and never read the caches.
  */
 function clubMemberHeadersMatch(headers, format, scoring) {
   var rules = rulesForEnums(format, scoring);
   if (arraysEqual(headers, getClubMemberHeaders(rules.format, rules.scoring))) return true;
   if (arraysEqual(headers, CLUB_MEMBER_HEADERS)) return true;
   if (rules.usesPoints && arraysEqual(headers, CLUB_MEMBER_HEADERS.concat(['season_points']))) return true;
+  // The pre-earnings tag-free roster: known but un-migrated. The earnings
+  // cache column is appended in place by ensureSeasonEarningsColumn.
+  if (rules.usesPoints && arraysEqual(headers, CLUB_MEMBER_HEADERS_DETAG.concat(['season_points']))) return true;
   return false;
 }
 
@@ -2892,6 +2897,12 @@ function doPost(e) {
     }
     if (data.action === 'calculatePoints') {
       return handleCalculatePoints(data);
+    }
+    if (data.action === 'seasonStandings') {
+      return handleSeasonStandings(data);
+    }
+    if (data.action === 'syncSeasonCaches') {
+      return handleSyncSeasonCaches(data);
     }
     if (data.action === 'calculateTags') {
       return handleCalculateTags(data);
@@ -5845,12 +5856,17 @@ function handleCommitUdiscImportDoubles(data) {
   }
 
   var seasonSync = syncDoublesSeasonPoints(spreadsheet);
+  // Earnings recompute from the same committed weeks, so the cache catches up
+  // here too and a replay or a corrected placement re-derives instead of
+  // accumulating. The weekly payout rule comes from this league's settings.
+  var earningsSync = syncDoublesSeasonEarnings(spreadsheet, rules);
 
   return respond('ok', 'Doubles import committed.', {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: leagueDate,
     summary: summary,
     season_points_synced: seasonSync.synced,
+    season_earnings_synced: earningsSync.synced,
     results: results,
     created_member_numbers: createdMemberNumbers
   });
@@ -6886,6 +6902,114 @@ function handleCalculatePoints(data) {
 }
 
 /**
+ * Admin action: the season standings — every member with positive live season
+ * points, plus their live season earnings.
+ *
+ * Read-only: both totals are aggregated live from the committed Week tabs at
+ * request time (points from the persisted weekly_points, earnings by
+ * re-applying the league's current payout rule per week), so the standings can
+ * never go stale between commits. Inclusion is "everyone that has points": a
+ * member whose live season points total is greater than zero, active or not,
+ * and a qualifying member with zero earnings is listed with 0.
+ *
+ * No inputs beyond the league selector.
+ */
+function handleSeasonStandings(data) {
+  var selector = leagueSelectorFrom(data);
+  // Points gate before any spreadsheet is opened: singles/tags leagues refuse
+  // the same way every other points surface does.
+  var gateRules = getLeagueRules(selector);
+  if (!gateRules.usesPoints) {
+    return respond('error', 'Season standings are not available for this league\'s scoring method.');
+  }
+
+  var spreadsheet = resolveSpreadsheet(selector);
+  // Merge the League sheet's own points/payout settings so the standings
+  // re-derive earnings under this league's current money rules.
+  var rules = getLeagueRulesForSpreadsheet(selector, spreadsheet);
+  var seasonPoints = sumSeasonPointsByMember(spreadsheet);
+  var seasonEarnings = sumSeasonEarningsByMember(spreadsheet, rules);
+
+  // Member identities come from the roster; every member with qualifying
+  // points appears, including inactive members (the captain's rule is
+  // "everyone that has points").
+  var clubSheet = spreadsheet.getSheetByName('ClubMembers');
+  var standings = [];
+  if (clubSheet && clubSheet.getLastRow() >= 2) {
+    var clubData = clubSheet.getDataRange().getValues();
+    var headers = clubData[0] || [];
+    var memberCol = headers.indexOf('member_number');
+    var nameCol = headers.indexOf('name');
+    if (memberCol !== -1) {
+      for (var i = 1; i < clubData.length; i++) {
+        var memberNumber = clubData[i][memberCol];
+        if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+        var points = seasonPoints[memberNumber] !== undefined ? seasonPoints[memberNumber] : 0;
+        if (!(points > 0)) continue;
+        standings.push({
+          member_number: memberNumber,
+          name: nameCol !== -1 ? (clubData[i][nameCol] || '').toString() : '',
+          season_points: points,
+          season_earnings: seasonEarnings[memberNumber] !== undefined ? seasonEarnings[memberNumber] : 0
+        });
+      }
+    }
+  }
+
+  // Best points first, member_number ascending as the tiebreak, so the table
+  // is deterministic when two members finish level.
+  standings.sort(function(a, b) {
+    if (b.season_points !== a.season_points) return b.season_points - a.season_points;
+    var an = Number(a.member_number);
+    var bn = Number(b.member_number);
+    if (isNaN(an)) an = Number.MAX_VALUE;
+    if (isNaN(bn)) bn = Number.MAX_VALUE;
+    return an - bn;
+  });
+
+  return respond('ok', 'Season standings loaded. No writes were made.', {
+    format: LEAGUE_FORMAT_DOUBLES,
+    writes: false,
+    standings: standings
+  });
+}
+
+/**
+ * Maintenance action: recompute both doubles season caches (season_points and
+ * season_earnings) from the committed Week tabs on demand.
+ *
+ * The commit workflow already runs both syncs at the end of every import
+ * commit, so this action exists for the seasons committed before season money
+ * existed (backfill) and for repairing a cache after a manual sheet edit. Both
+ * syncs recompute from scratch, so running it any number of times produces the
+ * same result and can never double-count. A backfilled earnings total is the
+ * payout re-derived under the league's *current* settings — payout was never
+ * persisted per week — which is the same figure the Week Results table has
+ * always shown for those weeks.
+ *
+ * No inputs beyond the league selector.
+ */
+function handleSyncSeasonCaches(data) {
+  var selector = leagueSelectorFrom(data);
+  var gateRules = getLeagueRules(selector);
+  if (!gateRules.usesPoints) {
+    return respond('error', 'Season cache sync is not available for this league\'s scoring method.');
+  }
+
+  var spreadsheet = resolveSpreadsheet(selector);
+  var rules = getLeagueRulesForSpreadsheet(selector, spreadsheet);
+  var pointsSync = syncDoublesSeasonPoints(spreadsheet);
+  var earningsSync = syncDoublesSeasonEarnings(spreadsheet, rules);
+
+  return respond('ok', 'Season caches recomputed from committed weeks.', {
+    format: LEAGUE_FORMAT_DOUBLES,
+    season_points_synced: pointsSync.synced,
+    season_earnings_synced: earningsSync.synced,
+    season_earnings: earningsSync.members
+  });
+}
+
+/**
  * Sums each member's committed weekly points across every Week tab. This is
  * the single live aggregation every doubles total shares and the source of
  * truth: it reads the points persisted at import commit and never consults a
@@ -6916,45 +7040,108 @@ function sumSeasonPointsByMember(spreadsheet) {
 }
 
 /**
- * Ensures the doubles ClubMembers roster carries the `season_points` cache
- * column, appending the header after the last used column when an older roster
- * was provisioned with the bare 8-column schema. Idempotent. Returns the
- * 0-based column index, or -1 when there is no ClubMembers sheet.
+ * Sums each member's season earnings across every Week tab. The live mirror of
+ * the Week Results payout table: for each committed week it rebuilds the pairs
+ * from the committed placements (the same read-only path `calculatePoints`
+ * uses), applies the league's current payout pool rule, and accumulates each
+ * pair's per-player share into the member's total. The split is the existing
+ * even rule: partners receive equal shares and a solo takes the full share,
+ * exactly what the Week Results table displays for that week.
+ *
+ * Payout was never persisted, so a total is always re-derived under the
+ * league's current settings; changing a payout setting changes every week's
+ * re-derived money. Returns a plain object keyed by member_number; a member
+ * with no committed rows is absent (callers default to 0).
  */
-function ensureSeasonPointsColumn(clubSheet) {
+function sumSeasonEarningsByMember(spreadsheet, rules) {
+  var totals = {};
+  var weekSheets = getWeekSheets(spreadsheet);
+  for (var s = 0; s < weekSheets.length; s++) {
+    var data = weekSheets[s].getDataRange().getValues();
+    var headers = data[0] || [];
+    if (headers.indexOf('member_number') === -1 ||
+        headers.indexOf('team_position_raw') === -1 ||
+        headers.indexOf('weekly_points') === -1) continue;
+
+    var plan = buildDoublesPointsPlan(data, headers, rules);
+    if (!plan.rows.length) continue;
+
+    // Fresh pair objects per week: applyWeeklyPayout mutates the payout fields
+    // on its input, so grouping per week keeps the writes off the sheet rows.
+    var pairs = groupDoublesPointsPairs(plan.rows);
+    applyWeeklyPayout(pairs, plan.rows.length, rules);
+
+    for (var p = 0; p < pairs.length; p++) {
+      var perPlayer = roundCurrency(pairs[p].payout_per_player || 0);
+      var members = pairs[p].members;
+      for (var m = 0; m < members.length; m++) {
+        var memberNumber = members[m].member_number;
+        totals[memberNumber] = roundCurrency((totals[memberNumber] || 0) + perPlayer);
+      }
+    }
+  }
+  return totals;
+}
+
+/**
+ * Ensures a doubles ClubMembers roster carries the given cache column,
+ * appending the header after the last used column when an older roster was
+ * provisioned without it. Idempotent. Returns the 0-based column index, or -1
+ * when there is no ClubMembers sheet.
+ */
+function ensureClubSeasonColumn(clubSheet, header) {
   if (!clubSheet) return -1;
 
   var lastColumn = clubSheet.getLastColumn();
   var headers = lastColumn > 0
     ? clubSheet.getRange(1, 1, 1, lastColumn).getValues()[0]
     : [];
-  var existing = headers.indexOf('season_points');
+  var existing = headers.indexOf(header);
   if (existing !== -1) return existing;
 
   var nextColumn = lastColumn + 1;
-  clubSheet.getRange(1, nextColumn).setValue('season_points');
+  clubSheet.getRange(1, nextColumn).setValue(header);
   return nextColumn - 1;
 }
 
 /**
- * Recomputes the doubles ClubMembers `season_points` cache from the committed
- * weekly_points and persists it in one batch write for the whole roster.
+ * Ensures the doubles ClubMembers roster carries the `season_points` cache
+ * column. See ensureClubSeasonColumn; the points cache is appended after the
+ * last used column for a roster that predates it.
+ */
+function ensureSeasonPointsColumn(clubSheet) {
+  return ensureClubSeasonColumn(clubSheet, 'season_points');
+}
+
+/**
+ * Ensures the doubles ClubMembers roster carries the `season_earnings` cache
+ * column. See ensureClubSeasonColumn; the earnings cache is appended in place
+ * for a roster provisioned before season money existed.
+ */
+function ensureSeasonEarningsColumn(clubSheet) {
+  return ensureClubSeasonColumn(clubSheet, 'season_earnings');
+}
+
+/**
+ * Recomputes one doubles ClubMembers cache column from the committed weekly
+ * data and persists it in one batch write for the whole roster.
  *
- * The live sum (`sumSeasonPointsByMember`) stays the source of truth and the
- * listings keep computing it; this column is only a denormalized copy so the
- * ClubMembers tab itself always holds current totals. Safe to call after every
- * points write: it recomputes from scratch, so a re-run can never accumulate,
- * and it creates the column in place for a roster that predates it.
+ * The live sum stays the source of truth and the listings keep computing it;
+ * the column is only a denormalized copy so the ClubMembers tab itself always
+ * holds current totals. Safe to call after every points write: it recomputes
+ * from scratch, so a re-run can never accumulate, and it creates the column in
+ * place for a roster that predates it. Blank spacer rows keep their existing
+ * value rather than inventing a total for a row that is not a member.
  *
  * Returns { synced, members } where `members` maps member_number to the value
  * written and `synced` is the number of roster rows refreshed.
  */
-function syncDoublesSeasonPoints(spreadsheet) {
+function syncClubSeasonColumn(spreadsheet, header, totals) {
   var result = { synced: 0, members: {} };
   var clubSheet = spreadsheet.getSheetByName('ClubMembers');
   if (!clubSheet || clubSheet.getLastRow() < 2) return result;
 
-  var seasonCol = ensureSeasonPointsColumn(clubSheet);
+  var seasonCol = ensureClubSeasonColumn(clubSheet, header);
   if (seasonCol === -1) return result;
 
   var clubData = clubSheet.getDataRange().getValues();
@@ -6962,7 +7149,6 @@ function syncDoublesSeasonPoints(spreadsheet) {
   var memberCol = headers.indexOf('member_number');
   if (memberCol === -1) return result;
 
-  var totals = sumSeasonPointsByMember(spreadsheet);
   var values = [];
   for (var i = 1; i < clubData.length; i++) {
     var memberNumber = clubData[i][memberCol];
@@ -6979,6 +7165,29 @@ function syncDoublesSeasonPoints(spreadsheet) {
   }
   clubSheet.getRange(2, seasonCol + 1, values.length, 1).setValues(values);
   return result;
+}
+
+/**
+ * Recomputes the doubles ClubMembers `season_points` cache from the committed
+ * weekly_points. See syncClubSeasonColumn: the live sum
+ * (`sumSeasonPointsByMember`) stays the source of truth, the recompute-from-
+ * scratch write can never accumulate, and the column is created in place for a
+ * roster that predates it.
+ */
+function syncDoublesSeasonPoints(spreadsheet) {
+  return syncClubSeasonColumn(spreadsheet, 'season_points', sumSeasonPointsByMember(spreadsheet));
+}
+
+/**
+ * Recomputes the doubles ClubMembers `season_earnings` cache from the
+ * re-derived weekly payouts. See syncClubSeasonColumn: the live sum
+ * (`sumSeasonEarningsByMember`) stays the source of truth, the recompute-from-
+ * scratch write can never accumulate, and the column is created in place for a
+ * roster that predates season money. `rules` is the getLeagueRules() object
+ * with the league's own payout settings merged in.
+ */
+function syncDoublesSeasonEarnings(spreadsheet, rules) {
+  return syncClubSeasonColumn(spreadsheet, 'season_earnings', sumSeasonEarningsByMember(spreadsheet, rules));
 }
 
 /**

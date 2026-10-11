@@ -670,6 +670,7 @@
       <div class="card-info" id="pointsCalcInfo" role="note" hidden></div>
       <button type="button" id="btnLoadPoints" onclick="loadPoints()">Load Results</button>
       <div id="pointsPreview" style="display:none;"></div>
+      <div id="seasonStandings" style="display:none;"></div>
       <div id="pointsResult" class="status hidden"></div>
     </div>
 
@@ -1691,6 +1692,12 @@
         pointsPreview.innerHTML = '';
       }
       clearPointsStatus();
+
+      var seasonStandings = document.getElementById('seasonStandings');
+      if (seasonStandings) {
+        seasonStandings.style.display = 'none';
+        seasonStandings.innerHTML = '';
+      }
 
       var weekViewPreview = document.getElementById('weekViewPreview');
       if (weekViewPreview) {
@@ -3156,6 +3163,9 @@
       if (!getLeagueRules().usesPoints) return null;
       var leagueDate = getActiveLeagueDate();
       if (!leagueDate) return null;
+      // Season standings are season-wide, so they load with the panel but
+      // never gate the week results: a standings failure only logs.
+      loadSeasonStandings();
       try {
         var data = await fetchPointsResults();
         if (data.status === 'ok') {
@@ -3193,6 +3203,7 @@
 
         renderPointsResults(data);
         log('Points results loaded for ' + leagueDate + ': ' + data.summary.total_rows + ' rows, ' + data.summary.warnings + ' warning(s). No writes made.');
+        loadSeasonStandings();
       } catch (err) {
         setPointsStatus('error', '<strong>Load failed:</strong> ' + err.message);
         log('FAILED to load points results: ' + err.message);
@@ -3275,7 +3286,7 @@
         html += '</div>';
       }
 
-      html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Results</h3>';
+      html += '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Week Results</h3>';
       html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
       html += '<tr style="background:#f0f0f0;">';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Pair</th>';
@@ -3299,6 +3310,81 @@
 
       previewEl.innerHTML = html;
       previewEl.style.display = '';
+    }
+
+    // ─── Season Standings (read-only) ────────────────────────────────────
+    // The season-wide standings table below the week results: every member
+    // with positive season points, plus their season earnings. Both totals
+    // are aggregated live from the committed weeks on the server, so this
+    // view never goes stale between commits and replays can never
+    // double-count. Earnings follow the same even split as points: partners
+    // share equally and a solo takes the full per-player amount.
+
+    // Season standings are season-wide, but they live in the Points Results
+    // card and load with it, so they are always at least as fresh as the week
+    // results above them. Returns the standings payload or null.
+    async function fetchSeasonStandings() {
+      var response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({
+          action: 'seasonStandings', spreadsheetId: getSpreadsheetId()
+        })
+      });
+      return response.json();
+    }
+
+    async function loadSeasonStandings() {
+      var el = document.getElementById('seasonStandings');
+      if (!el) return null;
+      try {
+        var data = await fetchSeasonStandings();
+        if (data.status === 'ok') {
+          renderSeasonStandings(data);
+          return data;
+        }
+        log('ERROR loading season standings: ' + data.message);
+      } catch (err) {
+        log('FAILED to load season standings: ' + err.message);
+      }
+      return null;
+    }
+
+    function renderSeasonStandings(data) {
+      var el = document.getElementById('seasonStandings');
+      if (!el) return;
+      var standings = data.standings || [];
+
+      var html = '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Season Standings</h3>';
+      if (!standings.length) {
+        html += '<p class="help-text">No members with season points yet.</p>';
+        el.innerHTML = html;
+        el.style.display = '';
+        return;
+      }
+
+      html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
+      html += '<tr style="background:#f0f0f0;">';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Member</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Season Points</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Earned</th>';
+      html += '</tr>';
+      for (var i = 0; i < standings.length; i++) {
+        var row = standings[i];
+        var points = (row.season_points === undefined || row.season_points === null || isNaN(row.season_points))
+          ? 0
+          : row.season_points;
+        var earned = Number(row.season_earnings || 0);
+        html += '<tr>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(row.name) + ' <span style="color:#888;">(#' + escHtml(String(row.member_number)) + ')</span></td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + points + '</td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">$' + earned.toFixed(2) + '</td>';
+        html += '</tr>';
+      }
+      html += '</table>';
+
+      el.innerHTML = html;
+      el.style.display = '';
     }
 
     // ─── Week View (read-only) ────────────────────────────────────────────
