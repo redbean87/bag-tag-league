@@ -21,7 +21,7 @@ topology. It is deterministic and safe to run repeatedly:
 | Tab | Headers | Notes |
 |-----|---------|-------|
 | `League` | 15 base columns + `league_format` + `scoring` + `points_by_place` + `points_participation` + `payout_by_place` + `entry_fee_explanation` + `entry_fee_breakdown` | Settings row records `league_format=doubles` and `scoring=points`; the points columns carry the per-league matrix, the payout column the per-league weekly amounts, the explanation column the plain-language money copy, and the breakdown column the itemised parts of the entry fee shown at check-in |
-| `ClubMembers` | The 8 tag-free roster columns | One row per member, `member_number` preserved; `season_points` caches the live season total |
+| `ClubMembers` | The 9 tag-free roster columns | One row per member, `member_number` preserved; `season_points` caches the live season total and `season_earnings` the live season money |
 | `Week template` | The 51 human-first weekly columns | Non-dated template; ignored by the `Week YYYY-MM-DD` logic |
 | `Week YYYY-MM-DD` | The 51 human-first weekly columns | Created on demand for a league date |
 
@@ -30,14 +30,16 @@ columns: `pair_key`, `partner_member_number`, `team_position`,
 `team_position_raw`, `weekly_points`, and `weekly_points_status` (48 singles
 columns minus the three tag columns `in_tag`, `out_tag`, and `udisc_ending_tag`,
 plus six = **51 columns**). The doubles `ClubMembers` roster is the singles
-roster minus `current_tag` plus the `season_points` cache (**8 columns**). Both
+roster minus `current_tag` plus the `season_points` and `season_earnings`
+caches (**9 columns**). Both
 schemas derive from the `format x scoring` capability model: the doubles league
 is `doubles x points`, so it carries no tag columns. `weekly_points`
 is computed from each committed placement when the UDisc import is committed;
 `weekly_points_status` is a retired column kept only for schema compatibility
 and is no longer read or written. Season totals are the live sum of the
 committed `weekly_points` values; the sum is mirrored into each `ClubMembers`
-row's `season_points` column at the end of every import commit, so the roster
+row's `season_points` and `season_earnings` columns at the end of every import
+commit, so the roster
 tab itself always holds current totals while the live sum stays the source of
 truth. There is no confirm/finalize step. Both the singles and doubles weekly
 headers are ordered human-first: names, then pair linkage and score/points
@@ -73,7 +75,8 @@ a mismatch is reported, never auto-corrected.
 `ClubMembers` tab, preserving each `member_number` exactly (members are never
 renumbered). Values are copied **by header name**, not by position, and
 `current_tag` is never copied: the doubles roster is tag-free, so a positional
-copy would shift every column after `pdga_number`. `season_points` has no
+copy would shift every column after `pdga_number`. `season_points` and
+`season_earnings` have no
 singles source, so it lands blank until the first points write. Members already
 present in the doubles roster are skipped, so the seed can run more than once
 without duplicating rows.
@@ -298,9 +301,9 @@ the production doubles league or the doubles POC league.
   the reload never replaces it with the load time; a brand-new member with no
   `joined` lands blank. `updated_at` keeps its existing meaning as the
   last-modification timestamp and is never repurposed as a join date.
-- `current_tag` is always blank (a points roster carries no tag), and
-  `season_points` is never written: a new row lands blank and an existing cache
-  is preserved.
+- `current_tag` is always blank (a points roster carries no tag), and the
+  derived caches (`season_points`, `season_earnings`) are never written: a new
+  row lands blank and an existing cache is preserved.
 - Weekly sheets and the `Week template` are never touched.
 - Re-sending the same payload is a true no-op (`inserted: 0`, `updated: 0`,
   `sheets_changed: 0`).

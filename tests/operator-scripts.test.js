@@ -108,7 +108,7 @@ function buildTaggedDoubles(h) {
   const week = doubles.insertSheet('Week 2026-10-05');
   week.appendRow(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
   doubles.insertSheet('ClubMembers').appendRow(
-    h.bound.CLUB_MEMBER_HEADERS.concat(['season_points'])
+    h.bound.CLUB_MEMBER_HEADERS.concat(['season_points', 'season_earnings'])
   );
   return { doubles, week };
 }
