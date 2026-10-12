@@ -12,6 +12,14 @@ const { REPO_ROOT } = require('./helpers/load-code');
 
 const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
 
+// Minimal escaping stub for executing renderSeasonStandings in isolation.
+const escHtmlForTest = (s) => String(s)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
 function functionBody(name) {
   const start = html.indexOf('function ' + name + '(');
   assert.notEqual(start, -1, 'expected function ' + name);
@@ -73,6 +81,9 @@ test('the points card renders a Season Standings table below the week results', 
   const render = functionBody('renderSeasonStandings');
   assert.match(render, />Season Standings<\/h3>/);
   assert.match(render, />Member<\/th>/);
+  // Place sits immediately after Member, mirroring Week Results' layout.
+  assert.match(render, />Member<\/th>[\s\S]*?>Place<\/th>/);
+  assert.match(render, />Place<\/th>[\s\S]*?>Season Points<\/th>/);
   assert.match(render, />Season Points<\/th>/);
   assert.match(render, />Earned<\/th>/);
   // Member names are escaped; points are bold like the results table.
@@ -83,6 +94,51 @@ test('the points card renders a Season Standings table below the week results', 
   assert.match(render, /toFixed\(2\)/);
   // An empty season renders a friendly empty state, not an empty table.
   assert.match(render, /No members with season points yet\./);
+
+  // Derived places: run the real render over both ranking scenarios so
+  // sequential row numbering (1,2,3,4,5) and distinct-score counting
+  // (1,2,2,3,4) both fail.
+  const renderStandings = new Function(
+    'document',
+    'escHtml',
+    render + '\nreturn renderSeasonStandings;'
+  );
+  const run = (standings) => {
+    const el = { innerHTML: '', style: {} };
+    renderStandings({ getElementById: () => el }, escHtmlForTest)({ standings });
+    return el.innerHTML;
+  };
+  const placesFrom = (tableHtml) => {
+    const places = [];
+    const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
+    let rowMatch;
+    while ((rowMatch = rowRe.exec(tableHtml)) !== null) {
+      const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/g;
+      const cells = [];
+      let cellMatch;
+      while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) cells.push(cellMatch[1]);
+      if (!cells.length) continue; // header row uses <th>
+      places.push(parseInt(cells[1].replace(/<[^>]*>/g, ''), 10));
+    }
+    return places;
+  };
+  const member = (name, n, pts) => ({ name, member_number: n, season_points: pts, season_earnings: 0 });
+
+  // Tied scores share a place and the next rank skips: 1, 2, 2, 4, 5.
+  assert.deepEqual(placesFrom(run([
+    member('A', 1, 2),
+    member('B', 2, 1.5),
+    member('C', 3, 1.5),
+    member('D', 4, 1),
+    member('E', 5, 0.5),
+  ])), [1, 2, 2, 4, 5]);
+  // No ties: plain 1, 2, 3, 4.
+  assert.deepEqual(placesFrom(run([
+    member('A', 1, 2),
+    member('B', 2, 1.5),
+    member('C', 3, 1),
+    member('D', 4, 0.5),
+  ])), [1, 2, 3, 4]);
 });
 
 test('the standings load with the points panel and refresh after a commit', () => {

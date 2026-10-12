@@ -3366,17 +3366,27 @@
       html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
       html += '<tr style="background:#f0f0f0;">';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Member</th>';
+      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Place</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Season Points</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Earned</th>';
       html += '</tr>';
+      // Standard competition ranking over the server's descending order:
+      // equal season points inherit the previous place, otherwise the row's
+      // one-based position is its place (so ranks skip after a tie).
+      var prevPoints;
+      var prevPlace = 0;
       for (var i = 0; i < standings.length; i++) {
         var row = standings[i];
         var points = (row.season_points === undefined || row.season_points === null || isNaN(row.season_points))
           ? 0
           : row.season_points;
+        var place = (points === prevPoints) ? prevPlace : i + 1;
+        prevPoints = points;
+        prevPlace = place;
         var earned = Number(row.season_earnings || 0);
         html += '<tr>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(row.name) + ' <span style="color:#888;">(#' + escHtml(String(row.member_number)) + ')</span></td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + place + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + points + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd;">$' + earned.toFixed(2) + '</td>';
         html += '</tr>';
