@@ -217,6 +217,26 @@ test('the Season Earned column toggle hides and shows header and cells', () => {
   assert.match(html, /getItem\('seasonStandingsShowEarned'\) !== '0'/);
 });
 
+test('the Season Earned toggle renders as a compact one-line checkbox on narrow screens', () => {
+  // The global input rule stretches every field to full width with padding
+  // and a bottom margin; on an iPhone SE that wraps the toggle into a
+  // full-width checkbox with the caption on its own line. The toggle opts
+  // out with a scoped class instead of changing the shared rule.
+  const render = functionBody('renderSeasonStandings');
+  assert.match(render, /<label class="earned-toggle">/);
+  assert.doesNotMatch(render, /label class="earned-toggle"[\s\S]*?display:block/);
+
+  // The class exists in the page stylesheet and overrides the global sizing
+  // for both the label and its checkbox.
+  assert.match(html, /<style>[^<]*label\.earned-toggle[^]*?<\/style>/);
+  assert.match(html, /label\.earned-toggle \{[^}]*display:\s*flex[^}]*align-items:\s*center[^}]*\}/);
+  assert.match(html, /label\.earned-toggle input\[type="checkbox"\] \{[^}]*width:\s*auto[^}]*padding:\s*0[^}]*margin:\s*0[^}]*\}/);
+
+  // With the global input rule in force, these overrides are what keep the
+  // checkbox and its caption on one aligned line at 375px and 320px.
+  assert.match(html, /input,\s*select \{[^}]*width:\s*100%/);
+});
+
 test('switching date or league clears the standings with the week results', () => {
   const clear = functionBody('clearStaleSectionData');
   assert.match(clear, /seasonStandings/);
