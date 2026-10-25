@@ -86,8 +86,14 @@ test('the points card renders a Season Standings table below the week results', 
   assert.match(render, />Place<\/th>[\s\S]*?>Season Points<\/th>/);
   assert.match(render, />Season Points<\/th>/);
   assert.match(render, />Earned<\/th>/);
-  // Member names are escaped; points are bold like the results table.
+  // Member names are escaped and never followed by the (#N) member number.
   assert.match(render, /escHtml\(row\.name\)/);
+  assert.doesNotMatch(render, /\(#/);
+  assert.doesNotMatch(render, /member_number/);
+  // A checkbox by the table toggles the Earned column.
+  assert.match(render, /type="checkbox"/);
+  assert.match(render, /onchange="toggleSeasonStandingsEarned\(this\.checked\)"/);
+  assert.match(render, /toggleSeasonStandingsEarned/);
   assert.match(render, /font-weight:bold/);
   // Earnings render as $X.XX and default to 0 rather than NaN.
   assert.match(render, /row\.season_earnings \|\| 0/);
@@ -101,11 +107,13 @@ test('the points card renders a Season Standings table below the week results', 
   const renderStandings = new Function(
     'document',
     'escHtml',
+    'seasonStandingsShowEarned',
+    'seasonStandingsLastData',
     render + '\nreturn renderSeasonStandings;'
   );
-  const run = (standings) => {
+  const run = (standings, showEarned = true) => {
     const el = { innerHTML: '', style: {} };
-    renderStandings({ getElementById: () => el }, escHtmlForTest)({ standings });
+    renderStandings({ getElementById: () => el }, escHtmlForTest, showEarned, null)({ standings });
     return el.innerHTML;
   };
   const placesFrom = (tableHtml) => {
@@ -155,6 +163,58 @@ test('the standings load with the points panel and refresh after a commit', () =
   // A commit refreshes the points panel, which refreshes the standings.
   const commit = functionBody('commitUdiscImportDoubles');
   assert.match(commit, /refreshPointsPanel\(\)/);
+});
+
+test('the Season Earned column toggle hides and shows header and cells', () => {
+  const render = functionBody('renderSeasonStandings');
+  const toggle = functionBody('toggleSeasonStandingsEarned');
+
+  const renderStandings = new Function(
+    'document',
+    'escHtml',
+    'seasonStandingsShowEarned',
+    'seasonStandingsLastData',
+    render + '\nreturn renderSeasonStandings;'
+  );
+  const run = (standings, showEarned) => {
+    const el = { innerHTML: '', style: {} };
+    renderStandings({ getElementById: () => el }, escHtmlForTest, showEarned, null)({ standings });
+    return el.innerHTML;
+  };
+  const standings = [
+    { name: 'Ada', member_number: 7, season_points: 3, season_earnings: 12.5 },
+    { name: 'Bo', member_number: 8, season_points: 1, season_earnings: 0 },
+  ];
+
+  // Default (shown): the Earned header and both dollar cells are present,
+  // and the checkbox renders checked. The member number never renders.
+  const shown = run(standings, true);
+  assert.match(shown, />Earned<\/th>/);
+  assert.match(shown, />\$12\.50<\/td>/);
+  assert.match(shown, />\$0\.00<\/td>/);
+  assert.match(shown, /type="checkbox" checked/);
+  assert.doesNotMatch(shown, /\(#/);
+
+  // Hidden: the header, the cells, and the checked state are all gone while
+  // the Member, Place, and Season Points columns stay.
+  const hidden = run(standings, false);
+  assert.doesNotMatch(hidden, />Earned<\/th>/);
+  assert.doesNotMatch(hidden, /\$12\.50/);
+  assert.doesNotMatch(hidden, />\$0\.00</);
+  assert.doesNotMatch(hidden, /type="checkbox" checked/);
+  assert.match(hidden, />Member<\/th>/);
+  assert.match(hidden, />Place<\/th>/);
+  assert.match(hidden, />Season Points<\/th>/);
+  assert.match(hidden, />Ada<\/td>/);
+
+  // The toggle handler records the choice, remembers it, and re-renders
+  // from the last payload so the change is visible immediately.
+  assert.match(toggle, /seasonStandingsShowEarned = !!show/);
+  assert.match(toggle, /localStorage\.setItem\('seasonStandingsShowEarned'/);
+  assert.match(toggle, /renderSeasonStandings\(seasonStandingsLastData\)/);
+
+  // A fresh browser defaults to shown: only a stored '0' hides the column.
+  assert.match(html, /getItem\('seasonStandingsShowEarned'\) !== '0'/);
 });
 
 test('switching date or league clears the standings with the week results', () => {

@@ -3320,6 +3320,16 @@
     // double-count. Earnings follow the same even split as points: partners
     // share equally and a solo takes the full per-player amount.
 
+    // The Earned column toggle: shown by default, remembered per browser in
+    // localStorage, and honoured by every re-render of the table.
+    var seasonStandingsShowEarned = (function () {
+      try { return window.localStorage.getItem('seasonStandingsShowEarned') !== '0'; }
+      catch (err) { return true; }
+    })();
+    // The last rendered payload, so toggling the column re-renders the table
+    // immediately instead of refetching.
+    var seasonStandingsLastData = null;
+
     // Season standings are season-wide, but they live in the Points Results
     // card and load with it, so they are always at least as fresh as the week
     // results above them. Returns the standings payload or null.
@@ -3354,6 +3364,9 @@
       var el = document.getElementById('seasonStandings');
       if (!el) return;
       var standings = data.standings || [];
+      // Default to showing the Earned column when no stored choice exists.
+      var showEarned = (typeof seasonStandingsShowEarned === 'undefined') ? true : seasonStandingsShowEarned;
+      seasonStandingsLastData = data;
 
       var html = '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Season Standings</h3>';
       if (!standings.length) {
@@ -3363,12 +3376,18 @@
         return;
       }
 
+      html += '<label style="display:block; font-size:0.875rem; color:#555; margin-bottom:0.5rem;">' +
+        '<input type="checkbox"' + (showEarned ? ' checked' : '') +
+        ' onchange="toggleSeasonStandingsEarned(this.checked)"> Show Earned column</label>';
+
       html += '<table style="width:100%; border-collapse:collapse; font-size:0.875rem; margin-bottom:1rem;">';
       html += '<tr style="background:#f0f0f0;">';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Member</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Place</th>';
       html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Season Points</th>';
-      html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Earned</th>';
+      if (showEarned) {
+        html += '<th style="padding:0.5rem; text-align:left; border:1px solid #ddd;">Earned</th>';
+      }
       html += '</tr>';
       // Standard competition ranking over the server's descending order:
       // equal season points inherit the previous place, otherwise the row's
@@ -3383,18 +3402,30 @@
         var place = (points === prevPoints) ? prevPlace : i + 1;
         prevPoints = points;
         prevPlace = place;
-        var earned = Number(row.season_earnings || 0);
         html += '<tr>';
-        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(row.name) + ' <span style="color:#888;">(#' + escHtml(String(row.member_number)) + ')</span></td>';
+        html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + escHtml(row.name) + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd;">' + place + '</td>';
         html += '<td style="padding:0.5rem; border:1px solid #ddd; font-weight:bold;">' + points + '</td>';
-        html += '<td style="padding:0.5rem; border:1px solid #ddd;">$' + earned.toFixed(2) + '</td>';
+        if (showEarned) {
+          var earned = Number(row.season_earnings || 0);
+          html += '<td style="padding:0.5rem; border:1px solid #ddd;">$' + earned.toFixed(2) + '</td>';
+        }
         html += '</tr>';
       }
       html += '</table>';
 
       el.innerHTML = html;
       el.style.display = '';
+    }
+
+    // Show or hide the Earned column: remember the choice per browser and
+    // re-render the table from the last payload so the state stays in sync.
+    function toggleSeasonStandingsEarned(show) {
+      seasonStandingsShowEarned = !!show;
+      try {
+        window.localStorage.setItem('seasonStandingsShowEarned', show ? '1' : '0');
+      } catch (err) { /* private mode: the choice just lasts this session */ }
+      if (seasonStandingsLastData) renderSeasonStandings(seasonStandingsLastData);
     }
 
     // ─── Week View (read-only) ────────────────────────────────────────────
