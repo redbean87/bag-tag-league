@@ -312,15 +312,35 @@ test('the admin banners a stored format/scoring that disagrees with the registry
   assert.match(mismatch, /settings\.league_format !== rules\.format/);
   assert.match(mismatch, /settings\.scoring !== rules\.scoring/);
 
-  // The settings renderer is shared by the legacy loader and the combined
-  // boot request, so the banner is applied by the applier both call.
+  // The settings renderer is shared by the boot loader and refreshes, so the
+  // banner is applied by the applier loadLeagueSettings calls.
   const apply = functionBody(html, 'applyLeagueSettingsResponse');
   assert.match(apply, /applyLeagueSettingsMismatch\(s\)/);
 
   const load = functionBody(html, 'loadLeagueSettings');
   assert.match(load, /applyLeagueSettingsResponse\(await response\.json\(\)\)/);
+});
 
-  const boot = functionBody(html, 'loadBootState');
-  assert.match(boot, /action: 'getBootState'/);
-  assert.match(boot, /applyLeagueSettingsResponse\(/);
+test('the admin boot fires getLeagueSettings and getWeeklyTabs concurrently', () => {
+  const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'admin', 'index.html'), 'utf8');
+
+  // Boot issues the two legacy reads back-to-back with no await between them,
+  // so both Apps Script executions run in parallel and first-screen
+  // data-ready waits for the slower one instead of their sum.
+  const init = functionBody(html, 'init');
+  assert.match(init, /loadLeagueSettings\(\);\s*loadWeeklyTabs\(\);/);
+  assert.doesNotMatch(init, /await loadLeagueSettings|await loadWeeklyTabs/);
+
+  // The combined getBootState request is no longer part of the boot path.
+  assert.doesNotMatch(html, /loadBootState/);
+  assert.doesNotMatch(html, /action: 'getBootState'/);
+
+  // Each loader still sends its own legacy action and applies its own result.
+  const settings = functionBody(html, 'loadLeagueSettings');
+  assert.match(settings, /action: 'getLeagueSettings'/);
+  assert.match(settings, /applyLeagueSettingsResponse\(await response\.json\(\)\)/);
+
+  const tabs = functionBody(html, 'loadWeeklyTabs');
+  assert.match(tabs, /action: 'getWeeklyTabs'/);
+  assert.match(tabs, /applyWeeklyTabsResponse\(await response\.json\(\)\)/);
 });

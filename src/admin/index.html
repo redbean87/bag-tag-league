@@ -1842,8 +1842,9 @@
       el.innerHTML = html;
     }
 
-    // Applies a settings payload from either the legacy getLeagueSettings
-    // response or the `settings` component of getBootState.
+    // Applies a settings payload from the getLeagueSettings response. The
+    // boot path issues getLeagueSettings and getWeeklyTabs concurrently so
+    // first-screen data-ready waits on the slower one, not their sum.
     function applyLeagueSettingsResponse(data) {
       if (data.status !== 'ok') {
         setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueMissingResult');
@@ -2009,8 +2010,7 @@
       }
     }
 
-    // Applies a weekly-tabs payload from either the legacy getWeeklyTabs
-    // response or the `weekly_tabs` component of getBootState.
+    // Applies a weekly-tabs payload from the getWeeklyTabs response.
     function applyWeeklyTabsResponse(data) {
       if (data.status !== 'ok') {
         log('ERROR loading weekly tabs: ' + data.message);
@@ -2032,36 +2032,6 @@
         applyWeeklyTabsResponse(await response.json());
       } catch (err) {
         log('FAILED to load weekly tabs: ' + err.message);
-      }
-    }
-
-    // One boot request: settings and weekly tabs arrive from a single Apps
-    // Script execution. Each component carries its own status, so a failure in
-    // one still applies the other exactly as the two separate calls did.
-    async function loadBootState() {
-      try {
-        var response = await fetch(API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ action: 'getBootState', spreadsheetId: getSpreadsheetId() })
-        });
-        var data = await response.json();
-
-        if (data.status !== 'ok') {
-          setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueMissingResult');
-          log('ERROR loading boot state: ' + data.message);
-          return;
-        }
-
-        applyLeagueSettingsResponse(
-          data.settings || { status: 'error', message: 'No league settings returned.' }
-        );
-        applyWeeklyTabsResponse(
-          data.weekly_tabs || { status: 'error', message: 'No weekly tabs returned.' }
-        );
-      } catch (err) {
-        setLeagueStatus('error', '<strong>Request failed:</strong> ' + err.message, 'leagueMissingResult');
-        log('FAILED to load boot state: ' + err.message);
       }
     }
 
@@ -3664,7 +3634,10 @@
       populateLeaguePicker();
       applyLeague(getLeagueId());
       log('Admin page loaded');
-      loadBootState();
+      // Fire both boot reads together: two concurrent Apps Script executions
+      // make data-ready wait for the slower one instead of their sum.
+      loadLeagueSettings();
+      loadWeeklyTabs();
     })();
   </script>
 </body>
