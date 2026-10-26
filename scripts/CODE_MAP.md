@@ -20,9 +20,9 @@ Regenerate with `node scripts/gen-code-map.js` after any edit to `scripts/Code.g
 2026-2364    Weekly column-order migration
 2366-2608    Detag column-drop migration
 2610-2817    Test-data reset
-4331-4856  Doubles import preview (read-only)
-4857-6563  Commit helpers shared by the singles and doubles import commit paths
-6564-7205  Doubles points: compute-at-commit + live results
+4404-4929  Doubles import preview (read-only)
+4930-6636  Commit helpers shared by the singles and doubles import commit paths
+6637-7287  Doubles points: compute-at-commit + live results
 ```
 
 ## Contents
@@ -123,86 +123,90 @@ Regenerate with `node scripts/gen-code-map.js` after any edit to `scripts/Code.g
 2728-2763  function resetTestData(spreadsheet, options) - Guarded test-data reset.
 2765-2815  function handleResetTestData(data) - Web-app action: preview or apply the guarded test-data reset.
 2821-2835  function doGet(e) - Handles GET requests.
-2837-2943  function doPost(e) - Handles POST requests.
-2945-2958  function handleGetClubMembersStatus(data) - Returns whether the ClubMembers sheet exists.
-2960-3011  function handleCreateClubMembersTab(data) - Creates the ClubMembers tab if it does not already exist.
-3013-3075  function handleCreateWeeklyTab(data) - Creates a new weekly tab in the spreadsheet for the given league date.
-3077-3154  function handleSearchClubMembers(data) - Searches active club members by name, udisc_username, or pdga_number.
-3156-3225  function handleListClubMembers(data) - Lists club members for the selected league.
-3227-3475  function handleSubmitCheckIn(data) - Submits a player check-in.
-3477-3516  function handleCreateLeagueSheet(data) - Creates the League sheet if it does not already exist.
-3518-3572  function handleGetLeagueSettings(data) - Reads the League settings from the League sheet.
-3574-3600  function handleGetCheckInOptions(data) - Returns the money options a league offers at check-in plus its plain-language money explanation.
-3602-3746  function handleSaveLeagueSettings(data) - Saves or updates League settings on the League sheet.
-3748-3777  function handleGetWeeklyTabs(data) - Returns a list of existing weekly league tabs.
-3779-3836  function handleGetWeekView(data) - Admin action: read-only dump of one week tab.
-3838-3955  function handleGetPreRoundReview(data) - Loads pre-round review data for a specific league date.
-3957-4080  function handleSavePreRoundReview(data) - Saves pre-round review overrides to the League sheet.
-4082-4329  function handlePreviewUdiscImport(data) - Previews a UDisc import against the selected weekly sheet.
-4339-4378  function parseDoublesHandles(rawValue) - Splits the UDisc doubles handle cell into individual handles.
-4380-4417  function parseDoublesPairName(rawValue) - Splits a UDisc doubles `name` cell into partner display names.
-4419-4473  function parseDoublesRow(udiscRow) - Parses one UDisc doubles row into independent partner identity objects.
-4475-4487  function uniqueStrings(list) - Returns the input list with duplicates removed, preserving first-seen order.
-4489-4504  function normalizeDoublesIdentityToken(partner) - Normalizes one doubles partner to a single canonical identity token for the pair key.
-4506-4531  function computeDoublesPairKey(parsed, leagueDate) - Computes the ratified doubles pair key: a date-scoped, order-independent key built from the t...
-4533-4545  function emptyDoublesMatch() - Builds the match-result skeleton shared by every matching path.
-4547-4557  function weeklyDoublesMatch(entry, source, indexes)
-4559-4570  function clubDoublesMatch(memberNumber, source, indexes)
-4572-4643  function matchDoublesPartner(partner, indexes) - Matches a single doubles partner through the existing identity chain: weekly username -> week...
-4645-4667  function computeDoublesPairVerdict(parsed, partners) - Computes the pair-level verdict from the parsed row plus each partner's independent match.
-4669-4690  function buildDoublesRoster(clubData, headers) - Builds the active-roster override list returned to the admin UI.
-4692-4855  function handlePreviewUdiscImportDoubles(data) - Previews a UDisc doubles export against the selected weekly sheet.
-4859-4924  function buildWeeklyMatchIndexes(weeklyData, headers) - Builds the weekly identity indexes used to re-match imported rows at commit time.
-4926-4983  function buildClubMatchIndexes(clubData, headers) - Builds the active ClubMembers indexes used to re-match imported identity (username then PDGA,...
-4985-5015  function scopeWeeklyIndexes(indexes, pairKey, isSolo) - Restricts the weekly indexes to the rows a doubles partner may match: keyless (solo) rows plu...
-5017-5034  function buildDoublesMatchIndexes(scoped, clubIndexes, weeklyIndexes) - Shapes the scoped weekly indexes plus the full club indexes into the object `matchDoublesPart...
-5036-5045  function doublesSameScope(existingPairKey, pairKey, isSolo) - True when an existing weekly row belongs to this row's pair scope.
-5047-5073  function verifyDoublesOverride(partner, matchIndexes, weeklyIndexes, pairKey, isSolo) - Verifies an admin-supplied partner override.
-5075-5083  function doublesPartnerPath(match) - Maps a resolved partner match onto a commit path.
-5085-5118  function buildCommitImportFields(udiscRow) - Builds the UDisc import fields for a weekly row exactly as the singles committer writes them...
-5120-5138  function buildDoublesImportFields(udiscRow, partner, rules) - Builds the import fields for one doubles partner row.
-5140-5176  function expectedWeeklyImportColumns(format, scoring) - Every weekly column the UDisc import mapping writes.
-5178-5186  function missingWeeklyImportColumns(headers, format, scoring) - Returns the expected import columns missing from a weekly header row.
-5188-5201  function weeklyImportColumnsGuard(headers, format, scoring) - Loud commit gate: every column the import mapping writes must exist on the target week tab.
-5203-5209  function applyFieldsByName(target, headers, fields) - Writes a { header: value } map onto a row array by header index.
-5211-5235  function buildNewWeeklyRecord(headers, identity, importFields, pairFields, now) - Builds a full new weekly row using the league's capability-derived weekly record schema with...
-5237-5247  function updateWeeklyImportRow(sheet, rowIndex, headers, fields, now) - Updates an existing weekly row in place from the current row contents so protected fields (me...
-5249-5297  function createClubMemberUnderLock(clubSheet, clubHeaders, identity, now) - Creates a ClubMembers row for a new identity.
-5299-5321  function normalizeDoublesOverrides(overrides, rowIndex) - Normalizes the per-row admin override payload into { partner_index: member_number }.
-5323-5354  function buildDoublesPairFields(headers, udiscRow, memberNumber, pairKey, isSolo, rules) - Builds the doubles-only columns written onto one partner's weekly row.
-5356-5366  function findWeeklyIdentity(indexes, partner) - Finds the first weekly entry whose identity matches a partner's.
-5368-5426  function detectDoublesConflict(plan, pairKey, isSolo, scopeKey, weeklyIndexes, memberToPairKey, includeIdentityChange) - Detects commit-only conflicts for a ready doubles row against authoritative server state.
-5428-5454  function buildDoublesPartnerOutcomes(plan, parsed) - Partner outcomes for one doubles row, from either a resolved plan or matches.
-5456-5468  function buildDoublesRowResult(rowIndex, parsed, pairKey, isSolo, status, reason, plan) - Builds one per-row doubles commit outcome.
-5470-5479  function compensateAppendedWeeklyRows(appended) - Best-effort compensating delete of weekly rows appended for a failed pair.
-5481-5492  function compensateAppendedMembers(clubSheet, appendedMembers) - Best-effort compensating delete of ClubMembers rows created for a failed pair.
-5494-5640  function commitDoublesPairUnderLock(context) - Executes the member phase and weekly phase for one ready doubles row while the caller holds t...
-5642-5873  function handleCommitUdiscImportDoubles(data) - Commits an approved UDisc doubles import to the selected weekly sheet.
-5875-6114  function handleCommitUdiscImport(data) - Commits an approved UDisc import to the selected weekly sheet.
-6116-6142  function buildFieldsToImport(udiscRow) - Builds the fields_to_import object from a UDisc row.
-6144-6166  function buildMatchEntry(udiscRow, weeklyRow, matchMethod) - Builds a matched entry object for the preview response.
-6168-6309  function handleCalculateTags(data) - Calculates tag assignments for a weekly league.
-6311-6432  function handleConfirmTags(data) - Confirms and writes tag assignments for a weekly league.
-6434-6562  function handleFinalizeRound(data) - Finalizes a round by propagating out_tag values from the weekly sheet to each matching ClubMe...
-6578-6594  function doublesPointsForPosition(positionRaw, rules) - Pure scoring rule for a points league: a placement found in the league's points table earns i...
-6596-6599  function roundCurrency(amount) - Rounds a dollar amount to cents so float drift never reaches the UI.
-6601-6683  function applyWeeklyPayout(pairs, playerCount, rules) - Applies the weekly pool rule to the grouped teams and returns the payout summary.
-6685-6743  function buildDoublesPointsPlan(weeklyData, headers, rules) - Builds the read-only per-row results view for one doubles week tab.
-6745-6771  function readDoublesPointsTab(spreadsheet, leagueDate, rules) - Opens and validates the doubles weekly results tab for a league date.
-6773-6784  function validateDoublesPointsRequest(data) - Validates the shared points request shape (points gate + league_date).
-6786-6801  function pointsRowResponse(row) - Public shape of one row in the read-only points results view.
-6803-6809  function pointsSummary(rows)
-6811-6864  function groupDoublesPointsPairs(rows) - Groups results rows by pair_key for the results table.
-6866-6902  function handleCalculatePoints(data) - Admin action: read the committed doubles results for one week.
-6904-6975  function handleSeasonStandings(data) - Admin action: the season standings — every member with positive live season points, plus thei...
-6977-7010  function handleSyncSeasonCaches(data) - Maintenance action: recompute both doubles season caches (season_points and season_earnings)...
-7012-7040  function sumSeasonPointsByMember(spreadsheet) - Sums each member's committed weekly points across every Week tab.
-7042-7084  function sumSeasonEarningsByMember(spreadsheet, rules) - Sums each member's season earnings across every Week tab.
-7086-7105  function ensureClubSeasonColumn(clubSheet, header) - Ensures a doubles ClubMembers roster carries the given cache column, appending the header aft...
-7107-7114  function ensureSeasonPointsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_points` cache column.
-7116-7123  function ensureSeasonEarningsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_earnings` cache column.
-7125-7168  function syncClubSeasonColumn(spreadsheet, header, totals) - Recomputes one doubles ClubMembers cache column from the committed weekly data and persists i...
-7170-7179  function syncDoublesSeasonPoints(spreadsheet) - Recomputes the doubles ClubMembers `season_points` cache from the committed weekly_points.
-7181-7191  function syncDoublesSeasonEarnings(spreadsheet, rules) - Recomputes the doubles ClubMembers `season_earnings` cache from the re-derived weekly payouts.
-7193-7206  function respond(status, message, extra) - Builds and returns a JSON response.
+2837-2946  function doPost(e) - Handles POST requests.
+2948-2961  function handleGetClubMembersStatus(data) - Returns whether the ClubMembers sheet exists.
+2963-3014  function handleCreateClubMembersTab(data) - Creates the ClubMembers tab if it does not already exist.
+3016-3078  function handleCreateWeeklyTab(data) - Creates a new weekly tab in the spreadsheet for the given league date.
+3080-3157  function handleSearchClubMembers(data) - Searches active club members by name, udisc_username, or pdga_number.
+3159-3228  function handleListClubMembers(data) - Lists club members for the selected league.
+3230-3478  function handleSubmitCheckIn(data) - Submits a player check-in.
+3480-3519  function handleCreateLeagueSheet(data) - Creates the League sheet if it does not already exist.
+3521-3576  function buildLeagueSettingsResponse(spreadsheet, selector) - Builds the read-only League settings result for a spreadsheet that is already open.
+3578-3590  function handleGetLeagueSettings(data) - Reads the League settings from the League sheet.
+3592-3618  function handleGetCheckInOptions(data) - Returns the money options a league offers at check-in plus its plain-language money explanation.
+3620-3764  function handleSaveLeagueSettings(data) - Saves or updates League settings on the League sheet.
+3766-3793  function buildWeeklyTabsResponse(spreadsheet) - Builds the weekly-tab list for a spreadsheet that is already open.
+3795-3804  function handleGetWeeklyTabs(data) - Returns a list of existing weekly league tabs.
+3806-3850  function handleGetBootState(data) - Admin boot action: the two reads the admin page performs on every load (the League settings r...
+3852-3909  function handleGetWeekView(data) - Admin action: read-only dump of one week tab.
+3911-4028  function handleGetPreRoundReview(data) - Loads pre-round review data for a specific league date.
+4030-4153  function handleSavePreRoundReview(data) - Saves pre-round review overrides to the League sheet.
+4155-4402  function handlePreviewUdiscImport(data) - Previews a UDisc import against the selected weekly sheet.
+4412-4451  function parseDoublesHandles(rawValue) - Splits the UDisc doubles handle cell into individual handles.
+4453-4490  function parseDoublesPairName(rawValue) - Splits a UDisc doubles `name` cell into partner display names.
+4492-4546  function parseDoublesRow(udiscRow) - Parses one UDisc doubles row into independent partner identity objects.
+4548-4560  function uniqueStrings(list) - Returns the input list with duplicates removed, preserving first-seen order.
+4562-4577  function normalizeDoublesIdentityToken(partner) - Normalizes one doubles partner to a single canonical identity token for the pair key.
+4579-4604  function computeDoublesPairKey(parsed, leagueDate) - Computes the ratified doubles pair key: a date-scoped, order-independent key built from the t...
+4606-4618  function emptyDoublesMatch() - Builds the match-result skeleton shared by every matching path.
+4620-4630  function weeklyDoublesMatch(entry, source, indexes)
+4632-4643  function clubDoublesMatch(memberNumber, source, indexes)
+4645-4716  function matchDoublesPartner(partner, indexes) - Matches a single doubles partner through the existing identity chain: weekly username -> week...
+4718-4740  function computeDoublesPairVerdict(parsed, partners) - Computes the pair-level verdict from the parsed row plus each partner's independent match.
+4742-4763  function buildDoublesRoster(clubData, headers) - Builds the active-roster override list returned to the admin UI.
+4765-4928  function handlePreviewUdiscImportDoubles(data) - Previews a UDisc doubles export against the selected weekly sheet.
+4932-4997  function buildWeeklyMatchIndexes(weeklyData, headers) - Builds the weekly identity indexes used to re-match imported rows at commit time.
+4999-5056  function buildClubMatchIndexes(clubData, headers) - Builds the active ClubMembers indexes used to re-match imported identity (username then PDGA,...
+5058-5088  function scopeWeeklyIndexes(indexes, pairKey, isSolo) - Restricts the weekly indexes to the rows a doubles partner may match: keyless (solo) rows plu...
+5090-5107  function buildDoublesMatchIndexes(scoped, clubIndexes, weeklyIndexes) - Shapes the scoped weekly indexes plus the full club indexes into the object `matchDoublesPart...
+5109-5118  function doublesSameScope(existingPairKey, pairKey, isSolo) - True when an existing weekly row belongs to this row's pair scope.
+5120-5146  function verifyDoublesOverride(partner, matchIndexes, weeklyIndexes, pairKey, isSolo) - Verifies an admin-supplied partner override.
+5148-5156  function doublesPartnerPath(match) - Maps a resolved partner match onto a commit path.
+5158-5191  function buildCommitImportFields(udiscRow) - Builds the UDisc import fields for a weekly row exactly as the singles committer writes them...
+5193-5211  function buildDoublesImportFields(udiscRow, partner, rules) - Builds the import fields for one doubles partner row.
+5213-5249  function expectedWeeklyImportColumns(format, scoring) - Every weekly column the UDisc import mapping writes.
+5251-5259  function missingWeeklyImportColumns(headers, format, scoring) - Returns the expected import columns missing from a weekly header row.
+5261-5274  function weeklyImportColumnsGuard(headers, format, scoring) - Loud commit gate: every column the import mapping writes must exist on the target week tab.
+5276-5282  function applyFieldsByName(target, headers, fields) - Writes a { header: value } map onto a row array by header index.
+5284-5308  function buildNewWeeklyRecord(headers, identity, importFields, pairFields, now) - Builds a full new weekly row using the league's capability-derived weekly record schema with...
+5310-5320  function updateWeeklyImportRow(sheet, rowIndex, headers, fields, now) - Updates an existing weekly row in place from the current row contents so protected fields (me...
+5322-5370  function createClubMemberUnderLock(clubSheet, clubHeaders, identity, now) - Creates a ClubMembers row for a new identity.
+5372-5394  function normalizeDoublesOverrides(overrides, rowIndex) - Normalizes the per-row admin override payload into { partner_index: member_number }.
+5396-5427  function buildDoublesPairFields(headers, udiscRow, memberNumber, pairKey, isSolo, rules) - Builds the doubles-only columns written onto one partner's weekly row.
+5429-5439  function findWeeklyIdentity(indexes, partner) - Finds the first weekly entry whose identity matches a partner's.
+5441-5499  function detectDoublesConflict(plan, pairKey, isSolo, scopeKey, weeklyIndexes, memberToPairKey, includeIdentityChange) - Detects commit-only conflicts for a ready doubles row against authoritative server state.
+5501-5527  function buildDoublesPartnerOutcomes(plan, parsed) - Partner outcomes for one doubles row, from either a resolved plan or matches.
+5529-5541  function buildDoublesRowResult(rowIndex, parsed, pairKey, isSolo, status, reason, plan) - Builds one per-row doubles commit outcome.
+5543-5552  function compensateAppendedWeeklyRows(appended) - Best-effort compensating delete of weekly rows appended for a failed pair.
+5554-5565  function compensateAppendedMembers(clubSheet, appendedMembers) - Best-effort compensating delete of ClubMembers rows created for a failed pair.
+5567-5713  function commitDoublesPairUnderLock(context) - Executes the member phase and weekly phase for one ready doubles row while the caller holds t...
+5715-5946  function handleCommitUdiscImportDoubles(data) - Commits an approved UDisc doubles import to the selected weekly sheet.
+5948-6187  function handleCommitUdiscImport(data) - Commits an approved UDisc import to the selected weekly sheet.
+6189-6215  function buildFieldsToImport(udiscRow) - Builds the fields_to_import object from a UDisc row.
+6217-6239  function buildMatchEntry(udiscRow, weeklyRow, matchMethod) - Builds a matched entry object for the preview response.
+6241-6382  function handleCalculateTags(data) - Calculates tag assignments for a weekly league.
+6384-6505  function handleConfirmTags(data) - Confirms and writes tag assignments for a weekly league.
+6507-6635  function handleFinalizeRound(data) - Finalizes a round by propagating out_tag values from the weekly sheet to each matching ClubMe...
+6651-6667  function doublesPointsForPosition(positionRaw, rules) - Pure scoring rule for a points league: a placement found in the league's points table earns i...
+6669-6672  function roundCurrency(amount) - Rounds a dollar amount to cents so float drift never reaches the UI.
+6674-6756  function applyWeeklyPayout(pairs, playerCount, rules) - Applies the weekly pool rule to the grouped teams and returns the payout summary.
+6758-6816  function buildDoublesPointsPlan(weeklyData, headers, rules) - Builds the read-only per-row results view for one doubles week tab.
+6818-6844  function readDoublesPointsTab(spreadsheet, leagueDate, rules) - Opens and validates the doubles weekly results tab for a league date.
+6846-6857  function validateDoublesPointsRequest(data) - Validates the shared points request shape (points gate + league_date).
+6859-6874  function pointsRowResponse(row) - Public shape of one row in the read-only points results view.
+6876-6882  function pointsSummary(rows)
+6884-6937  function groupDoublesPointsPairs(rows) - Groups results rows by pair_key for the results table.
+6939-6975  function handleCalculatePoints(data) - Admin action: read the committed doubles results for one week.
+6977-7051  function handleSeasonStandings(data) - Admin action: the season standings — every member with positive live season points, plus thei...
+7053-7086  function handleSyncSeasonCaches(data) - Maintenance action: recompute both doubles season caches (season_points and season_earnings)...
+7088-7148  function sumSeasonTotalsByMember(spreadsheet, rules) - Aggregates every doubles season total in one traversal of the season's Week tabs.
+7150-7157  function sumSeasonPointsByMember(spreadsheet) - Sums each member's committed weekly points across every Week tab.
+7159-7166  function sumSeasonEarningsByMember(spreadsheet, rules) - Sums each member's season earnings across every Week tab.
+7168-7187  function ensureClubSeasonColumn(clubSheet, header) - Ensures a doubles ClubMembers roster carries the given cache column, appending the header aft...
+7189-7196  function ensureSeasonPointsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_points` cache column.
+7198-7205  function ensureSeasonEarningsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_earnings` cache column.
+7207-7250  function syncClubSeasonColumn(spreadsheet, header, totals) - Recomputes one doubles ClubMembers cache column from the committed weekly data and persists i...
+7252-7261  function syncDoublesSeasonPoints(spreadsheet) - Recomputes the doubles ClubMembers `season_points` cache from the committed weekly_points.
+7263-7273  function syncDoublesSeasonEarnings(spreadsheet, rules) - Recomputes the doubles ClubMembers `season_earnings` cache from the re-derived weekly payouts.
+7275-7288  function respond(status, message, extra) - Builds and returns a JSON response.
 ```
