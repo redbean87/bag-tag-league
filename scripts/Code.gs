@@ -2874,6 +2874,9 @@ function doPost(e) {
     if (data.action === 'getWeeklyTabs') {
       return handleGetWeeklyTabs(data);
     }
+    if (data.action === 'getBootState') {
+      return handleGetBootState(data);
+    }
     if (data.action === 'getWeekView') {
       return handleGetWeekView(data);
     }
@@ -3516,15 +3519,17 @@ function handleCreateLeagueSheet(data) {
 }
 
 /**
- * Reads the League settings from the League sheet.
- * Returns the current state with a status field indicating:
+ * Builds the read-only League settings result for a spreadsheet that is
+ * already open. Returns { message, payload } so the legacy getLeagueSettings
+ * action and the combined boot-state action can share one read while each
+ * keeps its exact response contract.
+ *
+ * The payload's `state` field indicates:
  *   - "missing" if the League sheet does not exist
  *   - "empty" if the sheet exists but has no settings row
  *   - "ok" if the sheet exists and contains settings
  */
-function handleGetLeagueSettings(data) {
-  const selector = leagueSelectorFrom(data);
-  const spreadsheet = resolveSpreadsheet(selector);
+function buildLeagueSettingsResponse(spreadsheet, selector) {
   const sheet = spreadsheet.getSheetByName('League');
 
   // The weekly column count is derived from the same header builder the sheet
@@ -3534,19 +3539,19 @@ function handleGetLeagueSettings(data) {
   const weeklyColumns = getWeeklyRecordHeaders(rules.format, rules.scoring).length;
 
   if (!sheet) {
-    return respond('ok', 'League sheet not found.', {
-      state: 'missing',
-      weekly_columns: weeklyColumns
-    });
+    return {
+      message: 'League sheet not found.',
+      payload: { state: 'missing', weekly_columns: weeklyColumns }
+    };
   }
 
   const allData = sheet.getDataRange().getValues();
 
   if (allData.length < 2) {
-    return respond('ok', 'League sheet exists but has no settings.', {
-      state: 'empty',
-      weekly_columns: weeklyColumns
-    });
+    return {
+      message: 'League sheet exists but has no settings.',
+      payload: { state: 'empty', weekly_columns: weeklyColumns }
+    };
   }
 
   const headers = allData[0];
@@ -3564,11 +3569,24 @@ function handleGetLeagueSettings(data) {
   // admin form the pool fields it was carried into so a plain save keeps them.
   const migratedSettings = settingsWithMigratedPayout(settings);
 
-  return respond('ok', 'League settings loaded.', {
-    state: 'ok',
-    settings: migratedSettings,
-    weekly_columns: weeklyColumns
-  });
+  return {
+    message: 'League settings loaded.',
+    payload: { state: 'ok', settings: migratedSettings, weekly_columns: weeklyColumns }
+  };
+}
+
+/**
+ * Reads the League settings from the League sheet.
+ * Returns the current state with a status field indicating:
+ *   - "missing" if the League sheet does not exist
+ *   - "empty" if the sheet exists but has no settings row
+ *   - "ok" if the sheet exists and contains settings
+ */
+function handleGetLeagueSettings(data) {
+  const selector = leagueSelectorFrom(data);
+  const spreadsheet = resolveSpreadsheet(selector);
+  const built = buildLeagueSettingsResponse(spreadsheet, selector);
+  return respond('ok', built.message, built.payload);
 }
 
 /**
@@ -3746,12 +3764,12 @@ function handleSaveLeagueSettings(data) {
 }
 
 /**
- * Returns a list of existing weekly league tabs.
- * Scans sheet names for the pattern "Week YYYY-MM-DD" and returns them sorted
- * by date descending (most recent first).
+ * Builds the weekly-tab list for a spreadsheet that is already open. Scans
+ * sheet names for the pattern "Week YYYY-MM-DD" and returns them sorted by
+ * date descending (most recent first). Returns { message, payload } so the
+ * legacy getWeeklyTabs action and the combined boot-state action share it.
  */
-function handleGetWeeklyTabs(data) {
-  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+function buildWeeklyTabsResponse(spreadsheet) {
   const sheets = spreadsheet.getSheets();
   const weekTabs = [];
 
@@ -3771,8 +3789,63 @@ function handleGetWeeklyTabs(data) {
     return b.date.localeCompare(a.date);
   });
 
-  return respond('ok', 'Weekly tabs loaded.', {
-    weeks: weekTabs
+  return { message: 'Weekly tabs loaded.', payload: { weeks: weekTabs } };
+}
+
+/**
+ * Returns a list of existing weekly league tabs.
+ * Scans sheet names for the pattern "Week YYYY-MM-DD" and returns them sorted
+ * by date descending (most recent first).
+ */
+function handleGetWeeklyTabs(data) {
+  const spreadsheet = resolveSpreadsheet(leagueSelectorFrom(data));
+  const built = buildWeeklyTabsResponse(spreadsheet);
+  return respond('ok', built.message, built.payload);
+}
+
+/**
+ * Admin boot action: the two reads the admin page performs on every load (the
+ * League settings row and the list of Week tabs) in one Apps Script execution.
+ *
+ * Each component carries its own status so a failure in one keeps the other's
+ * successful result and loading state, exactly as the two separate actions
+ * behaved. Both components use the legacy action's response shape, and the
+ * legacy getLeagueSettings/getWeeklyTabs actions stay registered for callers
+ * that refresh only one of them.
+ *
+ * Inputs: league (optional routing selector)
+ */
+function handleGetBootState(data) {
+  const selector = leagueSelectorFrom(data);
+  const leagueId = resolveLeagueId(selector);
+  // One open for both reads: this is the whole point of the combined action.
+  const spreadsheet = resolveSpreadsheet(selector);
+
+  let settings;
+  try {
+    const built = buildLeagueSettingsResponse(spreadsheet, selector);
+    settings = { status: 'ok', message: built.message };
+    for (const key in built.payload) {
+      if (Object.prototype.hasOwnProperty.call(built.payload, key)) {
+        settings[key] = built.payload[key];
+      }
+    }
+  } catch (error) {
+    settings = { status: 'error', message: error.message };
+  }
+
+  let weeklyTabs;
+  try {
+    const built = buildWeeklyTabsResponse(spreadsheet);
+    weeklyTabs = { status: 'ok', message: built.message, weeks: built.payload.weeks };
+  } catch (error) {
+    weeklyTabs = { status: 'error', message: error.message, weeks: [] };
+  }
+
+  return respond('ok', 'Boot state loaded.', {
+    league: leagueId,
+    settings: settings,
+    weekly_tabs: weeklyTabs
   });
 }
 
@@ -6927,8 +7000,11 @@ function handleSeasonStandings(data) {
   // Merge the League sheet's own points/payout settings so the standings
   // re-derive earnings under this league's current money rules.
   var rules = getLeagueRulesForSpreadsheet(selector, spreadsheet);
-  var seasonPoints = sumSeasonPointsByMember(spreadsheet);
-  var seasonEarnings = sumSeasonEarningsByMember(spreadsheet, rules);
+  // One traversal of the season's Week tabs produces both totals: the live
+  // points sum and the re-derived earnings used to fill this table.
+  var seasonTotals = sumSeasonTotalsByMember(spreadsheet, rules);
+  var seasonPoints = seasonTotals.points;
+  var seasonEarnings = seasonTotals.earnings;
 
   // Member identities come from the roster; every member with qualifying
   // points appears, including inactive members (the captain's rule is
@@ -7010,58 +7086,46 @@ function handleSyncSeasonCaches(data) {
 }
 
 /**
- * Sums each member's committed weekly points across every Week tab. This is
- * the single live aggregation every doubles total shares and the source of
- * truth: it reads the points persisted at import commit and never consults a
- * status column or a cached season total, so a total can never go stale. A row
- * with a blank or non-numeric weekly_points was never committed and
- * contributes nothing. Returns a plain object keyed by member_number; a member
- * with no committed rows is absent (callers default to 0).
+ * Aggregates every doubles season total in one traversal of the season's Week
+ * tabs. Each tab is read once and feeds both totals:
+ *
+ *   - points: the value persisted at import commit, the single live source of
+ *     truth every doubles total shares. A row with a blank or non-numeric
+ *     weekly_points was never committed and contributes nothing.
+ *   - earnings: the live mirror of the Week Results payout table, rebuilt per
+ *     week from the committed placements (the same read-only path
+ *     `calculatePoints` uses), with the league's current payout pool rule
+ *     applied. The split is the existing even rule: partners receive equal
+ *     shares and a solo takes the full share.
+ *
+ * Earnings are skipped when `rules` is null, so a points-only listing never
+ * pays for the payout math. Neither total consults a status column or a cached
+ * season total, so a total can never go stale. Returns plain objects keyed by
+ * member_number; a member with no committed rows is absent (callers default
+ * to 0).
  */
-function sumSeasonPointsByMember(spreadsheet) {
-  var totals = {};
+function sumSeasonTotalsByMember(spreadsheet, rules) {
+  var points = {};
+  var earnings = {};
   var weekSheets = getWeekSheets(spreadsheet);
   for (var s = 0; s < weekSheets.length; s++) {
     var data = weekSheets[s].getDataRange().getValues();
     var headers = data[0] || [];
     var hMember = headers.indexOf('member_number');
     var hPoints = headers.indexOf('weekly_points');
-    if (hMember === -1 || hPoints === -1) continue;
+    var hPosition = headers.indexOf('team_position_raw');
 
-    for (var i = 1; i < data.length; i++) {
-      var memberNumber = data[i][hMember];
-      if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
-      var points = parseFloat(data[i][hPoints]);
-      if (isNaN(points)) continue;
-      totals[memberNumber] = (totals[memberNumber] || 0) + points;
+    if (hMember !== -1 && hPoints !== -1) {
+      for (var i = 1; i < data.length; i++) {
+        var memberNumber = data[i][hMember];
+        if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+        var weekPoints = parseFloat(data[i][hPoints]);
+        if (isNaN(weekPoints)) continue;
+        points[memberNumber] = (points[memberNumber] || 0) + weekPoints;
+      }
     }
-  }
-  return totals;
-}
 
-/**
- * Sums each member's season earnings across every Week tab. The live mirror of
- * the Week Results payout table: for each committed week it rebuilds the pairs
- * from the committed placements (the same read-only path `calculatePoints`
- * uses), applies the league's current payout pool rule, and accumulates each
- * pair's per-player share into the member's total. The split is the existing
- * even rule: partners receive equal shares and a solo takes the full share,
- * exactly what the Week Results table displays for that week.
- *
- * Payout was never persisted, so a total is always re-derived under the
- * league's current settings; changing a payout setting changes every week's
- * re-derived money. Returns a plain object keyed by member_number; a member
- * with no committed rows is absent (callers default to 0).
- */
-function sumSeasonEarningsByMember(spreadsheet, rules) {
-  var totals = {};
-  var weekSheets = getWeekSheets(spreadsheet);
-  for (var s = 0; s < weekSheets.length; s++) {
-    var data = weekSheets[s].getDataRange().getValues();
-    var headers = data[0] || [];
-    if (headers.indexOf('member_number') === -1 ||
-        headers.indexOf('team_position_raw') === -1 ||
-        headers.indexOf('weekly_points') === -1) continue;
+    if (!rules || hMember === -1 || hPosition === -1 || hPoints === -1) continue;
 
     var plan = buildDoublesPointsPlan(data, headers, rules);
     if (!plan.rows.length) continue;
@@ -7073,14 +7137,32 @@ function sumSeasonEarningsByMember(spreadsheet, rules) {
 
     for (var p = 0; p < pairs.length; p++) {
       var perPlayer = roundCurrency(pairs[p].payout_per_player || 0);
-      var members = pairs[p].members;
-      for (var m = 0; m < members.length; m++) {
-        var memberNumber = members[m].member_number;
-        totals[memberNumber] = roundCurrency((totals[memberNumber] || 0) + perPlayer);
+      var pairMembers = pairs[p].members;
+      for (var m = 0; m < pairMembers.length; m++) {
+        var earningMember = pairMembers[m].member_number;
+        earnings[earningMember] = roundCurrency((earnings[earningMember] || 0) + perPlayer);
       }
     }
   }
-  return totals;
+  return { points: points, earnings: earnings };
+}
+
+/**
+ * Sums each member's committed weekly points across every Week tab. Thin
+ * wrapper over the shared single-pass aggregation, kept for the callers that
+ * only need points.
+ */
+function sumSeasonPointsByMember(spreadsheet) {
+  return sumSeasonTotalsByMember(spreadsheet, null).points;
+}
+
+/**
+ * Sums each member's season earnings across every Week tab. Thin wrapper over
+ * the shared single-pass aggregation, kept for the callers that only need
+ * earnings (the import-commit cache sync).
+ */
+function sumSeasonEarningsByMember(spreadsheet, rules) {
+  return sumSeasonTotalsByMember(spreadsheet, rules).earnings;
 }
 
 /**

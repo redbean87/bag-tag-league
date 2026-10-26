@@ -312,6 +312,15 @@ test('the admin banners a stored format/scoring that disagrees with the registry
   assert.match(mismatch, /settings\.league_format !== rules\.format/);
   assert.match(mismatch, /settings\.scoring !== rules\.scoring/);
 
+  // The settings renderer is shared by the legacy loader and the combined
+  // boot request, so the banner is applied by the applier both call.
+  const apply = functionBody(html, 'applyLeagueSettingsResponse');
+  assert.match(apply, /applyLeagueSettingsMismatch\(s\)/);
+
   const load = functionBody(html, 'loadLeagueSettings');
-  assert.match(load, /applyLeagueSettingsMismatch\(s\)/);
+  assert.match(load, /applyLeagueSettingsResponse\(await response\.json\(\)\)/);
+
+  const boot = functionBody(html, 'loadBootState');
+  assert.match(boot, /action: 'getBootState'/);
+  assert.match(boot, /applyLeagueSettingsResponse\(/);
 });

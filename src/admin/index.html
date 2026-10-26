@@ -4,8 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bag Tag League - League Admin</title>
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <script src="../shared/league-format.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -545,6 +543,7 @@
         </p>
       </div>
       <button type="button" id="btnShowQR" onclick="showSignInQR()">Show Player Sign-In QR Code</button>
+      <div id="qrStatus" class="status hidden"></div>
     </div>
 
     <!-- 6. Pre-Round Review -->
@@ -782,6 +781,49 @@
     var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
 
     var PLAYER_SIGN_IN_PATH = '/player/sign-in/';
+
+    // ─── Optional libraries ───────────────────────────────────────────────
+    // SheetJS parses UDisc exports and qrcode draws the player sign-in code.
+    // Neither is needed to render the admin shell, so both load on first use
+    // instead of blocking every page load. Each loader memoizes one in-flight
+    // promise, so repeated or concurrent calls share a single script tag.
+    var XLSX_URL = 'https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js';
+    var QRCODE_URL = 'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js';
+    var libraryLoads = {};
+
+    function loadScriptOnce(url, globalName) {
+      if (window[globalName]) return Promise.resolve(window[globalName]);
+      if (libraryLoads[url]) return libraryLoads[url];
+
+      libraryLoads[url] = new Promise(function(resolve, reject) {
+        var script = document.createElement('script');
+        script.src = url;
+        script.async = true;
+        script.onload = function() {
+          if (window[globalName]) {
+            resolve(window[globalName]);
+          } else {
+            delete libraryLoads[url];
+            reject(new Error(globalName + ' did not initialize'));
+          }
+        };
+        script.onerror = function() {
+          // Forget the failed attempt so a retry can try again.
+          delete libraryLoads[url];
+          reject(new Error('Could not load ' + url));
+        };
+        document.head.appendChild(script);
+      });
+      return libraryLoads[url];
+    }
+
+    function ensureXLSX() {
+      return loadScriptOnce(XLSX_URL, 'XLSX');
+    }
+
+    function ensureQRCode() {
+      return loadScriptOnce(QRCODE_URL, 'QRCode');
+    }
 
     var cachedWeeklyTabs = [];
 
@@ -1568,13 +1610,29 @@
       return runTestDataReset(true);
     }
 
-    function showSignInQR() {
+    async function showSignInQR() {
       // The QR carries only the opaque league id; the server maps it to the
       // allow-listed spreadsheet. Never encode a spreadsheet id or tab.
       var url = window.location.origin + PLAYER_SIGN_IN_PATH + '?league=' + encodeURIComponent(getLeagueId());
       var modal = document.getElementById('qrModal');
       var qrContainer = document.getElementById('qrCode');
       var urlDisplay = document.getElementById('qrUrl');
+      var statusEl = document.getElementById('qrStatus');
+
+      statusEl.className = 'status hidden';
+      statusEl.innerHTML = '';
+
+      // qrcode loads on first use; open the modal only once it is ready so a
+      // slow or failed download cannot leave an empty dialog on screen.
+      try {
+        await ensureQRCode();
+      } catch (err) {
+        statusEl.className = 'status error';
+        statusEl.innerHTML = '<strong>Could not load the QR code library.</strong> ' +
+          'Check your connection and try again.';
+        log('FAILED to load the QR library: ' + err.message);
+        return;
+      }
 
       qrContainer.innerHTML = '';
       new QRCode(qrContainer, {
@@ -1784,6 +1842,64 @@
       el.innerHTML = html;
     }
 
+    // Applies a settings payload from either the legacy getLeagueSettings
+    // response or the `settings` component of getBootState.
+    function applyLeagueSettingsResponse(data) {
+      if (data.status !== 'ok') {
+        setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueMissingResult');
+        return;
+      }
+
+      setLeagueMismatch('');
+
+      if (data.state === 'missing') {
+        // Keep the capability-derived column count available so the create
+        // card copy stays accurate even before a settings row exists.
+        cachedLeagueSettings = { weekly_columns: data.weekly_columns };
+        renderLeagueCopy(getSelectedLeague(), getLeagueRules(), cachedLeagueSettings);
+        document.getElementById('leagueMissing').style.display = '';
+        document.getElementById('leagueForm').style.display = 'none';
+        log('League sheet not found — create prompt shown');
+        return;
+      }
+
+      document.getElementById('leagueMissing').style.display = 'none';
+      document.getElementById('leagueForm').style.display = '';
+
+      if (data.state === 'ok' && data.settings) {
+        var s = data.settings;
+        s.weekly_columns = data.weekly_columns;
+        cachedLeagueSettings = s;
+        document.getElementById('league_name').value = s.league_name || '';
+        document.getElementById('description').value = s.description || '';
+        document.getElementById('location').value = s.location || '';
+        document.getElementById('schedule').value = s.schedule || '';
+        document.getElementById('contact_information').value = s.contact_information || '';
+        document.getElementById('entry_fee').value = s.entry_fee !== undefined && s.entry_fee !== '' ? s.entry_fee : '';
+        document.getElementById('ace_pot_contribution').value = s.ace_pot_contribution !== undefined && s.ace_pot_contribution !== '' ? s.ace_pot_contribution : '';
+        document.getElementById('ace_pot_current_total').value = s.ace_pot_current_total !== undefined && s.ace_pot_current_total !== '' ? s.ace_pot_current_total : '';
+        document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
+        document.getElementById('entry_fee_explanation').value = s.entry_fee_explanation !== undefined && s.entry_fee_explanation !== '' ? s.entry_fee_explanation : '';
+        document.getElementById('entry_fee_breakdown').value = s.entry_fee_breakdown !== undefined && s.entry_fee_breakdown !== '' ? s.entry_fee_breakdown : '';
+        document.getElementById('points_by_place').value = s.points_by_place !== undefined && s.points_by_place !== '' ? s.points_by_place : '';
+        document.getElementById('points_participation').value = s.points_participation !== undefined && s.points_participation !== '' ? s.points_participation : '';
+        document.getElementById('payout_contribution').value = s.payout_contribution !== undefined && s.payout_contribution !== '' ? s.payout_contribution : '';
+        document.getElementById('payout_second_amount').value = s.payout_second_amount !== undefined && s.payout_second_amount !== '' ? s.payout_second_amount : '';
+        document.getElementById('payout_second_min_players').value = s.payout_second_min_players !== undefined && s.payout_second_min_players !== '' ? s.payout_second_min_players : '';
+        applyLeagueSettingsMismatch(s);
+        applyEntryFeeBreakdownWarning(s);
+        renderLeagueCopy(getSelectedLeague(), getLeagueRules(), s);
+        log('League settings loaded');
+      } else {
+        cachedLeagueSettings = { weekly_columns: data.weekly_columns };
+        setLeagueMismatch('');
+        applyEntryFeeBreakdownWarning(null);
+        renderLeagueCopy(getSelectedLeague(), getLeagueRules(), cachedLeagueSettings);
+        log('League sheet exists but has no settings row');
+      }
+
+    }
+
     async function loadLeagueSettings() {
       try {
         var response = await fetch(API_URL, {
@@ -1791,60 +1907,7 @@
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({ action: 'getLeagueSettings', spreadsheetId: getSpreadsheetId() })
         });
-        var data = await response.json();
-
-        if (data.status !== 'ok') {
-          setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueMissingResult');
-          return;
-        }
-
-        setLeagueMismatch('');
-
-        if (data.state === 'missing') {
-          // Keep the capability-derived column count available so the create
-          // card copy stays accurate even before a settings row exists.
-          cachedLeagueSettings = { weekly_columns: data.weekly_columns };
-          renderLeagueCopy(getSelectedLeague(), getLeagueRules(), cachedLeagueSettings);
-          document.getElementById('leagueMissing').style.display = '';
-          document.getElementById('leagueForm').style.display = 'none';
-          log('League sheet not found — create prompt shown');
-          return;
-        }
-
-        document.getElementById('leagueMissing').style.display = 'none';
-        document.getElementById('leagueForm').style.display = '';
-
-        if (data.state === 'ok' && data.settings) {
-          var s = data.settings;
-          s.weekly_columns = data.weekly_columns;
-          cachedLeagueSettings = s;
-          document.getElementById('league_name').value = s.league_name || '';
-          document.getElementById('description').value = s.description || '';
-          document.getElementById('location').value = s.location || '';
-          document.getElementById('schedule').value = s.schedule || '';
-          document.getElementById('contact_information').value = s.contact_information || '';
-          document.getElementById('entry_fee').value = s.entry_fee !== undefined && s.entry_fee !== '' ? s.entry_fee : '';
-          document.getElementById('ace_pot_contribution').value = s.ace_pot_contribution !== undefined && s.ace_pot_contribution !== '' ? s.ace_pot_contribution : '';
-          document.getElementById('ace_pot_current_total').value = s.ace_pot_current_total !== undefined && s.ace_pot_current_total !== '' ? s.ace_pot_current_total : '';
-          document.getElementById('ctp_contribution').value = s.ctp_contribution !== undefined && s.ctp_contribution !== '' ? s.ctp_contribution : '';
-          document.getElementById('entry_fee_explanation').value = s.entry_fee_explanation !== undefined && s.entry_fee_explanation !== '' ? s.entry_fee_explanation : '';
-          document.getElementById('entry_fee_breakdown').value = s.entry_fee_breakdown !== undefined && s.entry_fee_breakdown !== '' ? s.entry_fee_breakdown : '';
-          document.getElementById('points_by_place').value = s.points_by_place !== undefined && s.points_by_place !== '' ? s.points_by_place : '';
-          document.getElementById('points_participation').value = s.points_participation !== undefined && s.points_participation !== '' ? s.points_participation : '';
-          document.getElementById('payout_contribution').value = s.payout_contribution !== undefined && s.payout_contribution !== '' ? s.payout_contribution : '';
-          document.getElementById('payout_second_amount').value = s.payout_second_amount !== undefined && s.payout_second_amount !== '' ? s.payout_second_amount : '';
-          document.getElementById('payout_second_min_players').value = s.payout_second_min_players !== undefined && s.payout_second_min_players !== '' ? s.payout_second_min_players : '';
-          applyLeagueSettingsMismatch(s);
-          applyEntryFeeBreakdownWarning(s);
-          renderLeagueCopy(getSelectedLeague(), getLeagueRules(), s);
-          log('League settings loaded');
-        } else {
-          cachedLeagueSettings = { weekly_columns: data.weekly_columns };
-          setLeagueMismatch('');
-          applyEntryFeeBreakdownWarning(null);
-          renderLeagueCopy(getSelectedLeague(), getLeagueRules(), cachedLeagueSettings);
-          log('League sheet exists but has no settings row');
-        }
+        applyLeagueSettingsResponse(await response.json());
       } catch (err) {
         setLeagueStatus('error', '<strong>Request failed:</strong> ' + err.message, 'leagueMissingResult');
         log('FAILED to load league settings: ' + err.message);
@@ -1946,7 +2009,19 @@
       }
     }
 
-    // Centralized weekly tabs loader
+    // Applies a weekly-tabs payload from either the legacy getWeeklyTabs
+    // response or the `weekly_tabs` component of getBootState.
+    function applyWeeklyTabsResponse(data) {
+      if (data.status !== 'ok') {
+        log('ERROR loading weekly tabs: ' + data.message);
+        return;
+      }
+
+      cachedWeeklyTabs = data.weeks || [];
+      updateGating();
+      log('Loaded ' + cachedWeeklyTabs.length + ' weekly tab(s)');
+    }
+
     async function loadWeeklyTabs() {
       try {
         var response = await fetch(API_URL, {
@@ -1954,18 +2029,39 @@
           headers: { 'Content-Type': 'text/plain' },
           body: JSON.stringify({ action: 'getWeeklyTabs', spreadsheetId: getSpreadsheetId() })
         });
+        applyWeeklyTabsResponse(await response.json());
+      } catch (err) {
+        log('FAILED to load weekly tabs: ' + err.message);
+      }
+    }
+
+    // One boot request: settings and weekly tabs arrive from a single Apps
+    // Script execution. Each component carries its own status, so a failure in
+    // one still applies the other exactly as the two separate calls did.
+    async function loadBootState() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getBootState', spreadsheetId: getSpreadsheetId() })
+        });
         var data = await response.json();
 
         if (data.status !== 'ok') {
-          log('ERROR loading weekly tabs: ' + data.message);
+          setLeagueStatus('error', '<strong>Error:</strong> ' + data.message, 'leagueMissingResult');
+          log('ERROR loading boot state: ' + data.message);
           return;
         }
 
-        cachedWeeklyTabs = data.weeks || [];
-        updateGating();
-        log('Loaded ' + cachedWeeklyTabs.length + ' weekly tab(s)');
+        applyLeagueSettingsResponse(
+          data.settings || { status: 'error', message: 'No league settings returned.' }
+        );
+        applyWeeklyTabsResponse(
+          data.weekly_tabs || { status: 'error', message: 'No weekly tabs returned.' }
+        );
       } catch (err) {
-        log('FAILED to load weekly tabs: ' + err.message);
+        setLeagueStatus('error', '<strong>Request failed:</strong> ' + err.message, 'leagueMissingResult');
+        log('FAILED to load boot state: ' + err.message);
       }
     }
 
@@ -2138,6 +2234,17 @@
       log('Parsing UDisc file: ' + file.name);
 
       try {
+        // SheetJS loads on first import use, so the initial page load never
+        // pays for the parser bundle.
+        try {
+          await ensureXLSX();
+        } catch (err) {
+          setUdiscImportStatus('error',
+            '<strong>Could not load the spreadsheet parser.</strong> Check your connection and try again.');
+          log('FAILED to load the xlsx library: ' + err.message);
+          return;
+        }
+
         var arrayBuffer = await file.arrayBuffer();
         var workbook = XLSX.read(arrayBuffer, { type: 'array' });
 
@@ -3557,8 +3664,7 @@
       populateLeaguePicker();
       applyLeague(getLeagueId());
       log('Admin page loaded');
-      loadLeagueSettings();
-      loadWeeklyTabs();
+      loadBootState();
     })();
   </script>
 </body>
