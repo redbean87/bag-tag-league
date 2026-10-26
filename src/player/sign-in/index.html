@@ -282,6 +282,7 @@
 
   <script src="../../shared/league-format.js"></script>
   <script src="league-image.js"></script>
+  <script src="roster-search.js"></script>
   <script>
     var API_URL = 'https://script.google.com/macros/s/AKfycbzJMNCZsQfTmrS0hmL0ePZCi2V9B_nvxx9rYA1yYOgmMvgGGtU7SY2Rl4l0TmcshfQ-nw/exec';
     var searchTimeout = null;
@@ -308,6 +309,14 @@
     // only) until the server answers, so nothing a league does not offer can be
     // submitted before the options load.
     var moneyOptions = checkInOptionsFrom(null);
+
+    // The preloaded league roster. Loaded once at page open, concurrently
+    // with the check-in options call, so player search can be answered in the
+    // browser with no server round trip per pause. The copy is page-memory
+    // only (no storage, no shared cache) and only ever becomes "ready" after
+    // the response shape has been validated; "pending" and "failed" both
+    // leave search on the existing server path.
+    var roster = { status: 'pending', members: [] };
 
     function resolveLeagueFromUrl() {
       var requested = null;
@@ -460,6 +469,32 @@
       applyMoneyOptionsToDom(moneyOptions);
     }
 
+    // --- Roster preload ---
+    // Fetches the roster with the existing listClubMembers action and the
+    // same league routing every other request uses. Any request error,
+    // unsuccessful response, or malformed payload is a preload failure: the
+    // roster stays unusable and search keeps its server fallback for the
+    // session. Selection from the preloaded copy only ever populates the
+    // form; the server still revalidates identity and activity at submit.
+    async function loadRoster() {
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'listClubMembers', league: resolvedLeague.id })
+        });
+        var data = await response.json();
+        var members = window.RosterSearch ? window.RosterSearch.selectableMembers(data) : null;
+        if (members) {
+          roster = { status: 'ready', members: members };
+          return;
+        }
+      } catch (err) {
+        // Fall through: search keeps using the server path for this session.
+      }
+      roster = { status: 'failed', members: [] };
+    }
+
     // Shows the resolved league's checked-in image when one exists. The
     // league-name text is rendered independently by renderLeagueIndicator and
     // stays the fallback and the accessible label, so a league with no image
@@ -529,9 +564,18 @@
     async function performSearch(query) {
       document.getElementById('searchResults').classList.add('hidden');
       document.getElementById('searchActions').classList.add('hidden');
-      setStatus('searchStatus', 'pending', 'Searching...');
 
       activeSearchQuery = query;
+
+      // Once the preloaded roster is ready, the current query is answered
+      // from memory with no network request. Searches issued before the
+      // preload settles, or after it failed, keep the server path below.
+      if (roster.status === 'ready') {
+        renderLocalSearchResults(query);
+        return;
+      }
+
+      setStatus('searchStatus', 'pending', 'Searching...');
 
       try {
         var response = await fetch(API_URL, {
@@ -559,6 +603,22 @@
       } catch (err) {
         setStatus('searchStatus', 'error', 'Search failed. Please try again.');
       }
+    }
+
+    // Renders the in-memory result of a query. filterMembers mirrors the
+    // server's matching semantics and result shape, so this view is identical
+    // to a server-search render for the same roster state.
+    function renderLocalSearchResults(query) {
+      var results = window.RosterSearch.filterMembers(roster.members, query);
+      clearStatus('searchStatus');
+
+      if (results.length > 0) {
+        renderSearchResults(results);
+        document.getElementById('noResultsMessage').classList.add('hidden');
+      } else {
+        document.getElementById('noResultsMessage').classList.remove('hidden');
+      }
+      document.getElementById('searchActions').classList.remove('hidden');
     }
 
     function renderSearchResults(results) {
@@ -730,7 +790,11 @@
     renderLeagueImage();
     applyTagVisibility();
     applyMoneyOptionsToDom(moneyOptions);
+    // The two read-only boot calls start independently so they overlap; the
+    // roster never sits in the options call's critical path (batching the two
+    // into one action made the admin first screen measurably slower).
     loadCheckInOptions();
+    loadRoster();
     document.getElementById('searchInput').addEventListener('input', onSearchInput);
   </script>
 </body>
