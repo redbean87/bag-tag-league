@@ -68,6 +68,15 @@
 
 **Experience target:** Scan -> select -> confirm -> done. Under 30 seconds.
 
+### Admin check-in (alternative to steps 1-10)
+
+For players who never open the sign-in page, the admin checks them in from the Check-In card on the admin page:
+
+- The card lists every player on the week's sheet plus every active club member not yet on it, with a "N checked in of M" count.
+- Checking a player in sets `checked_in = TRUE` and `signed_in_at` to now, creating the weekly row if needed. Tags leagues require the actual `in_tag` the player is carrying; `ClubMembers.current_tag` is only the prefilled default and what is entered is what is stored.
+- Undo clears `checked_in`, `signed_in_at`, and the `in_tag` the check-in captured. Nothing else on the row changes.
+- It records participation only: scoring, `out_tag`, money fields, `ClubMembers`, and tag calculation are untouched. `udisc_checked_in` is never written.
+
 ## Workflow 4: UDisc Import (Admin)
 
 1. Admin receives the UDisc export (xlsx) after the round

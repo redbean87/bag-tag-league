@@ -2880,6 +2880,15 @@ function doPost(e) {
     if (data.action === 'getWeekView') {
       return handleGetWeekView(data);
     }
+    if (data.action === 'getAdminCheckInRoster') {
+      return handleGetAdminCheckInRoster(data);
+    }
+    if (data.action === 'adminCheckIn') {
+      return handleAdminCheckIn(data);
+    }
+    if (data.action === 'adminUndoCheckIn') {
+      return handleAdminUndoCheckIn(data);
+    }
     if (data.action === 'getPreRoundReview') {
       return handleGetPreRoundReview(data);
     }
@@ -3907,6 +3916,273 @@ function handleGetWeekView(data) {
     expected_import_columns: expectedWeeklyImportColumns(rules.format, rules.scoring)
   });
 }
+
+// ─── Admin check-in ──────────────────────────────────────────────────────────
+// Lets the admin check a player in (and undo it) from the admin page, for
+// players who never open the sign-in page. It records participation only:
+// `checked_in`, `signed_in_at`, and the tag the player is actually carrying
+// (`in_tag`, singles tags leagues). It never touches scoring, out_tag, money
+// fields, or ClubMembers, and the tag calculation code is not involved.
+
+/** True when a weekly cell holds a truthy checkbox value. */
+function isCheckedInCell(value) {
+  return value === true || value === 'TRUE';
+}
+
+/**
+ * Resolves the weekly sheet for an admin check-in call, or returns an error
+ * response. Shared by the roster read and both writes.
+ */
+function resolveAdminCheckInContext(data) {
+  var leagueDate = data.league_date;
+  if (!leagueDate || !/^\d{4}-\d{2}-\d{2}$/.test(leagueDate)) {
+    return { error: respond('error', 'Invalid or missing league_date. Expected YYYY-MM-DD format.') };
+  }
+  var selector = leagueSelectorFrom(data);
+  var spreadsheet = resolveSpreadsheet(selector);
+  var rules = getLeagueRulesForSpreadsheet(selector, spreadsheet);
+  var tabName = 'Week ' + leagueDate;
+  var sheet = spreadsheet.getSheetByName(tabName);
+  if (!sheet) {
+    return { error: respond('error', 'Weekly tab not found: ' + tabName + '.') };
+  }
+  var values = sheet.getDataRange().getValues();
+  var headers = (values[0] || []).map(function(header) { return String(header); });
+  var required = ['member_number', 'checked_in', 'signed_in_at'];
+  for (var q = 0; q < required.length; q++) {
+    if (headers.indexOf(required[q]) === -1) {
+      return { error: respond('error', 'Weekly tab is missing the ' + required[q] + ' column. No data was written.') };
+    }
+  }
+  if (rules.usesTags && headers.indexOf('in_tag') === -1) {
+    return { error: respond('error', 'Weekly tab is missing the in_tag column. No data was written.') };
+  }
+  return {
+    leagueDate: leagueDate,
+    spreadsheet: spreadsheet,
+    rules: rules,
+    tabName: tabName,
+    sheet: sheet,
+    values: values,
+    headers: headers
+  };
+}
+
+/** Finds the 0-based index in `values` of the weekly row for a member, or -1. */
+function findWeeklyRowIndex(values, headers, memberNumber) {
+  var col = headers.indexOf('member_number');
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][col]) === String(memberNumber)) return i;
+  }
+  return -1;
+}
+
+/**
+ * Read-only check-in roster for one league date: every player already on the
+ * weekly sheet plus every active club member who is not yet on it, each with
+ * their checked_in state, signed_in_at, in_tag, and the stored current_tag
+ * (offered as the default tag at check-in).
+ *
+ * Inputs: league_date (required, YYYY-MM-DD)
+ */
+function handleGetAdminCheckInRoster(data) {
+  var ctx = resolveAdminCheckInContext(data);
+  if (ctx.error) return ctx.error;
+
+  var headers = ctx.headers;
+  var col = function(name) { return headers.indexOf(name); };
+  var clubSheet = ctx.spreadsheet.getSheetByName('ClubMembers');
+  var clubValues = clubSheet ? clubSheet.getDataRange().getValues() : [[]];
+  var clubHeaders = clubValues[0] || [];
+  var cNum = clubHeaders.indexOf('member_number');
+  var cName = clubHeaders.indexOf('name');
+  var cTag = clubHeaders.indexOf('current_tag');
+  var cActive = clubHeaders.indexOf('is_active');
+
+  var club = {};
+  for (var i = 1; i < clubValues.length; i++) {
+    var cn = clubValues[i][cNum];
+    if (cn === '' || cn === null || cn === undefined) continue;
+    club[String(cn)] = {
+      name: String(clubValues[i][cName] || ''),
+      current_tag: cTag !== -1 ? clubValues[i][cTag] : '',
+      is_active: isCheckedInCell(clubValues[i][cActive])
+    };
+  }
+
+  var players = [];
+  var onSheet = {};
+  var checkedInCount = 0;
+  for (var r = 1; r < ctx.values.length; r++) {
+    var row = ctx.values[r];
+    var memberNumber = row[col('member_number')];
+    if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+    var member = club[String(memberNumber)] || {};
+    var checkedIn = isCheckedInCell(row[col('checked_in')]);
+    if (checkedIn) checkedInCount++;
+    onSheet[String(memberNumber)] = true;
+    var snapshotName = col('player_name_snapshot') !== -1 ? row[col('player_name_snapshot')] : '';
+    players.push({
+      member_number: memberNumber,
+      name: String(snapshotName || member.name || ''),
+      on_week_sheet: true,
+      checked_in: checkedIn,
+      signed_in_at: row[col('signed_in_at')] === null || row[col('signed_in_at')] === undefined ? '' : String(row[col('signed_in_at')]),
+      in_tag: ctx.rules.usesTags ? row[col('in_tag')] : '',
+      current_tag: ctx.rules.usesTags && member.current_tag !== undefined ? member.current_tag : ''
+    });
+  }
+  for (var key in club) {
+    if (onSheet[key] || !club[key].is_active) continue;
+    players.push({
+      member_number: isNaN(Number(key)) ? key : Number(key),
+      name: club[key].name,
+      on_week_sheet: false,
+      checked_in: false,
+      signed_in_at: '',
+      in_tag: '',
+      current_tag: ctx.rules.usesTags ? club[key].current_tag : ''
+    });
+  }
+  players.sort(function(a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0; });
+
+  return respond('ok', 'Check-in roster loaded. No writes were made.', {
+    format: ctx.rules.format,
+    scoring: ctx.rules.scoring,
+    uses_tags: ctx.rules.usesTags,
+    league_date: ctx.leagueDate,
+    sheet_name: ctx.tabName,
+    writes: false,
+    checked_in_count: checkedInCount,
+    player_count: players.length,
+    players: players
+  });
+}
+
+/**
+ * Checks a player in from the admin page. Sets `checked_in` TRUE and
+ * `signed_in_at` to now on the player's weekly row, creating the row (with
+ * money fields left at their false defaults) when the player is an active club
+ * member who is not on the sheet yet. Tags leagues require the actual `in_tag`
+ * the player is carrying; it is stored exactly as entered.
+ *
+ * Inputs: league_date, member_number, in_tag (tags leagues only)
+ */
+function handleAdminCheckIn(data) {
+  var ctx = resolveAdminCheckInContext(data);
+  if (ctx.error) return ctx.error;
+
+  var memberNumber = data.member_number;
+  if (memberNumber === undefined || memberNumber === null || memberNumber === '') {
+    return respond('error', 'member_number is required.');
+  }
+
+  var inTagNum = null;
+  if (ctx.rules.usesTags) {
+    if (data.in_tag === undefined || data.in_tag === null || data.in_tag === '') {
+      return respond('error', 'in_tag is required.');
+    }
+    if (!/^\d+$/.test(String(data.in_tag).trim())) {
+      return respond('error', 'Please enter a valid tag number (1 or higher).');
+    }
+    inTagNum = parseInt(String(data.in_tag).trim(), 10);
+    if (inTagNum < 1) {
+      return respond('error', 'Please enter a valid tag number (1 or higher).');
+    }
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    var sheet = ctx.sheet;
+    // Re-read inside the lock so two admins cannot both append the same player.
+    var values = sheet.getDataRange().getValues();
+    var headers = ctx.headers;
+    var now = new Date().toISOString();
+    var rowIndex = findWeeklyRowIndex(values, headers, memberNumber);
+
+    if (rowIndex !== -1) {
+      if (isCheckedInCell(values[rowIndex][headers.indexOf('checked_in')])) {
+        return respond('error', 'That player is already checked in.');
+      }
+      var sheetRow = rowIndex + 1;
+      sheet.getRange(sheetRow, headers.indexOf('checked_in') + 1).setValue(true);
+      sheet.getRange(sheetRow, headers.indexOf('signed_in_at') + 1).setValue(now);
+      if (ctx.rules.usesTags) sheet.getRange(sheetRow, headers.indexOf('in_tag') + 1).setValue(inTagNum);
+      if (headers.indexOf('updated_at') !== -1) sheet.getRange(sheetRow, headers.indexOf('updated_at') + 1).setValue(now);
+    } else {
+      var clubSheet = ctx.spreadsheet.getSheetByName('ClubMembers');
+      var clubValues = clubSheet ? clubSheet.getDataRange().getValues() : [[]];
+      var ch = clubValues[0] || [];
+      var cNum = ch.indexOf('member_number');
+      var member = null;
+      for (var i = 1; i < clubValues.length; i++) {
+        if (String(clubValues[i][cNum]) === String(memberNumber)) { member = clubValues[i]; break; }
+      }
+      if (!member || !isCheckedInCell(member[ch.indexOf('is_active')])) {
+        return respond('error', 'Selected member not found or is inactive.');
+      }
+      var identity = {
+        member_number: member[cNum],
+        name: member[ch.indexOf('name')] || '',
+        username: member[ch.indexOf('udisc_username')] || '',
+        pdga: member[ch.indexOf('pdga_number')] || ''
+      };
+      var fields = { checked_in: true, signed_in_at: now };
+      if (ctx.rules.usesTags) fields.in_tag = inTagNum;
+      var record = buildNewWeeklyRecord(headers, identity, fields, null, now);
+      sheet.appendRow(record);
+    }
+  } finally {
+    lock.releaseLock();
+  }
+
+  return respond('ok', 'Player checked in.', { member_number: memberNumber, league_date: ctx.leagueDate });
+}
+
+/**
+ * Undoes a check-in. Clears `checked_in` and `signed_in_at`, and the `in_tag`
+ * the check-in captured, so the weekly row never claims a check-in (or feeds a
+ * tag into the pool) for a player who is not there. The row itself and every
+ * other field stay as they were.
+ *
+ * Inputs: league_date, member_number
+ */
+function handleAdminUndoCheckIn(data) {
+  var ctx = resolveAdminCheckInContext(data);
+  if (ctx.error) return ctx.error;
+
+  var memberNumber = data.member_number;
+  if (memberNumber === undefined || memberNumber === null || memberNumber === '') {
+    return respond('error', 'member_number is required.');
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    var values = ctx.sheet.getDataRange().getValues();
+    var headers = ctx.headers;
+    var rowIndex = findWeeklyRowIndex(values, headers, memberNumber);
+    if (rowIndex === -1) {
+      return respond('error', 'That player is not on this week\'s sheet.');
+    }
+    if (!isCheckedInCell(values[rowIndex][headers.indexOf('checked_in')])) {
+      return respond('error', 'That player is not checked in.');
+    }
+    var sheetRow = rowIndex + 1;
+    var now = new Date().toISOString();
+    ctx.sheet.getRange(sheetRow, headers.indexOf('checked_in') + 1).setValue(false);
+    ctx.sheet.getRange(sheetRow, headers.indexOf('signed_in_at') + 1).setValue('');
+    if (ctx.rules.usesTags) ctx.sheet.getRange(sheetRow, headers.indexOf('in_tag') + 1).setValue('');
+    if (headers.indexOf('updated_at') !== -1) ctx.sheet.getRange(sheetRow, headers.indexOf('updated_at') + 1).setValue(now);
+  } finally {
+    lock.releaseLock();
+  }
+
+  return respond('ok', 'Check-in undone.', { member_number: memberNumber, league_date: ctx.leagueDate });
+}
+
+// ─── End admin check-in ──────────────────────────────────────────────────────
 
 /**
  * Loads pre-round review data for a specific league date.
