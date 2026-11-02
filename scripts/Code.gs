@@ -7398,6 +7398,68 @@ function resolveDoublesTies(pairs, picks, limit) {
 }
 
 /**
+ * Does a stored TieBreaks `league_date` cell name this league date?
+ *
+ * Apps Script coerces `appendRow(['2026-10-12', ...])` on an Automatic-format
+ * column into a real Date, and `String(date)` never equals '2026-10-12', so a
+ * raw comparison makes every saved pick invisible: the read loop sees nothing
+ * and the delete loop never clears the old row. Both loops normalise through
+ * this one helper instead. A stored Date or epoch timestamp matches on either
+ * its local or its UTC calendar day (the script and the sheet can disagree
+ * about the timezone); a stored string matches on its leading `YYYY-MM-DD`,
+ * whether bare, ISO with a time, or a locale string a Date fell back through.
+ */
+function tieBreakLeagueDateMatches(value, leagueDate) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') {
+    var text = value.trim();
+    var leading = /^(\d{4}-\d{2}-\d{2})/.exec(text);
+    if (leading) return leading[1] === leagueDate;
+    var parsed = new Date(text);
+    if (isNaN(parsed.getTime())) return false;
+    return tieBreakDayKey(parsed, false) === leagueDate || tieBreakDayKey(parsed, true) === leagueDate;
+  }
+  var date = value;
+  if (typeof value === 'number') {
+    if (!isFinite(value)) return false;
+    date = new Date(value);
+  }
+  if (Object.prototype.toString.call(date) !== '[object Date]' || isNaN(date.getTime())) return false;
+  return tieBreakDayKey(date, false) === leagueDate || tieBreakDayKey(date, true) === leagueDate;
+}
+
+/** `YYYY-MM-DD` of a Date on the local (or UTC) calendar; '' when unusable. */
+function tieBreakDayKey(date, utc) {
+  var year = utc ? date.getUTCFullYear() : date.getFullYear();
+  var month = (utc ? date.getUTCMonth() : date.getMonth()) + 1;
+  var day = utc ? date.getUTCDate() : date.getDate();
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return '';
+  return year + '-' + (month < 10 ? '0' : '') + month + '-' + (day < 10 ? '0' : '') + day;
+}
+
+/**
+ * The value a league date is written to the TieBreaks tab as: a real Date at
+ * that calendar day's local midnight. The sheet would coerce the
+ * `YYYY-MM-DD` string anyway; writing the Date makes the stored form explicit,
+ * and `tieBreakLeagueDateMatches` reads it back as the same day. Anything that
+ * is not a bare league date passes through unchanged.
+ */
+function tieBreakDateCellValue(leagueDate) {
+  var parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(leagueDate);
+  if (!parts) return leagueDate;
+  return new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+}
+
+/** Whether a header row carries every name the TieBreaks schema requires. */
+function tieBreakHeadersComplete(headers) {
+  if (!headers) return false;
+  for (var i = 0; i < TIE_BREAKS_HEADERS.length; i++) {
+    if (headers.indexOf(TIE_BREAKS_HEADERS[i]) === -1) return false;
+  }
+  return true;
+}
+
+/**
  * Reads the saved tie picks for one week. Returns { picks, finalized, rows }:
  * `picks` maps an imported place to ordered team keys, `finalized` is true when
  * the week's finalize marker row exists, and `rows` is the sheet row numbers
@@ -7419,7 +7481,7 @@ function readTieBreaks(spreadsheet, leagueDate) {
 
   var found = [];
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][hDate]) !== leagueDate) continue;
+    if (!tieBreakLeagueDateMatches(data[i][hDate], leagueDate)) continue;
     result.rows.push(i + 1);
     var status = hStatus !== -1 ? String(data[i][hStatus]) : TIE_STATUS_SELECTED;
     if (status === TIE_STATUS_FINALIZED) result.finalized = true;
@@ -7448,14 +7510,39 @@ function rewriteTieBreakRows(spreadsheet, leagueDate, onlyPlace, newRows) {
   var sheet = ensured.sheet;
   var data = sheet.getDataRange().getValues();
   var headers = data[0] || [];
+  if (!tieBreakHeadersComplete(headers)) {
+    // Self-repair: an existing tab whose row 1 is missing the required names
+    // would make every row we append unparseable. Rewrite row 1 to the
+    // canonical headers; on an empty sheet this only creates row 1 and cannot
+    // lose data.
+    sheet.getRange(1, 1, 1, TIE_BREAKS_HEADERS.length).setValues([TIE_BREAKS_HEADERS.slice()]);
+    data = sheet.getDataRange().getValues();
+    headers = data[0] || [];
+  }
   var hDate = headers.indexOf('league_date');
   var hPlace = headers.indexOf('tie_place');
   for (var i = data.length - 1; i >= 1; i--) {
-    if (String(data[i][hDate]) !== leagueDate) continue;
+    // Same normalisation as the read path: a row this write coerced to a Date
+    // on a previous execution must still be recognised as this week's row.
+    if (!tieBreakLeagueDateMatches(data[i][hDate], leagueDate)) continue;
     if (onlyPlace !== null && parseInt(data[i][hPlace], 10) !== onlyPlace) continue;
     sheet.deleteRow(i + 1);
   }
-  for (var n = 0; n < newRows.length; n++) sheet.appendRow(newRows[n]);
+  for (var n = 0; n < newRows.length; n++) {
+    // Callers build rows in TIE_BREAKS_HEADERS order; place each field under
+    // its own header so the row still parses when row 1 carries the required
+    // names in a different order, and store the league date in the
+    // round-tripping Date form.
+    var source = newRows[n];
+    var row = [];
+    for (var c = 0; c < headers.length; c++) row.push('');
+    for (var f = 0; f < TIE_BREAKS_HEADERS.length && f < source.length; f++) {
+      var at = headers.indexOf(TIE_BREAKS_HEADERS[f]);
+      if (at !== -1) row[at] = source[f];
+    }
+    row[hDate] = tieBreakDateCellValue(leagueDate);
+    sheet.appendRow(row);
+  }
 }
 
 /**
