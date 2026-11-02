@@ -3184,7 +3184,8 @@
     // computed from each committed placement at import commit, so this view is
     // read-only: it renders the week roster grouped by pair_key (server-grouped
     // as `pairs`, with a client fallback) plus a Pair/Place/Points results
-    // table. There is no confirm/finalize/status control anywhere in the flow.
+    // table. The only write controls are the tie-winner choices and Finalize Week
+    // below the summary; there is no points confirm/status control.
 
     function setPointsStatus(type, html) {
       var el = document.getElementById('pointsResult');
@@ -3308,7 +3309,131 @@
       }
     }
 
+    // ─── Tie winners and finalize ────────────────────────────────────────
+    // Teams that finish level at a paying place need an admin-picked winner
+    // before the week is finalized. A saved pick is a draft the payout figures
+    // below already follow; Finalize refuses (server side) while any paying tie
+    // has no winner, then writes the chosen order onto the week.
+
+    function renderTieSection(ties) {
+      if (!ties) return '';
+      var html = '<h3 style="font-size:1rem; margin-bottom:0.5rem; margin-top:1rem; color:#555;">Ties &amp; Finalize</h3>';
+      html += '<div class="field-group" id="tieSection">';
+
+      if (ties.state === 'finalized') {
+        html += '<p><strong>Week finalized.</strong> Places, payouts and standings follow the chosen order.</p>';
+        var chosen = ties.finalized_choices || [];
+        for (var c = 0; c < chosen.length; c++) {
+          html += '<p>Place ' + escHtml(String(chosen[c].tie_place)) + ' tie: <strong>' + escHtml(chosen[c].label || chosen[c].team_key) + '</strong> won</p>';
+        }
+        html += '</div>';
+        return html;
+      }
+
+      var groups = ties.groups || [];
+      if (!groups.length) {
+        html += '<p>No ties on a paying place.</p>';
+      }
+      if (ties.stale_picks > 0) {
+        html += '<p style="color:#b06000;">' + escHtml(String(ties.stale_picks)) + ' saved winner(s) no longer match this week\'s teams and were ignored.</p>';
+      }
+      for (var g = 0; g < groups.length; g++) {
+        var group = groups[g];
+        html += '<div class="tie-group" data-tie-place="' + escHtml(String(group.tie_place)) + '" style="border:1px solid #ddd; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">';
+        html += '<div style="margin-bottom:0.5rem;"><strong>Tie for place ' + escHtml(String(group.tie_place)) + '</strong>' +
+          (group.needs_choice ? ' <span style="color:#ea4335;">&mdash; choose who won</span>' : ' <span style="color:#34a853;">&mdash; resolved</span>') + '</div>';
+        for (var pk = 0; pk < group.picked.length; pk++) {
+          html += '<p style="margin:0.25rem 0;">Place ' + escHtml(String(group.picked[pk].place)) + ': <strong>' + escHtml(group.picked[pk].label) + '</strong></p>';
+        }
+        if (group.candidates.length > 0) {
+          for (var cd = 0; cd < group.candidates.length; cd++) {
+            var cand = group.candidates[cd];
+            html += '<label style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0; min-height:2.75rem;">' +
+              '<input type="radio" name="tie_winner_' + escHtml(String(group.tie_place)) + '" value="' + escHtml(cand.team_key) + '" style="width:auto; margin:0;">' +
+              '<span>' + escHtml(cand.label) + '</span></label>';
+          }
+          html += '<button type="button" onclick="saveTieWinner(' + Number(group.tie_place) + ')">Save winner</button> ';
+        }
+        if (group.picked.length > 0) {
+          html += '<button type="button" onclick="clearTieWinners(' + Number(group.tie_place) + ')" style="background:#888;">Clear choice</button>';
+        }
+        html += '</div>';
+      }
+
+      html += '<button type="button" id="btnFinalizeWeek" onclick="finalizeDoublesWeek()" style="background:#34a853;">Finalize Week</button>';
+      html += '<p style="color:#888; font-style:italic; margin-top:0.5rem;">Finalizing is refused until every tie on a paying place has a winner. Winners can be changed until then.</p>';
+      html += '</div>';
+      return html;
+    }
+
+    async function postTieAction(action, extra, busyText) {
+      clearPointsStatus();
+      try {
+        var response = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(Object.assign({
+            action: action, spreadsheetId: getSpreadsheetId(),
+            league_date: getActiveLeagueDate()
+          }, extra))
+        });
+        var data = await response.json();
+        if (data.status !== 'ok') {
+          setPointsStatus('error', '<strong>' + escHtml(data.message) + '</strong>');
+          log('ERROR: ' + data.message);
+          return null;
+        }
+        renderPointsResults(data);
+        setPointsStatus('ok', escHtml(data.message));
+        log(data.message);
+        return data;
+      } catch (err) {
+        setPointsStatus('error', '<strong>' + busyText + ' failed:</strong> ' + escHtml(err.message));
+        log('FAILED: ' + busyText + ': ' + err.message);
+        return null;
+      }
+    }
+
+    async function saveTieWinner(place) {
+      var groupEl = document.querySelector('.tie-group[data-tie-place="' + place + '"]');
+      var checked = groupEl ? groupEl.querySelector('input[type="radio"]:checked') : null;
+      if (!checked) {
+        setPointsStatus('error', '<strong>Select the winning team for place ' + place + ' first.</strong>');
+        return;
+      }
+      // Earlier picks for this tie stay in order; the new one follows them.
+      var data = lastTieData();
+      var order = [];
+      var groups = data && data.ties ? data.ties.groups : [];
+      for (var g = 0; g < groups.length; g++) {
+        if (groups[g].tie_place === place) {
+          for (var p = 0; p < groups[g].picked.length; p++) order.push(groups[g].picked[p].team_key);
+        }
+      }
+      order.push(checked.value);
+      await postTieAction('saveTieBreaks', { tie_place: place, order: order }, 'Saving winner');
+    }
+
+    async function clearTieWinners(place) {
+      await postTieAction('saveTieBreaks', { tie_place: place, order: [] }, 'Clearing choice');
+    }
+
+    async function finalizeDoublesWeek() {
+      var btn = document.getElementById('btnFinalizeWeek');
+      if (btn) { btn.disabled = true; btn.textContent = 'Finalizing...'; }
+      var data = await postTieAction('finalizeDoublesWeek', {}, 'Finalize');
+      if (data) {
+        loadSeasonStandings();
+      } else if (btn) {
+        btn.disabled = false; btn.textContent = 'Finalize Week';
+      }
+    }
+
+    var lastPointsData = null;
+    function lastTieData() { return lastPointsData; }
+
     function renderPointsResults(data) {
+      lastPointsData = data;
       var previewEl = document.getElementById('pointsPreview');
       var players = data.players || [];
       var pairs = data.pairs || groupPointsPairsClient(players);
@@ -3330,6 +3455,8 @@
         }
         html += '</div>';
       }
+
+      html += renderTieSection(data.ties);
 
       if (showPayout) {
         var payout = data.payout;
