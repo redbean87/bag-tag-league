@@ -581,7 +581,7 @@ test('the doubles roster schema carries season_points and season_earnings', () =
   const h = loadCode();
 
   const headers = h.bound.CLUB_MEMBER_HEADERS_DOUBLES;
-  assert.deepEqual(headers.slice(-2), ['season_points', 'season_earnings']);
+  assert.deepEqual(headers.slice(-3), ['season_points', 'season_earnings', 'appearances']);
   assert.equal(headers.indexOf('current_tag'), -1);
 
   // The pre-earnings tag-free roster stays accepted as known-but-un-migrated.

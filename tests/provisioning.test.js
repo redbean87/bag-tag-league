@@ -165,10 +165,10 @@ test('handleCreateClubMembersTab gives doubles the season_points column and sing
     spreadsheetId: h.bound.SPREADSHEET_ID
   }));
   assert.equal(singlesResult.status, 'ok');
-  assert.equal(singlesResult.columns, h.bound.CLUB_MEMBER_HEADERS.length);
+  assert.equal(singlesResult.columns, h.bound.CLUB_MEMBER_HEADERS.length + 1);
   assert.deepEqual(
     h.fn('getSheetHeaders')(singles.getSheetByName('ClubMembers')),
-    h.bound.CLUB_MEMBER_HEADERS
+    h.bound.CLUB_MEMBER_HEADERS.concat(['appearances'])
   );
 });
 

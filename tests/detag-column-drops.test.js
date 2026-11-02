@@ -131,7 +131,7 @@ test('dry run reports every planned drop and writes nothing', () => {
   assert.equal(byName['Week template'].status, 'would-drop');
   assert.equal(byName['ClubMembers'].status, 'would-drop');
   assert.deepEqual(byName['ClubMembers'].drop_headers, ['current_tag']);
-  assert.deepEqual(byName['ClubMembers'].to, h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  assert.deepEqual(byName['ClubMembers'].to, h.bound.CLUB_MEMBER_HEADERS_DOUBLES.slice(0, -1));
 
   // Untouched: every sheet still carries the pre-detag tag columns.
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES_TAGGED);
@@ -155,7 +155,7 @@ test('apply proceeds without any approval token and drops exactly the previewed 
   assert.deepEqual(byName['ClubMembers'].drop_headers, previewByName['ClubMembers'].drop_headers);
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
   assert.deepEqual(h.fn('getSheetHeaders')(template), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
-  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES.slice(0, -1));
 });
 
 // ─── Apply ───────────────────────────────────────────────────────────────────
@@ -169,9 +169,9 @@ test('apply drops the tag columns and preserves every other value', () => {
   assert.equal(report.applied, true);
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
   assert.deepEqual(h.fn('getSheetHeaders')(template), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
-  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES.slice(0, -1));
   assert.equal(h.bound.WEEKLY_RECORD_HEADERS_DOUBLES.length, 51);
-  assert.equal(h.bound.CLUB_MEMBER_HEADERS_DOUBLES.length, 9);
+  assert.equal(h.bound.CLUB_MEMBER_HEADERS_DOUBLES.length, 10);
 
   // Values that were not dropped move with their column.
   assert.equal(valueByName(h, week, 'score', 1), 'v_score');
@@ -294,7 +294,7 @@ test('the admin handler applies without any authorization token', () => {
   assert.equal(result.applied, true);
   assert.equal(result.sheets_changed, 3);
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
-  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES.slice(0, -1));
 });
 
 test('the admin handler drops the columns and then reports no drop', () => {
@@ -310,7 +310,7 @@ test('the admin handler drops the columns and then reports no drop', () => {
   assert.equal(applied.applied, true);
   assert.equal(applied.sheets_changed, 3);
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
-  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES);
+  assert.deepEqual(h.fn('getSheetHeaders')(club), h.bound.CLUB_MEMBER_HEADERS_DOUBLES.slice(0, -1));
 
   const second = h.parse(h.fn('handleMigrateDetagColumnDrops')({
     league: h.bound.LEAGUE_ID_DOUBLES,

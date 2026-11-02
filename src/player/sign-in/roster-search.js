@@ -104,7 +104,8 @@
         udisc_username: (member.udisc_username || '').toString(),
         pdga_number: (member.pdga_number || '').toString(),
         current_tag: member.current_tag,
-        season_points: member.season_points
+        season_points: member.season_points,
+        appearances: member.appearances
       });
     }
 

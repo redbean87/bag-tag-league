@@ -73,8 +73,22 @@ const CLUB_MEMBER_HEADERS_DETAG = CLUB_MEMBER_HEADERS.filter(function(header) {
 
 const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS_DETAG.concat([
   'season_points',
-  'season_earnings'
+  'season_earnings',
+  'appearances'
 ]);
+
+// `appearances` is the last ClubMembers column for both league kinds: how many
+// finalized weeks the member was checked in for. Like the season caches it is
+// a denormalized copy, but it is maintained at finalize (never on the load
+// path) from the FinalizedWeeks ledger, and a roster provisioned without it is
+// upgraded in place. A blank cell reads as 0.
+const CLUB_APPEARANCES_HEADER = 'appearances';
+
+// Ledger of weeks whose attendance has been counted: one row per finalized
+// week. It is the per-week marker that makes a re-finalize (or a doubles
+// re-import) unable to count a week twice.
+const FINALIZED_WEEKS_SHEET_NAME = 'FinalizedWeeks';
+const FINALIZED_WEEKS_HEADERS = ['league_date', 'finalized_at'];
 
 // ClubMembers columns the seed-only roster reload must never take from the
 // caller's payload. `current_tag` is a singles tag field that has no meaning on
@@ -85,7 +99,7 @@ const CLUB_MEMBER_HEADERS_DOUBLES = CLUB_MEMBER_HEADERS_DETAG.concat([
 // and a new row lands blank. None of these columns is ever part of the seed's
 // identity comparison, so a re-seed with an unchanged payload is a true no-op.
 const ROSTER_SEED_BLANK_HEADERS = ['current_tag'];
-const ROSTER_SEED_PRESERVE_HEADERS = ['season_points', 'season_earnings'];
+const ROSTER_SEED_PRESERVE_HEADERS = ['season_points', 'season_earnings', 'appearances'];
 
 // Payload field that carries a member's join date. The seed-only roster reload
 // maps it onto the ClubMembers `created_at` column, so a reload restores the
@@ -992,7 +1006,7 @@ function getClubMemberHeaders(format, scoring) {
   var rules = rulesForEnums(format, scoring);
   var columns = (rules.usesTags ? CLUB_MEMBER_HEADERS : CLUB_MEMBER_HEADERS_DETAG).slice();
   if (rules.usesPoints) columns = columns.concat(['season_points', 'season_earnings']);
-  return columns;
+  return columns.concat([CLUB_APPEARANCES_HEADER]);
 }
 
 // ─── End spreadsheet routing ─────────────────────────────────────────────────
@@ -1937,6 +1951,12 @@ function leagueHeadersMatch(headers, format, scoring) {
 function clubMemberHeadersMatch(headers, format, scoring) {
   var rules = rulesForEnums(format, scoring);
   if (arraysEqual(headers, getClubMemberHeaders(rules.format, rules.scoring))) return true;
+  // A roster that predates the appearances column is known but un-migrated;
+  // the trailing column is appended in place at the first finalize or backfill.
+  if (headers && headers[headers.length - 1] === CLUB_APPEARANCES_HEADER) {
+    return clubMemberHeadersMatch(headers.slice(0, -1), format, scoring);
+  }
+  if (arraysEqual(headers, getClubMemberHeaders(rules.format, rules.scoring).slice(0, -1))) return true;
   if (arraysEqual(headers, CLUB_MEMBER_HEADERS)) return true;
   if (rules.usesPoints && arraysEqual(headers, CLUB_MEMBER_HEADERS.concat(['season_points']))) return true;
   // The pre-earnings tag-free roster: known but un-migrated. The earnings
@@ -2913,6 +2933,9 @@ function doPost(e) {
     if (data.action === 'seasonStandings') {
       return handleSeasonStandings(data);
     }
+    if (data.action === 'backfillAppearances') {
+      return handleBackfillAppearances(data);
+    }
     if (data.action === 'syncSeasonCaches') {
       return handleSyncSeasonCaches(data);
     }
@@ -3117,6 +3140,7 @@ function handleSearchClubMembers(data) {
   const pdgaCol = playersHeaders.indexOf('pdga_number');
   const currentTagCol = playersHeaders.indexOf('current_tag');
   const isActiveCol = playersHeaders.indexOf('is_active');
+  const appearancesCol = playersHeaders.indexOf(CLUB_APPEARANCES_HEADER);
 
   const lowerQuery = query.toLowerCase();
   const results = [];
@@ -3125,7 +3149,9 @@ function handleSearchClubMembers(data) {
   // weekly points) in every search result; tag members keep a tag-only payload.
   const seasonTotals = rules.usesPoints ? sumSeasonPointsByMember(spreadsheet) : null;
 
-  for (let i = 1; i < playersData.length && results.length < 10; i++) {
+  // Matches are collected in full and ordered by appearances before the cap of
+  // 10, so the regulars win a crowded query exactly as in the roster listing.
+  for (let i = 1; i < playersData.length; i++) {
     const row = playersData[i];
 
     // Filter out inactive members
@@ -3145,7 +3171,8 @@ function handleSearchClubMembers(data) {
         member_number: row[memberNumberCol],
         name: name,
         udisc_username: udisc,
-        pdga_number: pdga
+        pdga_number: pdga,
+        appearances: readAppearances(row, appearancesCol)
       };
       // Tag data belongs to tag-scoring leagues; a points-scoring search
       // response stays tag-free and carries season_points instead.
@@ -3162,7 +3189,9 @@ function handleSearchClubMembers(data) {
     }
   }
 
-  return respond('ok', 'Search complete.', { results: results, league: leagueId });
+  results.sort(compareByAppearances);
+
+  return respond('ok', 'Search complete.', { results: results.slice(0, 10), league: leagueId });
 }
 
 /**
@@ -3177,6 +3206,10 @@ function handleSearchClubMembers(data) {
  * Every record carries `created_at`, the member's stored join date, so the
  * admin Member since column can render it. It is read-only here: neither the
  * listing nor a check-in can set or clear it.
+ *
+ * Members come back ordered by the stored `appearances` count (most first,
+ * then name); the count is read from the ClubMembers column and never derived
+ * from the Week tabs here.
  *
  * Inputs: league (optional routing selector)
  */
@@ -3201,6 +3234,7 @@ function handleListClubMembers(data) {
   const currentTagCol = playersHeaders.indexOf('current_tag');
   const isActiveCol = playersHeaders.indexOf('is_active');
   const createdAtCol = playersHeaders.indexOf('created_at');
+  const appearancesCol = playersHeaders.indexOf(CLUB_APPEARANCES_HEADER);
 
   // One aggregation shared by every points member listing; it sums the
   // points persisted at import commit, so a committed week always counts.
@@ -3219,7 +3253,8 @@ function handleListClubMembers(data) {
       udisc_username: (row[udiscCol] || '').toString(),
       pdga_number: (row[pdgaCol] || '').toString(),
       is_active: isActive,
-      created_at: createdAtCol !== -1 ? (row[createdAtCol] || '').toString() : ''
+      created_at: createdAtCol !== -1 ? (row[createdAtCol] || '').toString() : '',
+      appearances: readAppearances(row, appearancesCol)
     };
 
     if (rules.usesPoints) {
@@ -3232,6 +3267,9 @@ function handleListClubMembers(data) {
 
     members.push(member);
   }
+
+  // The check-in list leads with the regulars: stored appearances, most first.
+  members.sort(compareByAppearances);
 
   return respond('ok', 'Members loaded.', { league: leagueId, format: format, members: members });
 }
@@ -6210,12 +6248,21 @@ function handleCommitUdiscImportDoubles(data) {
   // accumulating. The weekly payout rule comes from this league's settings.
   var earningsSync = syncDoublesSeasonEarnings(spreadsheet, rules);
 
+  // The commit is the doubles week-closing write: once any row is on the week,
+  // its attendance counts exactly once (a re-import of the same week finds the
+  // ledger marker and only refreshes the tally).
+  var attendanceCounted = false;
+  if (summary.committed + summary.repaired + summary.already_committed > 0) {
+    attendanceCounted = finalizeWeekAttendance(spreadsheet, leagueDate).newly_finalized;
+  }
+
   return respond('ok', 'Doubles import committed.', {
     format: LEAGUE_FORMAT_DOUBLES,
     league_date: leagueDate,
     summary: summary,
     season_points_synced: seasonSync.synced,
     season_earnings_synced: earningsSync.synced,
+    attendance_counted: attendanceCounted,
     results: results,
     created_member_numbers: createdMemberNumbers
   });
@@ -6896,9 +6943,14 @@ function handleFinalizeRound(data) {
     });
   }
 
+  // Count this week's attendance exactly once (the ledger marker makes a
+  // repeat finalize a no-op for the count).
+  var attendance = finalizeWeekAttendance(spreadsheet, leagueDate);
+
   return respond('ok', 'Round finalized. ' + updated.length + ' ClubMembers records updated.', {
     league_date: leagueDate,
     tab_name: tabName,
+    attendance_counted: attendance.newly_finalized,
     updated: updated,
     skipped_no_out_tag: skippedNoOutTag,
     skipped_no_club_member: skippedNoClubMember,
@@ -7546,6 +7598,189 @@ function syncDoublesSeasonPoints(spreadsheet) {
  */
 function syncDoublesSeasonEarnings(spreadsheet, rules) {
   return syncClubSeasonColumn(spreadsheet, 'season_earnings', sumSeasonEarningsByMember(spreadsheet, rules));
+}
+
+// ─── Attendance: appearances maintained at finalize ─────────────────────────
+//
+// `appearances` on ClubMembers is how many finalized weeks a member was
+// checked in for. It exists so the check-in list can lead with the regulars
+// without reading a single Week tab on load. The count is rewritten only at a
+// finalize (the tags finalizeRound action, the doubles import commit) or by
+// the explicit backfill, and always from scratch: the FinalizedWeeks ledger
+// lists the weeks that count, each listed Week tab is read once, and every
+// member's checked-in rows are tallied. Because the ledger holds one row per
+// week and the tally is recomputed rather than incremented, finalizing the same
+// week again can never count it twice.
+
+/**
+ * A member's stored appearance count from a ClubMembers row; a missing column
+ * or blank/non-numeric cell reads as 0.
+ */
+function readAppearances(row, appearancesCol) {
+  if (appearancesCol === -1) return 0;
+  var value = parseInt(row[appearancesCol], 10);
+  return isNaN(value) || value < 0 ? 0 : value;
+}
+
+/**
+ * Check-in list order: most appearances first, then name (case-insensitive).
+ */
+function compareByAppearances(a, b) {
+  if (b.appearances !== a.appearances) return b.appearances - a.appearances;
+  var nameA = (a.name || '').toString().toLowerCase();
+  var nameB = (b.name || '').toString().toLowerCase();
+  if (nameA < nameB) return -1;
+  if (nameA > nameB) return 1;
+  return 0;
+}
+
+/**
+ * The league dates listed on the FinalizedWeeks ledger, in ledger order.
+ */
+function readFinalizedWeekDates(spreadsheet) {
+  var ledger = spreadsheet.getSheetByName(FINALIZED_WEEKS_SHEET_NAME);
+  if (!ledger || ledger.getLastRow() < 2) return [];
+  var data = ledger.getDataRange().getValues();
+  var dateCol = (data[0] || []).indexOf('league_date');
+  if (dateCol === -1) return [];
+  var dates = [];
+  for (var i = 1; i < data.length; i++) {
+    var value = data[i][dateCol];
+    if (value === '' || value === null || value === undefined) continue;
+    // Sheets may hand a date-formatted cell back as a Date object.
+    var text = Object.prototype.toString.call(value) === '[object Date]'
+      ? value.toISOString().slice(0, 10)
+      : value.toString();
+    if (dates.indexOf(text) === -1) dates.push(text);
+  }
+  return dates;
+}
+
+/**
+ * Lists a week on the ledger. Returns true when the week was newly marked and
+ * false when it was already there (a re-finalize), writing nothing then.
+ */
+function markWeekFinalized(spreadsheet, leagueDate, now) {
+  if (readFinalizedWeekDates(spreadsheet).indexOf(leagueDate) !== -1) return false;
+  var ledger = ensureCanonicalSheet(spreadsheet, FINALIZED_WEEKS_SHEET_NAME, FINALIZED_WEEKS_HEADERS).sheet;
+  // Text so a date-looking cell is never coerced to a Date by Sheets.
+  ledger.appendRow([leagueDate, now || new Date().toISOString()]);
+  return true;
+}
+
+/**
+ * Tallies checked-in rows per member across the given finalized weeks. Each
+ * existing Week tab is read once; a ledger date with no tab contributes nothing.
+ */
+function sumAppearancesByMember(spreadsheet, leagueDates) {
+  var totals = {};
+  for (var d = 0; d < leagueDates.length; d++) {
+    var sheet = spreadsheet.getSheetByName('Week ' + leagueDates[d]);
+    if (!sheet || sheet.getLastRow() < 2) continue;
+    var data = sheet.getDataRange().getValues();
+    var hMember = data[0].indexOf('member_number');
+    var hCheckedIn = data[0].indexOf('checked_in');
+    if (hMember === -1 || hCheckedIn === -1) continue;
+    // A member counts once per week even if a week tab holds a repeat row.
+    var seen = {};
+    for (var i = 1; i < data.length; i++) {
+      var memberNumber = data[i][hMember];
+      if (memberNumber === '' || memberNumber === null || memberNumber === undefined) continue;
+      var checkedIn = data[i][hCheckedIn];
+      if (checkedIn !== true && checkedIn !== 'TRUE') continue;
+      if (seen[memberNumber]) continue;
+      seen[memberNumber] = true;
+      totals[memberNumber] = (totals[memberNumber] || 0) + 1;
+    }
+  }
+  return totals;
+}
+
+/**
+ * Recomputes the ClubMembers `appearances` column from the FinalizedWeeks
+ * ledger. See syncClubSeasonColumn: recompute-from-scratch, one batch write,
+ * column created in place for a roster that predates it.
+ */
+function syncAppearances(spreadsheet) {
+  var totals = sumAppearancesByMember(spreadsheet, readFinalizedWeekDates(spreadsheet));
+  return syncClubSeasonColumn(spreadsheet, CLUB_APPEARANCES_HEADER, totals);
+}
+
+/**
+ * Counts one week's attendance at finalize: lists the week on the ledger (once)
+ * and rewrites the appearances column. Safe to call any number of times for the
+ * same week. Returns { newly_finalized, synced }.
+ */
+function finalizeWeekAttendance(spreadsheet, leagueDate) {
+  var newlyFinalized = markWeekFinalized(spreadsheet, leagueDate);
+  var sync = syncAppearances(spreadsheet);
+  return { newly_finalized: newlyFinalized, synced: sync.synced };
+}
+
+/**
+ * Whether a Week tab already carries results, so the backfill can treat it as
+ * a finalized week: a numeric weekly_points (points leagues) or a numeric
+ * out_tag (tag leagues) on at least one row.
+ */
+function weekHasResults(sheet, rules) {
+  if (!sheet || sheet.getLastRow() < 2) return false;
+  var data = sheet.getDataRange().getValues();
+  var col = data[0].indexOf(rules.usesTags ? 'out_tag' : 'weekly_points');
+  if (col === -1) return false;
+  for (var i = 1; i < data.length; i++) {
+    if (!isNaN(parseFloat(data[i][col]))) return true;
+  }
+  return false;
+}
+
+/**
+ * Admin action: one-time, idempotent backfill of the appearances count for
+ * weeks that predate the column. Every existing Week tab that already carries
+ * results is listed on the FinalizedWeeks ledger and the count is recomputed
+ * from the ledger, which is exactly what a finalize of each week would have
+ * produced. Dry-run by default (`apply: true` writes); re-running writes
+ * nothing new and yields the same counts.
+ *
+ * Inputs: league (optional routing selector), apply (optional boolean)
+ */
+function handleBackfillAppearances(data) {
+  var selector = leagueSelectorFrom(data);
+  var rules = getLeagueRules(selector);
+  var spreadsheet = resolveSpreadsheet(selector);
+  var apply = data.apply === true;
+
+  var ledgerDates = readFinalizedWeekDates(spreadsheet);
+  var weeksToMark = [];
+  var weekSheets = getWeekSheets(spreadsheet);
+  for (var i = 0; i < weekSheets.length; i++) {
+    var date = weekSheets[i].getName().replace(/^Week /, '');
+    if (ledgerDates.indexOf(date) !== -1) continue;
+    if (weekHasResults(weekSheets[i], rules)) weeksToMark.push(date);
+  }
+
+  var allDates = ledgerDates.concat(weeksToMark);
+  var counts = sumAppearancesByMember(spreadsheet, allDates);
+
+  if (!apply) {
+    return respond('ok', 'Dry run: nothing written. Re-send with apply: true to backfill.', {
+      applied: false,
+      weeks_to_mark: weeksToMark,
+      weeks_already_marked: ledgerDates,
+      appearances: counts
+    });
+  }
+
+  var now = new Date().toISOString();
+  for (var w = 0; w < weeksToMark.length; w++) markWeekFinalized(spreadsheet, weeksToMark[w], now);
+  var sync = syncAppearances(spreadsheet);
+
+  return respond('ok', 'Appearances backfilled from finalized weeks.', {
+    applied: true,
+    weeks_marked: weeksToMark,
+    weeks_already_marked: ledgerDates,
+    synced: sync.synced,
+    appearances: sync.members
+  });
 }
 
 /**

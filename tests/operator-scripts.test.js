@@ -134,7 +134,7 @@ test('applyDetagColumnDrops drops the tag columns without any approval property'
   assert.deepEqual(h.fn('getSheetHeaders')(week), h.bound.WEEKLY_RECORD_HEADERS_DOUBLES);
   assert.deepEqual(
     h.fn('getSheetHeaders')(doubles.getSheetByName('ClubMembers')),
-    h.bound.CLUB_MEMBER_HEADERS_DOUBLES
+    h.bound.CLUB_MEMBER_HEADERS_DOUBLES.slice(0, -1)
   );
 });
 
