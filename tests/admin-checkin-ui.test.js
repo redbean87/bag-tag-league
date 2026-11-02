@@ -39,3 +39,25 @@ test('check-in requires a valid entered tag and the card resets on date change',
   assert.match(functionBody('adminCheckIn'), /\[1-9\]/);
   assert.match(functionBody('clearStaleSectionData'), /clearCheckIn\(\)/);
 });
+
+test('each row has one button whose label and action follow the check-in state', () => {
+  const render = functionBody('renderCheckIn');
+  const checkedIn = render.slice(render.indexOf('if (p.checked_in)'), render.indexOf('} else {'));
+  const notIn = render.slice(render.indexOf('} else {'), render.indexOf("html += '</li>'"));
+  const buttons = (s) => s.match(/<button /g) || [];
+  assert.equal(buttons(checkedIn).length, 1);
+  assert.equal(buttons(notIn).length, 1);
+  assert.match(checkedIn, /class="undo" onclick="adminUndoCheckIn\([^)]*\)">Undo</);
+  assert.doesNotMatch(checkedIn, />Check in</);
+  assert.match(notIn, /onclick="adminCheckIn\([^)]*\)">Check in</);
+  assert.doesNotMatch(notIn, />Undo</);
+});
+
+test('rows stay on one line with a 44px tap target and the state under the name', () => {
+  assert.match(html, /\.checkin-row \{[^}]*display: flex;[^}]*\}/);
+  assert.doesNotMatch(html, /\.checkin-row \{[^}]*flex-wrap/);
+  assert.doesNotMatch(html, /\.checkin-state \{[^}]*flex: 1 1 100%/);
+  assert.match(html, /\.checkin-row button \{[^}]*min-height: 44px/);
+  assert.match(html, /\.checkin-tag \{[^}]*min-height: 44px/);
+  assert.match(functionBody('renderCheckIn'), /class="checkin-who"/);
+});

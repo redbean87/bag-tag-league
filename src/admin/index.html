@@ -70,16 +70,16 @@
     .checkin-summary { font-size: 1.25rem; font-weight: bold; margin: 0.75rem 0 0.5rem; }
     .checkin-search { width: 100%; padding: 0.6rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 0.5rem; }
     .checkin-list { list-style: none; border: 1px solid #ddd; border-radius: 4px; max-height: 65vh; overflow: auto; }
-    .checkin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.6rem 0.75rem; border-bottom: 1px solid #eee; }
+    .checkin-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.75rem; border-bottom: 1px solid #eee; }
     .checkin-row:last-child { border-bottom: none; }
     .checkin-row.in { background: #e6f4ea; }
-    .checkin-name { flex: 1 1 10rem; font-weight: 600; }
-    .checkin-state { flex: 1 1 100%; font-size: 0.85rem; color: #555; }
-    .checkin-tag { width: 6rem; padding: 0.6rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; }
-    .checkin-row button { min-height: 44px; margin-top: 0; }
+    .checkin-who { flex: 1 1 0; min-width: 0; }
+    .checkin-name { display: block; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+    .checkin-state { display: block; font-size: 0.8rem; color: #555; line-height: 1.25; }
+    .checkin-tag { flex: 0 0 auto; width: 3.5rem; min-height: 44px; padding: 0.4rem 0.25rem; text-align: center; margin: 0; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+    .checkin-row button { flex: 0 0 auto; min-width: 4.75rem; min-height: 44px; margin-top: 0; padding: 0.5rem 0.6rem; }
     .checkin-row button.undo { background: #fff; color: #b3261e; border: 1px solid #b3261e; }
     .checkin-row button.undo:hover { background: #fce8e6; }
-    @media (min-width: 600px) { .checkin-state { flex: 1 1 12rem; } }
     button:disabled { background: #ccc; cursor: not-allowed; }
     .status {
       margin-top: 1rem;
@@ -3639,20 +3639,23 @@
         var id = escHtml(String(p.member_number));
         html += '<li class="checkin-row' + (p.checked_in ? ' in' : '') + '" data-member="' + id +
           '" data-name="' + escHtml(String(p.name).toLowerCase()) + '">';
-        html += '<span class="checkin-name">' + escHtml(p.name) + '</span>';
         if (p.checked_in) {
           var when = formatCheckInTime(p.signed_in_at);
           var state = 'Checked in' + (when ? ' at ' + escHtml(when) : '') +
             (usesTags && p.in_tag !== '' ? ' · tag ' + escHtml(String(p.in_tag)) : '');
-          html += '<span class="checkin-state">' + state + '</span>';
+          html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + '</span>' +
+            '<span class="checkin-state">' + state + '</span></div>';
           html += '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
         } else {
           if (usesTags) {
             var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
-            html += '<label class="checkin-state" for="checkInTag-' + id + '">Tag carried today (last known: ' +
-              (def === '' ? 'none' : escHtml(def)) + ')</label>';
+            html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + '</span>' +
+              '<label class="checkin-state" for="checkInTag-' + id + '">Tag today (last: ' +
+              (def === '' ? 'none' : escHtml(def)) + ')</label></div>';
             html += '<input type="number" inputmode="numeric" min="1" step="1" class="checkin-tag" id="checkInTag-' + id +
               '" value="' + escHtml(def) + '" aria-label="Tag carried by ' + escHtml(p.name) + '">';
+          } else {
+            html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + '</span></div>';
           }
           html += '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
         }
