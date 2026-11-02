@@ -23,9 +23,9 @@ Regenerate with `node scripts/gen-code-map.js` after any edit to `scripts/Code.g
 3964-4229  Admin check-in
 4724-5249  Doubles import preview (read-only)
 5250-6970  Commit helpers shared by the singles and doubles import commit paths
-6971-7281  Doubles points: compute-at-commit + live results
-7282-8021  Doubles tie resolution
-8022-8217  Attendance: appearances maintained at finalize
+6971-7282  Doubles points: compute-at-commit + live results
+7283-7994  Doubles tie resolution
+7995-8190  Attendance: appearances maintained at finalize
 ```
 
 ## Contents
@@ -199,46 +199,45 @@ Regenerate with `node scripts/gen-code-map.js` after any edit to `scripts/Code.g
 6985-7001  function doublesPointsForPosition(positionRaw, rules) - Pure scoring rule for a points league: a placement found in the league's points table earns i...
 7003-7006  function roundCurrency(amount) - Rounds a dollar amount to cents so float drift never reaches the UI.
 7008-7015  function isSecondPlacePaid(payout, playerCount) - Whether the fixed second-place share is paid for a field of `playerCount`: the league sets a...
-7017-7099  function applyWeeklyPayout(pairs, playerCount, rules) - Applies the weekly pool rule to the grouped teams and returns the payout summary.
-7101-7159  function buildDoublesPointsPlan(weeklyData, headers, rules) - Builds the read-only per-row results view for one doubles week tab.
-7161-7187  function readDoublesPointsTab(spreadsheet, leagueDate, rules) - Opens and validates the doubles weekly results tab for a league date.
-7189-7200  function validateDoublesPointsRequest(data) - Validates the shared points request shape (points gate + league_date).
-7202-7217  function pointsRowResponse(row) - Public shape of one row in the read-only points results view.
-7219-7225  function pointsSummary(rows)
-7227-7280  function groupDoublesPointsPairs(rows) - Groups results rows by pair_key for the results table.
-7297-7300  constants: TIE_BREAKS_SHEET_NAME ... TIE_STATUS_FINALIZED (4 declarations)
-7302-7307  function doublesTeamKey(pair) - Stable identity of one team on a results view: its pair key, or the solo member.
-7309-7317  function payingPlaceLimit(rules, playerCount) - The lowest place that is paid money this week: 0 when the league pays no weekly money, 1 when...
-7319-7392  function resolveDoublesTies(pairs, picks, limit) - Pure tie detector and resolver.
-7394-7397  function tiePlaceLabel(placement) - The place label the week tab shows: "T2" while teams are level, "3" once alone.
-7399-7442  function readTieBreaks(spreadsheet, leagueDate) - Reads the saved tie picks for one week.
-7444-7458  function rewriteTieBreakRows(spreadsheet, leagueDate, onlyPlace, newRows) - Replaces the TieBreaks rows this week owns (only those at `onlyPlace` when given) with `newRo...
-7460-7488  function buildTieView(spreadsheet, leagueDate, pairs, rules, playerCount) - Builds the tie view for a week: the picks applied over the imported placement (a draft until...
-7490-7505  function applyTiePlacements(pairs, placements, rules) - Moves each picked team to its chosen place on the grouped results (response copies only).
-7507-7527  function tieViewResponse(view) - Public shape of the tie view in the results response.
-7529-7542  function describeUnresolvedTies(unresolved, pairs) - Human description of the ties still waiting on a winner, for the refusal message.
-7544-7585  function handleCalculatePoints(data, message) - Admin action: read the committed doubles results for one week.
-7587-7650  function handleSaveTieBreaks(data) - Admin action: save the winner order for one tied place before the week is finalized.
-7652-7722  function handleFinalizeDoublesWeek(data) - Admin action: finalize the week's tie resolution.
-7724-7798  function handleSeasonStandings(data) - Admin action: the season standings — every member with positive live season points, plus thei...
-7800-7833  function handleSyncSeasonCaches(data) - Maintenance action: recompute both doubles season caches (season_points and season_earnings)...
-7835-7895  function sumSeasonTotalsByMember(spreadsheet, rules) - Aggregates every doubles season total in one traversal of the season's Week tabs.
-7897-7904  function sumSeasonPointsByMember(spreadsheet) - Sums each member's committed weekly points across every Week tab.
-7906-7913  function sumSeasonEarningsByMember(spreadsheet, rules) - Sums each member's season earnings across every Week tab.
-7915-7934  function ensureClubSeasonColumn(clubSheet, header) - Ensures a doubles ClubMembers roster carries the given cache column, appending the header aft...
-7936-7943  function ensureSeasonPointsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_points` cache column.
-7945-7952  function ensureSeasonEarningsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_earnings` cache column.
-7954-7997  function syncClubSeasonColumn(spreadsheet, header, totals) - Recomputes one doubles ClubMembers cache column from the committed weekly data and persists i...
-7999-8008  function syncDoublesSeasonPoints(spreadsheet) - Recomputes the doubles ClubMembers `season_points` cache from the committed weekly_points.
-8010-8020  function syncDoublesSeasonEarnings(spreadsheet, rules) - Recomputes the doubles ClubMembers `season_earnings` cache from the re-derived weekly payouts.
-8034-8042  function readAppearances(row, appearancesCol) - A member's stored appearance count from a ClubMembers row; a missing column or blank/non-nume...
-8044-8054  function compareByAppearances(a, b) - Check-in list order: most appearances first, then name (case-insensitive).
-8056-8076  function readFinalizedWeekDates(spreadsheet) - The league dates listed on the FinalizedWeeks ledger, in ledger order.
-8078-8088  function markWeekFinalized(spreadsheet, leagueDate, now) - Lists a week on the ledger.
-8090-8116  function sumAppearancesByMember(spreadsheet, leagueDates) - Tallies checked-in rows per member across the given finalized weeks.
-8118-8126  function syncAppearances(spreadsheet) - Recomputes the ClubMembers `appearances` column from the FinalizedWeeks ledger.
-8128-8137  function finalizeWeekAttendance(spreadsheet, leagueDate) - Counts one week's attendance at finalize: lists the week on the ledger (once) and rewrites th...
-8139-8153  function weekHasResults(sheet, rules) - Whether a Week tab already carries results, so the backfill can treat it as a finalized week:...
-8155-8203  function handleBackfillAppearances(data) - Admin action: one-time, idempotent backfill of the appearances count for weeks that predate t...
-8205-8218  function respond(status, message, extra) - Builds and returns a JSON response.
+7017-7100  function applyWeeklyPayout(pairs, playerCount, rules) - Applies the weekly pool rule to the grouped teams and returns the payout summary.
+7102-7160  function buildDoublesPointsPlan(weeklyData, headers, rules) - Builds the read-only per-row results view for one doubles week tab.
+7162-7188  function readDoublesPointsTab(spreadsheet, leagueDate, rules) - Opens and validates the doubles weekly results tab for a league date.
+7190-7201  function validateDoublesPointsRequest(data) - Validates the shared points request shape (points gate + league_date).
+7203-7218  function pointsRowResponse(row) - Public shape of one row in the read-only points results view.
+7220-7226  function pointsSummary(rows)
+7228-7281  function groupDoublesPointsPairs(rows) - Groups results rows by pair_key for the results table.
+7302-7305  constants: TIE_BREAKS_SHEET_NAME ... TIE_STATUS_FINALIZED (4 declarations)
+7307-7312  function doublesTeamKey(pair) - Stable identity of one team on a results view: its pair key, or the solo member.
+7314-7322  function payingPlaceLimit(rules, playerCount) - The lowest place that is paid money this week: 0 when the league pays no weekly money, 1 when...
+7324-7398  function resolveDoublesTies(pairs, picks, limit) - Pure tie detector and resolver.
+7400-7443  function readTieBreaks(spreadsheet, leagueDate) - Reads the saved tie picks for one week.
+7445-7459  function rewriteTieBreakRows(spreadsheet, leagueDate, onlyPlace, newRows) - Replaces the TieBreaks rows this week owns (only those at `onlyPlace` when given) with `newRo...
+7461-7485  function buildTieView(spreadsheet, leagueDate, pairs, rules, playerCount) - Builds the tie view for a week: the picks applied over the imported placement (a draft until...
+7487-7497  function applyTieMoneyPlaces(pairs, placements) - Sets `payout_place` on each team in a reported tie: the place the unchanged payout rule pays...
+7499-7519  function tieViewResponse(view) - Public shape of the tie view in the results response.
+7521-7534  function describeUnresolvedTies(unresolved, pairs) - Human description of the ties still waiting on a winner, for the refusal message.
+7536-7577  function handleCalculatePoints(data, message) - Admin action: read the committed doubles results for one week.
+7579-7642  function handleSaveTieBreaks(data) - Admin action: save the winner order for one tied place before the week is finalized.
+7644-7692  function handleFinalizeDoublesWeek(data) - Admin action: finalize the week's tie resolution.
+7694-7768  function handleSeasonStandings(data) - Admin action: the season standings — every member with positive live season points, plus thei...
+7770-7803  function handleSyncSeasonCaches(data) - Maintenance action: recompute both doubles season caches (season_points and season_earnings)...
+7805-7868  function sumSeasonTotalsByMember(spreadsheet, rules) - Aggregates every doubles season total in one traversal of the season's Week tabs.
+7870-7877  function sumSeasonPointsByMember(spreadsheet) - Sums each member's committed weekly points across every Week tab.
+7879-7886  function sumSeasonEarningsByMember(spreadsheet, rules) - Sums each member's season earnings across every Week tab.
+7888-7907  function ensureClubSeasonColumn(clubSheet, header) - Ensures a doubles ClubMembers roster carries the given cache column, appending the header aft...
+7909-7916  function ensureSeasonPointsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_points` cache column.
+7918-7925  function ensureSeasonEarningsColumn(clubSheet) - Ensures the doubles ClubMembers roster carries the `season_earnings` cache column.
+7927-7970  function syncClubSeasonColumn(spreadsheet, header, totals) - Recomputes one doubles ClubMembers cache column from the committed weekly data and persists i...
+7972-7981  function syncDoublesSeasonPoints(spreadsheet) - Recomputes the doubles ClubMembers `season_points` cache from the committed weekly_points.
+7983-7993  function syncDoublesSeasonEarnings(spreadsheet, rules) - Recomputes the doubles ClubMembers `season_earnings` cache from the re-derived weekly payouts.
+8007-8015  function readAppearances(row, appearancesCol) - A member's stored appearance count from a ClubMembers row; a missing column or blank/non-nume...
+8017-8027  function compareByAppearances(a, b) - Check-in list order: most appearances first, then name (case-insensitive).
+8029-8049  function readFinalizedWeekDates(spreadsheet) - The league dates listed on the FinalizedWeeks ledger, in ledger order.
+8051-8061  function markWeekFinalized(spreadsheet, leagueDate, now) - Lists a week on the ledger.
+8063-8089  function sumAppearancesByMember(spreadsheet, leagueDates) - Tallies checked-in rows per member across the given finalized weeks.
+8091-8099  function syncAppearances(spreadsheet) - Recomputes the ClubMembers `appearances` column from the FinalizedWeeks ledger.
+8101-8110  function finalizeWeekAttendance(spreadsheet, leagueDate) - Counts one week's attendance at finalize: lists the week on the ledger (once) and rewrites th...
+8112-8126  function weekHasResults(sheet, rules) - Whether a Week tab already carries results, so the backfill can treat it as a finalized week:...
+8128-8176  function handleBackfillAppearances(data) - Admin action: one-time, idempotent backfill of the appearances count for weeks that predate t...
+8178-8191  function respond(status, message, extra) - Builds and returns a JSON response.
 ```

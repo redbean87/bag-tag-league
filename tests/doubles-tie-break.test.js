@@ -5,7 +5,8 @@
 // so the admin names the winner of a paying tie before the week is finalized.
 // The choice is a draft on a TieBreaks tab until finalize, finalize refuses
 // while a paying tie has no winner, and the chosen order is what the unchanged
-// payout rule, the week tab and the standings use. No tag column is touched.
+// payout rule and the standings use. The pick decides MONEY ONLY: tied teams keep
+// the same place and points. No tag column is touched.
 //
 // All tests run in a Node VM with an in-memory Sheets fake.
 
@@ -92,18 +93,18 @@ test('no money paid means no tie needs a choice', () => {
   assert.equal(view.groups.length, 0);
 });
 
-test('a pick takes the tied place and the rest move down; a three-way tie needs a second pick when place 2 is paid', () => {
+test('a pick sets the money place and the rest follow; a three-way tie needs a second pick when place 2 is paid', () => {
   const h = loadCode();
   const field = pairs([['a', 1], ['b', 1], ['c', 1]]);
   const one = h.fn('resolveDoublesTies')(field, { 1: ['b'] }, 2);
-  assert.equal(one.placements.b.place, 1);
-  assert.equal(one.placements.a.place, 2);
+  assert.equal(one.placements.b.money_place, 1);
+  assert.equal(one.placements.a.money_place, 2);
   assert.equal(one.placements.a.tied, true);
   assert.equal(one.groups[0].needs_choice, true);
   const two = h.fn('resolveDoublesTies')(field, { 1: ['b', 'c'] }, 2);
   assert.equal(two.groups[0].needs_choice, false);
-  assert.equal(two.placements.c.place, 2);
-  assert.equal(two.placements.a.place, 3);
+  assert.equal(two.placements.c.money_place, 2);
+  assert.equal(two.placements.a.money_place, 3);
 });
 
 test('a pick for a team that left the tie is ignored and counted stale', () => {
@@ -127,7 +128,7 @@ test('the results view detects the tie and pays the tied teams alike until a win
   assert.equal(payoutOf(data, 'dubs:p2'), 10.5);
 });
 
-test('a saved winner is a draft: the payout follows it and the week tab is untouched', () => {
+test('a saved pick is a draft: the money follows it, places and points do not move, and the week tab is untouched', () => {
   const h = loadCode();
   const { week } = build(h, POOL_FIRST_ONLY, tiedForFirst(h));
   const before = JSON.stringify(week.rows);
@@ -136,7 +137,13 @@ test('a saved winner is a draft: the payout follows it and the week tab is untou
   assert.equal(data.ties.unresolved_count, 0);
   assert.equal(payoutOf(data, 'dubs:p2'), 21);
   assert.equal(payoutOf(data, 'dubs:p1'), 0);
-  assert.equal(data.pairs.find((p) => p.pair_key === 'dubs:p1').place_raw, 2);
+  // Regression: the first cut moved the loser down to place 2 (and 1.5 points).
+  for (const key of ['dubs:p1', 'dubs:p2']) {
+    const team = data.pairs.find((p) => p.pair_key === key);
+    assert.equal(team.place_raw, 1);
+    assert.equal(team.place, 'T1');
+    assert.equal(team.points, 2);
+  }
   assert.equal(JSON.stringify(week.rows), before);
 });
 
@@ -174,18 +181,25 @@ test('finalize refuses an unresolved paying tie, names it, and writes nothing', 
   assert.equal(doubles.getSheetByName('TieBreaks'), null);
 });
 
-test('finalize writes the chosen places, points and standings, and records the choice', () => {
+test('finalize keeps both tied teams at the same place and points; only the money follows the pick', () => {
   const h = loadCode();
   const { doubles, week, club } = build(h, POOL_FIRST_ONLY, tiedForFirst(h));
+  const before = JSON.stringify(week.rows);
   pick(h, ['dubs:p2']);
   const done = finalize(h);
   assert.equal(done.status, 'ok');
   assert.equal(done.ties.state, 'finalized');
   assert.equal(done.ties.finalized_choices[0].team_key, 'dubs:p2');
 
-  assert.deepEqual(JSON.parse(JSON.stringify(col(week, 'team_position_raw'))), [2, 2, 1, 1, 3, 3, 4]);
-  assert.deepEqual(JSON.parse(JSON.stringify(col(week, 'team_position'))), ['2', '2', '1', '1', '3', '3', '4']);
-  assert.deepEqual(JSON.parse(JSON.stringify(col(week, 'weekly_points'))), [1.5, 1.5, 2, 2, 1, 1, 0.5]);
+  // The week tab is not rewritten: both tied teams keep place 1 and 2 points.
+  assert.equal(JSON.stringify(week.rows), before);
+  for (const key of ['dubs:p1', 'dubs:p2']) {
+    const team = done.pairs.find((p) => p.pair_key === key);
+    assert.equal(team.place_raw, 1);
+    assert.equal(team.place, 'T1');
+    assert.equal(team.points, 2);
+  }
+  // Only the money differs, following the pick.
   assert.equal(payoutOf(done, 'dubs:p2'), 21);
   assert.equal(payoutOf(done, 'dubs:p1'), 0);
 
@@ -194,14 +208,18 @@ test('finalize writes the chosen places, points and standings, and records the c
   assert.equal(tieRows[1][3], 'dubs:p2');
   assert.equal(tieRows[1][5], 'finalized');
 
-  // The standings read the chosen order: Players 3 and 4 earned the pool.
+  // Standings: Players 3 and 4 earned the pool; all four keep the same points.
   const standings = h.parse(h.fn('handleSeasonStandings')({ spreadsheetId: h.bound.SPREADSHEET_ID_DOUBLES }));
   const earned = {};
-  standings.standings.forEach((s) => { earned[s.member_number] = s.season_earnings; });
+  const season = {};
+  standings.standings.forEach((s) => { earned[s.member_number] = s.season_earnings; season[s.member_number] = s.season_points; });
   assert.equal(earned[3], 10.5);
   assert.equal(earned[1], 0);
+  assert.equal(season[1], season[3]);
+  assert.equal(season[1], 2);
   const earnCol = club.rows[0].indexOf('season_earnings');
   assert.equal(club.rows[3][earnCol], 10.5);
+  assert.equal(club.rows[1][earnCol], 0);
 });
 
 test('a finalized week refuses further picks and a second finalize', () => {
@@ -262,18 +280,17 @@ test('when second place is paid, a tie for second needs a winner too', () => {
   assert.equal(finalize(h).status, 'ok');
 });
 
-test('a re-import that re-creates the tie after finalize reopens it', () => {
+test('a re-import that changes the tied teams after finalize reopens the tie', () => {
   const h = loadCode();
   const { week } = build(h, POOL_FIRST_ONLY, tiedForFirst(h));
   pick(h, ['dubs:p2']);
-  finalize(h);
-  const idx = week.rows[0].indexOf('team_position_raw');
-  week.rows[1][idx] = 1; week.rows[2][idx] = 1; week.rows[3][idx] = 1; week.rows[4][idx] = 1;
+  assert.equal(finalize(h).ties.state, 'finalized');
+  const idx = week.rows[0].indexOf('pair_key');
+  week.rows[3][idx] = 'dubs:p9'; week.rows[4][idx] = 'dubs:p9';
   const data = results(h);
   assert.equal(data.ties.state, 'open');
-  // The remembered winner is applied again as a draft, not silently lost.
-  assert.equal(data.ties.unresolved_count, 0);
-  assert.equal(payoutOf(data, 'dubs:p2'), 21);
+  assert.equal(data.ties.stale_picks, 1);
+  assert.equal(data.ties.unresolved_count, 1);
 });
 
 // ─── Doubles only, no tags ──────────────────────────────────────────────────

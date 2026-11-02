@@ -7059,7 +7059,8 @@ function applyWeeklyPayout(pairs, playerCount, rules) {
   var winners = [];
   var seconds = [];
   for (var p = 0; p < pairs.length; p++) {
-    var place = parseInt(pairs[p].place_raw, 10);
+    // A tie pick pays a tied team at its chosen money place; otherwise its place.
+    var place = parseInt(pairs[p].payout_place !== undefined ? pairs[p].payout_place : pairs[p].place_raw, 10);
     if (place === 1) winners.push(pairs[p]);
     else if (place === 2) seconds.push(pairs[p]);
   }
@@ -7284,15 +7285,19 @@ function groupDoublesPointsPairs(rows) {
 // UDisc reports teams that finish level at the same place (position_raw), and
 // the payout rule pays every team at place 1 (and place 2 when the second-place
 // share is paid) -- it has no way to say who won a tie. The admin names the
-// winner here, before the week is finalized. A pick moves the winner to the tied
-// place and the rest of the group down one place each pick, so the chosen order
-// is simply a finer placement fed to the unchanged payout rule.
+// winner here, before the week is finalized.
+//
+// The pick decides MONEY ONLY. Tied teams keep the same place and the same
+// weekly points; a pick only sets each tied team's `payout_place`, the place the
+// unchanged payout rule pays it at (the winner takes the tied place, the rest of
+// the group follows one place per pick). team_position, team_position_raw and
+// weekly_points are never reordered or rewritten by a pick.
 //
 // Choices live on a TieBreaks tab (one row per pick, plus a marker row once the
-// week is finalized). Until finalize they are a draft the results view applies
-// on top of the imported placement; finalize refuses while a paying tie has no
-// winner, then writes the chosen places and points onto the week tab. Doubles
-// has no bag tags: nothing here reads or writes in_tag, out_tag or any tag.
+// week is finalized). Until finalize they are a draft the results view and the
+// season earnings apply; finalize refuses while a paying tie has no winner, then
+// records the choice. Doubles has no bag tags: nothing here reads or writes
+// in_tag, out_tag or any tag.
 
 const TIE_BREAKS_SHEET_NAME = 'TieBreaks';
 const TIE_BREAKS_HEADERS = ['league_date', 'tie_place', 'pick_order', 'team_key', 'team', 'status', 'updated_at'];
@@ -7321,11 +7326,12 @@ function payingPlaceLimit(rules, playerCount) {
  * applies the admin's picks (`picks` maps an imported place to the ordered team
  * keys chosen for it), and reports every tie that touches a paying place.
  *
- * Each pick takes the next place of its tied group; teams not yet picked share
- * the place after the last pick. A group still tied on a paying place `needs_choice`.
+ * Each pick takes the next MONEY place of its tied group; teams not yet picked
+ * share the money place after the last pick. Money places never change a team's
+ * finishing place or points. A group still tied on a paying place `needs_choice`.
  * Picks naming a team that is no longer in the group (a re-import changed the
  * field) are ignored and counted as stale. Returns { groups, stale, placements }
- * where `placements` maps team key -> { place, tied } for every team in a
+ * where `placements` maps team key -> { money_place, tied } for every team in a
  * reported group. Never mutates its input.
  */
 function resolveDoublesTies(pairs, picks, limit) {
@@ -7369,14 +7375,14 @@ function resolveDoublesTies(pairs, picks, limit) {
 
     var pickedInfo = [];
     for (var pi = 0; pi < picked.length; pi++) {
-      pickedInfo.push({ team_key: picked[pi], label: byKey[picked[pi]].label, place: place + pi });
-      placements[picked[pi]] = { place: place + pi, tied: false };
+      pickedInfo.push({ team_key: picked[pi], label: byKey[picked[pi]].label, money_place: place + pi });
+      placements[picked[pi]] = { money_place: place + pi, tied: false };
     }
     var remainingInfo = [];
     for (var ri = 0; ri < remaining.length; ri++) {
       var remKey = doublesTeamKey(remaining[ri]);
       remainingInfo.push({ team_key: remKey, label: remaining[ri].label });
-      placements[remKey] = { place: restPlace, tied: remaining.length > 1 };
+      placements[remKey] = { money_place: restPlace, tied: remaining.length > 1 };
     }
 
     groups.push({
@@ -7384,16 +7390,11 @@ function resolveDoublesTies(pairs, picks, limit) {
       size: teams.length,
       picked: pickedInfo,
       candidates: remaining.length > 1 ? remainingInfo : [],
-      place: restPlace,
+      money_place: restPlace,
       needs_choice: remaining.length > 1 && restPlace <= limit
     });
   }
   return { groups: groups, stale: stale, placements: placements };
-}
-
-/** The place label the week tab shows: "T2" while teams are level, "3" once alone. */
-function tiePlaceLabel(placement) {
-  return placement.tied ? 'T' + placement.place : String(placement.place);
 }
 
 /**
@@ -7459,25 +7460,21 @@ function rewriteTieBreakRows(spreadsheet, leagueDate, onlyPlace, newRows) {
 
 /**
  * Builds the tie view for a week: the picks applied over the imported placement
- * (a draft until finalize) and the groups still waiting on a winner. Once the
- * week is finalized and the sheet carries no paying tie, the sheet already holds
- * the chosen order, so nothing is re-applied. A finalize marker over a sheet
- * that is tied again (a later re-import) is treated as open, not finalized.
+ * (a draft until finalize) and the groups still waiting on a winner. The picks
+ * stay applied after finalize because the sheet keeps the imported (tied)
+ * places. A finalize marker over a tie that no longer has a winner (a later
+ * re-import changed the field) is treated as open, not finalized.
  */
 function buildTieView(spreadsheet, leagueDate, pairs, rules, playerCount) {
   var limit = payingPlaceLimit(rules, playerCount);
   var saved = readTieBreaks(spreadsheet, leagueDate);
-  var raw = resolveDoublesTies(pairs, {}, limit);
-  var rawPayingTie = false;
-  for (var g = 0; g < raw.groups.length; g++) if (raw.groups[g].needs_choice) rawPayingTie = true;
-
-  var finalized = saved.finalized && !rawPayingTie;
-  var resolved = finalized ? raw : resolveDoublesTies(pairs, saved.picks, limit);
+  var resolved = resolveDoublesTies(pairs, saved.picks, limit);
 
   var unresolved = [];
   for (var u = 0; u < resolved.groups.length; u++) {
     if (resolved.groups[u].needs_choice) unresolved.push(resolved.groups[u]);
   }
+  var finalized = saved.finalized && unresolved.length === 0;
   return {
     limit: limit,
     finalized: finalized,
@@ -7487,20 +7484,15 @@ function buildTieView(spreadsheet, leagueDate, pairs, rules, playerCount) {
   };
 }
 
-/** Moves each picked team to its chosen place on the grouped results (response copies only). */
-function applyTiePlacements(pairs, placements, rules) {
+/**
+ * Sets `payout_place` on each team in a reported tie: the place the unchanged
+ * payout rule pays it at. Money only -- place, team_position and points are not
+ * touched. Teams outside a tie carry no override and are paid at their place.
+ */
+function applyTieMoneyPlaces(pairs, placements) {
   for (var i = 0; i < pairs.length; i++) {
     var placement = placements[doublesTeamKey(pairs[i])];
-    if (!placement) continue;
-    var points = doublesPointsForPosition(placement.place, rules);
-    pairs[i].place_raw = placement.place;
-    pairs[i].place = tiePlaceLabel(placement);
-    pairs[i].points = points;
-    for (var m = 0; m < pairs[i].members.length; m++) {
-      pairs[i].members[m].team_position = tiePlaceLabel(placement);
-      pairs[i].members[m].team_position_raw = placement.place;
-      pairs[i].members[m].points = points;
-    }
+    if (placement) pairs[i].payout_place = placement.money_place;
   }
 }
 
@@ -7536,7 +7528,7 @@ function describeUnresolvedTies(unresolved, pairs) {
     for (var c = 0; c < unresolved[g].candidates.length; c++) {
       names.push(labels[unresolved[g].candidates[c].team_key] || unresolved[g].candidates[c].team_key);
     }
-    parts.push('place ' + unresolved[g].place + ' (' + names.join(' vs ') + ')');
+    parts.push('place ' + unresolved[g].money_place + ' (' + names.join(' vs ') + ')');
   }
   return parts.join('; ');
 }
@@ -7563,10 +7555,10 @@ function handleCalculatePoints(data, message) {
   if (tab.error) return respond('error', tab.error);
 
   var pairs = groupDoublesPointsPairs(tab.rows);
-  // The admin's saved tie winners (a draft until the week is finalized) set the
-  // order the payout rule sees; the arithmetic below is unchanged.
+  // The admin's saved tie winners (a draft until the week is finalized) decide
+  // which tied team the payout rule pays; places and points stay as imported.
   var tieView = buildTieView(spreadsheet, gate.leagueDate, pairs, rules, tab.rows.length);
-  if (!tieView.finalized) applyTiePlacements(pairs, tieView.resolved.placements, rules);
+  applyTieMoneyPlaces(pairs, tieView.resolved.placements);
   var payout = applyWeeklyPayout(pairs, tab.rows.length, rules);
 
   return respond('ok', message || 'Points results loaded. No writes were made.', {
@@ -7651,11 +7643,10 @@ function handleSaveTieBreaks(data) {
 
 /**
  * Admin action: finalize the week's tie resolution. Refuses, naming the place
- * and teams, while any tie on a paying place has no winner. Otherwise writes the
- * chosen order onto the week tab (team_position, team_position_raw and the
- * points the existing rule gives that place), records the picks as finalized on
- * the TieBreaks tab, and refreshes both season caches. Payout arithmetic is not
- * touched: the unchanged rule reads the chosen order from the tab.
+ * and teams, while any tie on a paying place has no winner. Otherwise records
+ * the picks as finalized on the TieBreaks tab and refreshes both season caches.
+ * The week tab is not written: tied teams keep their place and points, and the
+ * recorded winners only decide who is paid.
  *
  * Inputs: league_date.
  */
@@ -7680,27 +7671,6 @@ function handleFinalizeDoublesWeek(data) {
       return respond('error', 'Choose a winner before finalizing: ' + describeUnresolvedTies(view.unresolved, pairs) + '.');
     }
 
-    // Write the chosen order onto the week tab, one cell per changed value.
-    var placements = view.resolved.placements;
-    var headers = tab.headers;
-    var hRaw = headers.indexOf('team_position_raw');
-    var hLabel = headers.indexOf('team_position');
-    var hPoints = headers.indexOf('weekly_points');
-    var keyByMember = {};
-    for (var i = 0; i < pairs.length; i++) {
-      for (var m = 0; m < pairs[i].members.length; m++) {
-        keyByMember[pairs[i].members[m].row_index] = doublesTeamKey(pairs[i]);
-      }
-    }
-    for (var r = 0; r < tab.rows.length; r++) {
-      var placement = placements[keyByMember[tab.rows[r].row_index]];
-      if (!placement) continue;
-      var sheetRow = tab.rows[r].row_index + 1;
-      if (hRaw !== -1) tab.sheet.getRange(sheetRow, hRaw + 1).setValue(placement.place);
-      if (hLabel !== -1) tab.sheet.getRange(sheetRow, hLabel + 1).setValue(tiePlaceLabel(placement));
-      if (hPoints !== -1) tab.sheet.getRange(sheetRow, hPoints + 1).setValue(doublesPointsForPosition(placement.place, rules));
-    }
-
     // Record what was chosen, plus a marker so a tie-free week can be finalized.
     var now = new Date().toISOString();
     var entries = [];
@@ -7718,7 +7688,7 @@ function handleFinalizeDoublesWeek(data) {
   } finally {
     lock.releaseLock();
   }
-  return handleCalculatePoints(data, 'Week finalized. Places, payouts and standings follow the chosen order.');
+  return handleCalculatePoints(data, 'Week finalized. Places and points are unchanged; the payout follows the chosen winner.');
 }
 
 /**
@@ -7880,6 +7850,9 @@ function sumSeasonTotalsByMember(spreadsheet, rules) {
     // Fresh pair objects per week: applyWeeklyPayout mutates the payout fields
     // on its input, so grouping per week keeps the writes off the sheet rows.
     var pairs = groupDoublesPointsPairs(plan.rows);
+    var weekDate = String(weekSheets[s].getName()).replace(/^Week /, '');
+    var weekTies = resolveDoublesTies(pairs, readTieBreaks(spreadsheet, weekDate).picks, payingPlaceLimit(rules, plan.rows.length));
+    applyTieMoneyPlaces(pairs, weekTies.placements);
     applyWeeklyPayout(pairs, plan.rows.length, rules);
 
     for (var p = 0; p < pairs.length; p++) {

@@ -3344,10 +3344,10 @@
     }
 
     // ─── Tie winners and finalize ────────────────────────────────────────
-    // Teams that finish level at a paying place need an admin-picked winner
-    // before the week is finalized. A saved pick is a draft the payout figures
-    // below already follow; Finalize refuses (server side) while any paying tie
-    // has no winner, then writes the chosen order onto the week.
+    // Teams that finish level at a paying place need an admin pick of who gets
+    // the money before the week is finalized. The pick never changes places or
+    // points. A saved pick is a draft the payout figures below already follow;
+    // Finalize refuses (server side) while any paying tie has no pick.
 
     function renderTieSection(ties) {
       if (!ties) return '';
@@ -3355,10 +3355,10 @@
       html += '<div class="field-group" id="tieSection">';
 
       if (ties.state === 'finalized') {
-        html += '<p><strong>Week finalized.</strong> Places, payouts and standings follow the chosen order.</p>';
+        html += '<p><strong>Week finalized.</strong> Places and points are unchanged; the payout follows the chosen winner.</p>';
         var chosen = ties.finalized_choices || [];
         for (var c = 0; c < chosen.length; c++) {
-          html += '<p>Place ' + escHtml(String(chosen[c].tie_place)) + ' tie: <strong>' + escHtml(chosen[c].label || chosen[c].team_key) + '</strong> won</p>';
+          html += '<p>Place ' + escHtml(String(chosen[c].tie_place)) + ' tie: <strong>' + escHtml(chosen[c].label || chosen[c].team_key) + '</strong> gets the money</p>';
         }
         html += '</div>';
         return html;
@@ -3375,9 +3375,9 @@
         var group = groups[g];
         html += '<div class="tie-group" data-tie-place="' + escHtml(String(group.tie_place)) + '" style="border:1px solid #ddd; border-radius:6px; padding:0.75rem; margin-bottom:0.75rem;">';
         html += '<div style="margin-bottom:0.5rem;"><strong>Tie for place ' + escHtml(String(group.tie_place)) + '</strong>' +
-          (group.needs_choice ? ' <span style="color:#ea4335;">&mdash; choose who won</span>' : ' <span style="color:#34a853;">&mdash; resolved</span>') + '</div>';
+          (group.needs_choice ? ' <span style="color:#ea4335;">&mdash; choose who gets the money</span>' : ' <span style="color:#34a853;">&mdash; resolved</span>') + '</div>';
         for (var pk = 0; pk < group.picked.length; pk++) {
-          html += '<p style="margin:0.25rem 0;">Place ' + escHtml(String(group.picked[pk].place)) + ': <strong>' + escHtml(group.picked[pk].label) + '</strong></p>';
+          html += '<p style="margin:0.25rem 0;">Paid as place ' + escHtml(String(group.picked[pk].money_place)) + ': <strong>' + escHtml(group.picked[pk].label) + '</strong></p>';
         }
         if (group.candidates.length > 0) {
           for (var cd = 0; cd < group.candidates.length; cd++) {
@@ -3386,7 +3386,7 @@
               '<input type="radio" name="tie_winner_' + escHtml(String(group.tie_place)) + '" value="' + escHtml(cand.team_key) + '" style="width:auto; margin:0;">' +
               '<span>' + escHtml(cand.label) + '</span></label>';
           }
-          html += '<button type="button" onclick="saveTieWinner(' + Number(group.tie_place) + ')">Save winner</button> ';
+          html += '<button type="button" onclick="saveTieWinner(' + Number(group.tie_place) + ')">Save pick</button> ';
         }
         if (group.picked.length > 0) {
           html += '<button type="button" onclick="clearTieWinners(' + Number(group.tie_place) + ')" style="background:#888;">Clear choice</button>';
@@ -3395,7 +3395,7 @@
       }
 
       html += '<button type="button" id="btnFinalizeWeek" onclick="finalizeDoublesWeek()" style="background:#34a853;">Finalize Week</button>';
-      html += '<p style="color:#888; font-style:italic; margin-top:0.5rem;">Finalizing is refused until every tie on a paying place has a winner. Winners can be changed until then.</p>';
+      html += '<p style="color:#888; font-style:italic; margin-top:0.5rem;">The pick only decides who is paid; tied teams keep the same place and points. Finalizing is refused until every tie on a paying place has a pick. Picks can be changed until then.</p>';
       html += '</div>';
       return html;
     }
@@ -3432,7 +3432,7 @@
       var groupEl = document.querySelector('.tie-group[data-tie-place="' + place + '"]');
       var checked = groupEl ? groupEl.querySelector('input[type="radio"]:checked') : null;
       if (!checked) {
-        setPointsStatus('error', '<strong>Select the winning team for place ' + place + ' first.</strong>');
+        setPointsStatus('error', '<strong>Select the team that gets the money for place ' + place + ' first.</strong>');
         return;
       }
       // Earlier picks for this tie stay in order; the new one follows them.
