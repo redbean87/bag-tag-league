@@ -123,7 +123,7 @@ test('results keep roster order, stop at the limit, and match the server shape',
   assert.equal(results.length, 10);
   assert.deepEqual(results.map((m) => m.member_number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   assert.deepEqual(Object.keys(results[0]).sort(), [
-    'current_tag', 'member_number', 'name', 'pdga_number', 'season_points', 'udisc_username'
+    'appearances', 'current_tag', 'member_number', 'name', 'pdga_number', 'season_points', 'udisc_username'
   ]);
 });
 

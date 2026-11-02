@@ -644,6 +644,11 @@
           detailParts.push('Season Total: ' + seasonTotal);
         }
 
+        // Lists arrive ordered by appearances; the count is shown small so the
+        // order is explainable at the table.
+        var weeksPlayed = parseInt(member.appearances, 10);
+        if (!isNaN(weeksPlayed)) detailParts.push('Weeks: ' + weeksPlayed);
+
         item.innerHTML =
           '<div class="search-result-name">' + escapeHtml(member.name) + '</div>' +
           (detailParts.length ? '<div class="search-result-detail">' + escapeHtml(detailParts.join(' · ')) + '</div>' : '');

@@ -177,7 +177,7 @@ test('the header builders accept (format, scoring) and keep day-one schemas', ()
   );
   assert.deepEqual(
     clubHeaders(h.bound.LEAGUE_FORMAT_SINGLES, h.bound.SCORING_TAGS),
-    h.bound.CLUB_MEMBER_HEADERS
+    h.bound.CLUB_MEMBER_HEADERS.concat(['appearances'])
   );
   assert.deepEqual(
     clubHeaders(h.bound.LEAGUE_FORMAT_DOUBLES, h.bound.SCORING_POINTS),
