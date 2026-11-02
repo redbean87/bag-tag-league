@@ -67,6 +67,19 @@
       margin-top: 0.25rem;
     }
     button:hover { background: #0052a3; }
+    .checkin-summary { font-size: 1.25rem; font-weight: bold; margin: 0.75rem 0 0.5rem; }
+    .checkin-search { width: 100%; padding: 0.6rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 0.5rem; }
+    .checkin-list { list-style: none; border: 1px solid #ddd; border-radius: 4px; max-height: 65vh; overflow: auto; }
+    .checkin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.6rem 0.75rem; border-bottom: 1px solid #eee; }
+    .checkin-row:last-child { border-bottom: none; }
+    .checkin-row.in { background: #e6f4ea; }
+    .checkin-name { flex: 1 1 10rem; font-weight: 600; }
+    .checkin-state { flex: 1 1 100%; font-size: 0.85rem; color: #555; }
+    .checkin-tag { width: 6rem; padding: 0.6rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+    .checkin-row button { min-height: 44px; margin-top: 0; }
+    .checkin-row button.undo { background: #fff; color: #b3261e; border: 1px solid #b3261e; }
+    .checkin-row button.undo:hover { background: #fce8e6; }
+    @media (min-width: 600px) { .checkin-state { flex: 1 1 12rem; } }
     button:disabled { background: #ccc; cursor: not-allowed; }
     .status {
       margin-top: 1rem;
@@ -530,6 +543,26 @@
 
   <!-- Gated sections -->
   <div id="gatedSections">
+
+    <!-- 4b. Check-In (admin) -->
+    <div class="card" id="checkInCard">
+      <div class="card-header">
+        <h2>Check-In</h2>
+        <button type="button" class="info-toggle" aria-expanded="false" aria-controls="checkInInfo" aria-label="About Check-In" onclick="toggleCardInfo(event, 'checkInInfo')">i</button>
+      </div>
+      <div class="card-info" id="checkInInfo" role="note" hidden>
+        <p class="help-text">
+          Check players in at the table, including players who never open the
+          sign-in page. Checking in records participation and the tag the
+          player is actually carrying; it does not change scoring or tag
+          calculation. Undo clears the check-in, its time, and the tag it
+          captured.
+        </p>
+      </div>
+      <button type="button" id="btnLoadCheckIn" onclick="loadCheckIn()">Load Check-In</button>
+      <div id="checkInPanel" style="display:none;"></div>
+      <div id="checkInResult" class="status hidden"></div>
+    </div>
 
     <!-- 5. Player Sign-In QR Code -->
     <div class="card" id="playerSignInCard">
@@ -1782,6 +1815,7 @@
         weekViewPreview.innerHTML = '';
       }
       clearWeekViewStatus();
+      clearCheckIn();
     }
 
     async function createWeeklyTab(e) {
@@ -3522,6 +3556,170 @@
         window.localStorage.setItem('seasonStandingsShowEarned', show ? '1' : '0');
       } catch (err) { /* private mode: the choice just lasts this session */ }
       if (seasonStandingsLastData) renderSeasonStandings(seasonStandingsLastData);
+    }
+
+    // ─── Admin Check-In ───────────────────────────────────────────────────
+    // Per-player check-in for the selected week. Writes only checked_in,
+    // signed_in_at, and the entered in_tag (tags leagues) through the
+    // adminCheckIn / adminUndoCheckIn actions; the server owns the data.
+
+    var checkInLastData = null;
+
+    function setCheckInStatus(type, html) {
+      var el = document.getElementById('checkInResult');
+      if (!el) return;
+      el.className = 'status ' + type;
+      el.innerHTML = html;
+    }
+
+    function clearCheckIn() {
+      checkInLastData = null;
+      var panel = document.getElementById('checkInPanel');
+      if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+      setCheckInStatus('hidden', '');
+    }
+
+    async function postCheckIn(action, extra) {
+      var body = { action: action, spreadsheetId: getSpreadsheetId(), league_date: getActiveLeagueDate() };
+      for (var key in extra) body[key] = extra[key];
+      var response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(body)
+      });
+      return response.json();
+    }
+
+    async function loadCheckIn() {
+      if (!getActiveLeagueDate()) {
+        setCheckInStatus('error', '<strong>Please select an Active League Date.</strong>');
+        return;
+      }
+      var btn = document.getElementById('btnLoadCheckIn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Loading...'; }
+      try {
+        var data = await postCheckIn('getAdminCheckInRoster', {});
+        if (data.status !== 'ok') {
+          setCheckInStatus('error', '<strong>Error:</strong> ' + escHtml(data.message));
+          log('ERROR: ' + data.message);
+          return;
+        }
+        setCheckInStatus('hidden', '');
+        renderCheckIn(data);
+        log('Check-in roster loaded: ' + data.checked_in_count + ' of ' + data.player_count + ' checked in.');
+      } catch (err) {
+        setCheckInStatus('error', '<strong>Load failed:</strong> ' + escHtml(err.message));
+        log('FAILED to load check-in roster: ' + err.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh Check-In'; }
+      }
+    }
+
+    function formatCheckInTime(iso) {
+      if (!iso) return '';
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+
+    function renderCheckIn(data) {
+      checkInLastData = data;
+      var panel = document.getElementById('checkInPanel');
+      var usesTags = !!data.uses_tags;
+      var players = data.players || [];
+
+      var html = '<div class="checkin-summary" id="checkInSummary" aria-live="polite">' +
+        data.checked_in_count + ' checked in <span style="font-weight:normal; color:#666;">of ' +
+        data.player_count + '</span></div>';
+      html += '<input type="search" class="checkin-search" id="checkInSearch" placeholder="Find a player" ' +
+        'aria-label="Find a player" oninput="filterCheckIn()" autocomplete="off">';
+      html += '<ul class="checkin-list" id="checkInList">';
+      for (var i = 0; i < players.length; i++) {
+        var p = players[i];
+        var id = escHtml(String(p.member_number));
+        html += '<li class="checkin-row' + (p.checked_in ? ' in' : '') + '" data-member="' + id +
+          '" data-name="' + escHtml(String(p.name).toLowerCase()) + '">';
+        html += '<span class="checkin-name">' + escHtml(p.name) + '</span>';
+        if (p.checked_in) {
+          var when = formatCheckInTime(p.signed_in_at);
+          var state = 'Checked in' + (when ? ' at ' + escHtml(when) : '') +
+            (usesTags && p.in_tag !== '' ? ' · tag ' + escHtml(String(p.in_tag)) : '');
+          html += '<span class="checkin-state">' + state + '</span>';
+          html += '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
+        } else {
+          if (usesTags) {
+            var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
+            html += '<label class="checkin-state" for="checkInTag-' + id + '">Tag carried today (last known: ' +
+              (def === '' ? 'none' : escHtml(def)) + ')</label>';
+            html += '<input type="number" inputmode="numeric" min="1" step="1" class="checkin-tag" id="checkInTag-' + id +
+              '" value="' + escHtml(def) + '" aria-label="Tag carried by ' + escHtml(p.name) + '">';
+          }
+          html += '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
+        }
+        html += '</li>';
+      }
+      html += '</ul>';
+      if (players.length === 0) html += '<p class="help-text">No players on the roster yet.</p>';
+
+      panel.innerHTML = html;
+      panel.style.display = '';
+    }
+
+    function filterCheckIn() {
+      var q = (document.getElementById('checkInSearch').value || '').trim().toLowerCase();
+      var rows = document.querySelectorAll('#checkInList .checkin-row');
+      for (var i = 0; i < rows.length; i++) {
+        rows[i].style.display = !q || rows[i].getAttribute('data-name').indexOf(q) !== -1 ? '' : 'none';
+      }
+    }
+
+    async function runCheckInAction(action, memberNumber, extra, okMessage) {
+      var buttons = document.querySelectorAll('#checkInList button');
+      for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
+      var query = document.getElementById('checkInSearch') ? document.getElementById('checkInSearch').value : '';
+      try {
+        var payload = { member_number: isNaN(Number(memberNumber)) ? memberNumber : Number(memberNumber) };
+        for (var key in extra) payload[key] = extra[key];
+        var data = await postCheckIn(action, payload);
+        if (data.status !== 'ok') {
+          setCheckInStatus('error', '<strong>Error:</strong> ' + escHtml(data.message));
+          log('ERROR: ' + data.message);
+        } else {
+          log(okMessage + ' (member ' + memberNumber + ')');
+          var fresh = await postCheckIn('getAdminCheckInRoster', {});
+          if (fresh.status === 'ok') {
+            renderCheckIn(fresh);
+            var search = document.getElementById('checkInSearch');
+            if (search && query) { search.value = query; filterCheckIn(); }
+            setCheckInStatus('ok', escHtml(okMessage));
+            return;
+          }
+          setCheckInStatus('error', '<strong>Saved, but reload failed:</strong> ' + escHtml(fresh.message));
+        }
+      } catch (err) {
+        setCheckInStatus('error', '<strong>Request failed:</strong> ' + escHtml(err.message));
+        log('FAILED check-in action: ' + err.message);
+      }
+      for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
+    }
+
+    function adminCheckIn(memberNumber) {
+      var extra = {};
+      if (checkInLastData && checkInLastData.uses_tags) {
+        var input = document.getElementById('checkInTag-' + memberNumber);
+        var value = input ? input.value.trim() : '';
+        if (!/^[1-9]\d*$/.test(value)) {
+          setCheckInStatus('error', '<strong>Enter the tag number the player is carrying (1 or higher).</strong>');
+          if (input) input.focus();
+          return;
+        }
+        extra.in_tag = parseInt(value, 10);
+      }
+      return runCheckInAction('adminCheckIn', memberNumber, extra, 'Player checked in.');
+    }
+
+    function adminUndoCheckIn(memberNumber) {
+      return runCheckInAction('adminUndoCheckIn', memberNumber, {}, 'Check-in undone.');
     }
 
     // ─── Week View (read-only) ────────────────────────────────────────────
