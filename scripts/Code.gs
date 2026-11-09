@@ -4022,10 +4022,37 @@ function findWeeklyRowIndex(values, headers, memberNumber) {
 }
 
 /**
+ * Check-in roster order: most appearances first — the same primary key as
+ * `compareByAppearances` — then surname, then member number. The tie-break
+ * keeps equal counts in a stable, deterministic order (surname first so an
+ * equal-count tier reads alphabetically, member number so duplicate surnames
+ * never depend on sheet order).
+ */
+function compareAdminCheckInRoster(a, b) {
+  if (b.appearances !== a.appearances) return b.appearances - a.appearances;
+  var surnameA = rosterSurname(a.name);
+  var surnameB = rosterSurname(b.name);
+  if (surnameA !== surnameB) return surnameA < surnameB ? -1 : 1;
+  var numA = Number(a.member_number);
+  var numB = Number(b.member_number);
+  if (!isNaN(numA) && !isNaN(numB) && numA !== numB) return numA - numB;
+  var strA = String(a.member_number);
+  var strB = String(b.member_number);
+  return strA < strB ? -1 : strA > strB ? 1 : 0;
+}
+
+/** The lower-cased last word of a display name ("Avery Van Brussel" → "brussel"). */
+function rosterSurname(name) {
+  var parts = String(name || '').trim().toLowerCase().split(/\s+/);
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
+/**
  * Read-only check-in roster for one league date: every player already on the
  * weekly sheet plus every active club member who is not yet on it, each with
- * their checked_in state, signed_in_at, in_tag, and the stored current_tag
- * (offered as the default tag at check-in).
+ * their checked_in state, signed_in_at, in_tag, the stored current_tag
+ * (offered as the default tag at check-in), and their stored appearances
+ * count (so each row can show "Weeks: N"). Ordered most appearances first.
  *
  * Inputs: league_date (required, YYYY-MM-DD)
  */
@@ -4042,6 +4069,7 @@ function handleGetAdminCheckInRoster(data) {
   var cName = clubHeaders.indexOf('name');
   var cTag = clubHeaders.indexOf('current_tag');
   var cActive = clubHeaders.indexOf('is_active');
+  var cAppearances = clubHeaders.indexOf(CLUB_APPEARANCES_HEADER);
 
   var club = {};
   for (var i = 1; i < clubValues.length; i++) {
@@ -4050,7 +4078,8 @@ function handleGetAdminCheckInRoster(data) {
     club[String(cn)] = {
       name: String(clubValues[i][cName] || ''),
       current_tag: cTag !== -1 ? clubValues[i][cTag] : '',
-      is_active: isCheckedInCell(clubValues[i][cActive])
+      is_active: isCheckedInCell(clubValues[i][cActive]),
+      appearances: readAppearances(clubValues[i], cAppearances)
     };
   }
 
@@ -4073,7 +4102,8 @@ function handleGetAdminCheckInRoster(data) {
       checked_in: checkedIn,
       signed_in_at: row[col('signed_in_at')] === null || row[col('signed_in_at')] === undefined ? '' : String(row[col('signed_in_at')]),
       in_tag: ctx.rules.usesTags ? row[col('in_tag')] : '',
-      current_tag: ctx.rules.usesTags && member.current_tag !== undefined ? member.current_tag : ''
+      current_tag: ctx.rules.usesTags && member.current_tag !== undefined ? member.current_tag : '',
+      appearances: member.appearances || 0
     });
   }
   for (var key in club) {
@@ -4085,10 +4115,11 @@ function handleGetAdminCheckInRoster(data) {
       checked_in: false,
       signed_in_at: '',
       in_tag: '',
-      current_tag: ctx.rules.usesTags ? club[key].current_tag : ''
+      current_tag: ctx.rules.usesTags ? club[key].current_tag : '',
+      appearances: club[key].appearances
     });
   }
-  players.sort(function(a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : 0; });
+  players.sort(compareAdminCheckInRoster);
 
   return respond('ok', 'Check-in roster loaded. No writes were made.', {
     format: ctx.rules.format,
@@ -4181,7 +4212,9 @@ function handleAdminCheckIn(data) {
     lock.releaseLock();
   }
 
-  return respond('ok', 'Player checked in.', { member_number: memberNumber, league_date: ctx.leagueDate });
+  // `signed_in_at` rides back so the admin page can patch the row in place
+  // instead of re-fetching the whole roster after every check-in.
+  return respond('ok', 'Player checked in.', { member_number: memberNumber, league_date: ctx.leagueDate, signed_in_at: now });
 }
 
 /**
