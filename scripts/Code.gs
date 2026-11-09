@@ -2906,6 +2906,9 @@ function doPost(e) {
     if (data.action === 'adminCheckIn') {
       return handleAdminCheckIn(data);
     }
+    if (data.action === 'adminCheckInBatch') {
+      return handleAdminCheckInBatch(data);
+    }
     if (data.action === 'adminUndoCheckIn') {
       return handleAdminUndoCheckIn(data);
     }
@@ -4257,6 +4260,196 @@ function handleAdminUndoCheckIn(data) {
   }
 
   return respond('ok', 'Check-in undone.', { member_number: memberNumber, league_date: ctx.leagueDate });
+}
+
+/** One refusal line per bad member: "member 3: <reason>" (or "selection: <reason>" without a number). */
+function batchRefusedMessage(refused) {
+  var parts = [];
+  for (var i = 0; i < refused.length; i++) {
+    var who = refused[i].member_number === '' || refused[i].member_number === null || refused[i].member_number === undefined
+      ? 'selection'
+      : 'member ' + refused[i].member_number;
+    parts.push(who + ': ' + refused[i].reason);
+  }
+  return 'Batch refused - nothing was checked in (' + parts.join(' | ') + ').';
+}
+
+/**
+ * Batch check-in for the admin page: ONE execution for N members. The week
+ * tab is opened once, every member is validated before any cell is written,
+ * and the response reports each member's outcome so the admin sees exactly
+ * who landed and who was already in.
+ *
+ * Validation is all-or-nothing, the same bar the single handler holds: a
+ * member who is missing, inactive, or carries a bad tag refuses the whole
+ * batch and nothing is written. "Already checked in" is a benign state during
+ * a live session, so it is a per-member skip (result already_checked_in),
+ * never a batch abort. Brand-new players cannot be created here - member
+ * creation lives in the player self sign-in and the imports - so a member who
+ * is not an active club member refuses the batch with that reason spelled out.
+ * The single check-in and undo handlers are untouched; this is additive.
+ *
+ * Inputs: league_date, members: [{ member_number, in_tag? }] - in_tag is
+ * required per member in tags leagues, exactly as the single handler does.
+ */
+function handleAdminCheckInBatch(data) {
+  var ctx = resolveAdminCheckInContext(data);
+  if (ctx.error) return ctx.error;
+
+  var members = data.members;
+  if (!Array.isArray(members) || members.length === 0) {
+    return respond('error', 'members must be a non-empty list of member selections. No data was written.', { refused: [], writes: false });
+  }
+
+  // Shape and tag-format validation runs before the lock: a bad tag anywhere
+  // refuses the batch with nothing opened for write and nothing written.
+  var queue = [];
+  var seen = Object.create(null); // no prototype keys can shadow a member number
+  var refused = [];
+  for (var i = 0; i < members.length; i++) {
+    var entry = members[i];
+    var memberNumber = entry && typeof entry === 'object' ? entry.member_number : undefined;
+    if (memberNumber === undefined || memberNumber === null || memberNumber === '') {
+      refused.push({ member_number: '', reason: 'member_number is required.' });
+      continue;
+    }
+    var key = String(memberNumber);
+    if (seen[key]) continue; // one selection per member; a duplicate collapses
+    seen[key] = true;
+    var selection = { member_number: memberNumber };
+    if (ctx.rules.usesTags) {
+      if (entry.in_tag === undefined || entry.in_tag === null || entry.in_tag === '') {
+        refused.push({ member_number: memberNumber, reason: 'in_tag is required.' });
+        continue;
+      }
+      if (!/^\d+$/.test(String(entry.in_tag).trim()) || parseInt(String(entry.in_tag).trim(), 10) < 1) {
+        refused.push({ member_number: memberNumber, reason: 'Please enter a valid tag number (1 or higher).' });
+        continue;
+      }
+      selection.in_tag = parseInt(String(entry.in_tag).trim(), 10);
+    }
+    queue.push(selection);
+  }
+  if (refused.length) {
+    return respond('error', batchRefusedMessage(refused), { refused: refused, writes: false });
+  }
+  if (queue.length === 0) {
+    return respond('error', 'members must be a non-empty list of member selections. No data was written.', { refused: [], writes: false });
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    var sheet = ctx.sheet;
+    // Re-read inside the lock, like the single handler, so a second admin's
+    // write between the context read and the lock is seen before anything lands.
+    var values = sheet.getDataRange().getValues();
+    var headers = ctx.headers;
+    var now = new Date().toISOString();
+    var checkedCol = headers.indexOf('checked_in');
+    var signedCol = headers.indexOf('signed_in_at');
+    var tagCol = headers.indexOf('in_tag');
+    var updatedCol = headers.indexOf('updated_at');
+
+    // Pass 1 - classify every member before any write: skip the ones already
+    // in, refuse the ones that fail validation, queue the rest.
+    var results = [];
+    var writes = [];
+    var refusedInLock = [];
+    var clubSheet = null;
+    var clubValues = [[]];
+    var clubHeaders = [];
+    var cNum = -1;
+    var cName = -1;
+    var cActive = -1;
+    for (var q = 0; q < queue.length; q++) {
+      var selectionQ = queue[q];
+      var rowIndex = findWeeklyRowIndex(values, headers, selectionQ.member_number);
+      if (rowIndex !== -1) {
+        if (isCheckedInCell(values[rowIndex][checkedCol])) {
+          results[q] = {
+            member_number: selectionQ.member_number,
+            result: 'already_checked_in',
+            signed_in_at: values[rowIndex][signedCol] === null || values[rowIndex][signedCol] === undefined
+              ? ''
+              : String(values[rowIndex][signedCol])
+          };
+          continue;
+        }
+        writes.push({ index: q, selection: selectionQ, rowIndex: rowIndex });
+        continue;
+      }
+      // Not on this week's sheet: the single handler only lets an ACTIVE club
+      // member onto it, and creating a member is not part of batch. Validate
+      // before any write so the refusal stays all-or-nothing.
+      if (cNum === -1) {
+        clubSheet = ctx.spreadsheet.getSheetByName('ClubMembers');
+        clubValues = clubSheet ? clubSheet.getDataRange().getValues() : [[]];
+        clubHeaders = clubValues[0] || [];
+        cNum = clubHeaders.indexOf('member_number');
+        cName = clubHeaders.indexOf('name');
+        cActive = clubHeaders.indexOf('is_active');
+      }
+      var memberRow = null;
+      for (var c = 1; c < clubValues.length; c++) {
+        if (String(clubValues[c][cNum]) === String(selectionQ.member_number)) { memberRow = clubValues[c]; break; }
+      }
+      if (!memberRow || !isCheckedInCell(memberRow[cActive])) {
+        refusedInLock.push({
+          member_number: selectionQ.member_number,
+          reason: 'selected member not found or is inactive - a brand-new player must sign in first (QR self sign-in or an import), then can be checked in normally.'
+        });
+        continue;
+      }
+      writes.push({
+        index: q,
+        selection: selectionQ,
+        rowIndex: -1,
+        identity: {
+          member_number: memberRow[cNum],
+          name: memberRow[cName] || '',
+          username: memberRow[clubHeaders.indexOf('udisc_username')] || '',
+          pdga: memberRow[clubHeaders.indexOf('pdga_number')] || ''
+        }
+      });
+    }
+    if (refusedInLock.length) {
+      return respond('error', batchRefusedMessage(refusedInLock), { refused: refusedInLock, writes: false });
+    }
+
+    // Pass 2 - write everything that validated, in one loop under this lock.
+    for (var w = 0; w < writes.length; w++) {
+      var write = writes[w];
+      if (write.rowIndex !== -1) {
+        var sheetRow = write.rowIndex + 1;
+        sheet.getRange(sheetRow, checkedCol + 1).setValue(true);
+        sheet.getRange(sheetRow, signedCol + 1).setValue(now);
+        if (ctx.rules.usesTags) sheet.getRange(sheetRow, tagCol + 1).setValue(write.selection.in_tag);
+        if (updatedCol !== -1) sheet.getRange(sheetRow, updatedCol + 1).setValue(now);
+      } else {
+        var fields = { checked_in: true, signed_in_at: now };
+        if (ctx.rules.usesTags) fields.in_tag = write.selection.in_tag;
+        sheet.appendRow(buildNewWeeklyRecord(headers, write.identity, fields, null, now));
+      }
+      results[write.index] = { member_number: write.selection.member_number, result: 'checked_in', signed_in_at: now };
+    }
+  } finally {
+    lock.releaseLock();
+  }
+
+  var checkedInCount = 0;
+  var skippedCount = 0;
+  for (var r = 0; r < results.length; r++) {
+    if (results[r].result === 'checked_in') checkedInCount++;
+    else skippedCount++;
+  }
+  return respond('ok', 'Batch check-in complete: ' + checkedInCount + ' checked in, ' + skippedCount + ' already checked in.', {
+    league_date: ctx.leagueDate,
+    requested_count: queue.length,
+    checked_in_count: checkedInCount,
+    skipped_count: skippedCount,
+    results: results
+  });
 }
 
 // ─── End admin check-in ──────────────────────────────────────────────────────

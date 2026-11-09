@@ -74,6 +74,9 @@ For players who never open the sign-in page, the admin checks them in from the C
 
 - The card lists every player on the week's sheet plus every active club member not yet on it — most appearances first (ties by surname, then member number), with a "Weeks: N" count beside each name — and a "N checked in of M" summary.
 - Checking a player in sets `checked_in = TRUE` and `signed_in_at` to now, creating the weekly row if needed. Tags leagues require the actual `in_tag` the player is carrying; `ClubMembers.current_tag` is only the prefilled default and what is entered is what is stored.
+- Ticking rows and pressing "Check in selected (N)" batch-checks them in with one server execution: the week tab opens once, every member is validated before anything is written, and a missing, inactive, or bad-tag member refuses the whole batch with the reason named.
+- A member already checked in is skipped per member (reported as "already checked in"), never a batch abort.
+- The batch response reports each member's outcome, and the card then refreshes the roster from the sheet. A brand-new player cannot be created in a batch - they keep the QR self sign-in or import path first, and the card says so.
 - After a check-in or undo the single row flips in place from the write response: the roster is not re-fetched or rebuilt, so scroll position and the search filter survive the click. "Refresh Check-In" reloads the roster from the sheet.
 - Undo clears `checked_in`, `signed_in_at`, and the `in_tag` the check-in captured. Nothing else on the row changes.
 - It records participation only: scoring, `out_tag`, money fields, `ClubMembers`, and tag calculation are untouched. `udisc_checked_in` is never written.
