@@ -72,8 +72,9 @@
 
 For players who never open the sign-in page, the admin checks them in from the Check-In card on the admin page:
 
-- The card lists every player on the week's sheet plus every active club member not yet on it, with a "N checked in of M" count.
+- The card lists every player on the week's sheet plus every active club member not yet on it — most appearances first (ties by surname, then member number), with a "Weeks: N" count beside each name — and a "N checked in of M" summary.
 - Checking a player in sets `checked_in = TRUE` and `signed_in_at` to now, creating the weekly row if needed. Tags leagues require the actual `in_tag` the player is carrying; `ClubMembers.current_tag` is only the prefilled default and what is entered is what is stored.
+- After a check-in or undo the single row flips in place from the write response: the roster is not re-fetched or rebuilt, so scroll position and the search filter survive the click. "Refresh Check-In" reloads the roster from the sheet.
 - Undo clears `checked_in`, `signed_in_at`, and the `in_tag` the check-in captured. Nothing else on the row changes.
 - It records participation only: scoring, `out_tag`, money fields, `ClubMembers`, and tag calculation are untouched. `udisc_checked_in` is never written.
 

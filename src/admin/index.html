@@ -75,6 +75,7 @@
     .checkin-row.in { background: #e6f4ea; }
     .checkin-who { flex: 1 1 0; min-width: 0; }
     .checkin-name { display: block; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+    .checkin-weeks { font-weight: normal; font-size: 0.8rem; color: #777; }
     .checkin-state { display: block; font-size: 0.8rem; color: #555; line-height: 1.25; }
     .checkin-tag { flex: 0 0 auto; width: 3.5rem; min-height: 44px; padding: 0.4rem 0.25rem; text-align: center; margin: 0; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; }
     .checkin-row button { flex: 0 0 auto; min-width: 4.75rem; min-height: 44px; margin-top: 0; padding: 0.5rem 0.6rem; }
@@ -3770,19 +3771,19 @@
           var when = formatCheckInTime(p.signed_in_at);
           var state = 'Checked in' + (when ? ' at ' + escHtml(when) : '') +
             (usesTags && p.in_tag !== '' ? ' · tag ' + escHtml(String(p.in_tag)) : '');
-          html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + '</span>' +
+          html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + checkInWeeksLabel(p) + '</span>' +
             '<span class="checkin-state">' + state + '</span></div>';
           html += '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
         } else {
           if (usesTags) {
             var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
-            html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + '</span>' +
+            html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + checkInWeeksLabel(p) + '</span>' +
               '<label class="checkin-state" for="checkInTag-' + id + '">Tag today (last: ' +
               (def === '' ? 'none' : escHtml(def)) + ')</label></div>';
             html += '<input type="number" inputmode="numeric" min="1" step="1" class="checkin-tag" id="checkInTag-' + id +
               '" value="' + escHtml(def) + '" aria-label="Tag carried by ' + escHtml(p.name) + '">';
           } else {
-            html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + '</span></div>';
+            html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + checkInWeeksLabel(p) + '</span></div>';
           }
           html += '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
         }
@@ -3793,6 +3794,41 @@
 
       panel.innerHTML = html;
       panel.style.display = '';
+    }
+
+    // The stored appearances count shown beside each name ("Weeks: N"), the
+    // same label the player sign-in list uses. A missing count reads as 0.
+    function checkInWeeksLabel(p) {
+      var weeks = parseInt(p.appearances, 10);
+      if (isNaN(weeks) || weeks < 0) weeks = 0;
+      return ' <span class="checkin-weeks">Weeks: ' + weeks + '</span>';
+    }
+
+    // The inner markup of one check-in row for its current state. renderCheckIn
+    // builds the same markup inline for the full roster; patchCheckInRow
+    // rebuilds a single row from it after a write, so the two must stay in step.
+    function checkInRowInner(p, usesTags) {
+      var id = escHtml(String(p.member_number));
+      var nameHtml = escHtml(p.name) + checkInWeeksLabel(p);
+      if (p.checked_in) {
+        var when = formatCheckInTime(p.signed_in_at);
+        var state = 'Checked in' + (when ? ' at ' + escHtml(when) : '') +
+          (usesTags && p.in_tag !== '' ? ' · tag ' + escHtml(String(p.in_tag)) : '');
+        return '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span>' +
+          '<span class="checkin-state">' + state + '</span></div>' +
+          '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
+      }
+      if (usesTags) {
+        var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
+        return '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span>' +
+          '<label class="checkin-state" for="checkInTag-' + id + '">Tag today (last: ' +
+          (def === '' ? 'none' : escHtml(def)) + ')</label></div>' +
+          '<input type="number" inputmode="numeric" min="1" step="1" class="checkin-tag" id="checkInTag-' + id +
+          '" value="' + escHtml(def) + '" aria-label="Tag carried by ' + escHtml(p.name) + '">' +
+          '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
+      }
+      return '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span></div>' +
+        '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
     }
 
     function filterCheckIn() {
@@ -3806,7 +3842,6 @@
     async function runCheckInAction(action, memberNumber, extra, okMessage) {
       var buttons = document.querySelectorAll('#checkInList button');
       for (var i = 0; i < buttons.length; i++) buttons[i].disabled = true;
-      var query = document.getElementById('checkInSearch') ? document.getElementById('checkInSearch').value : '';
       try {
         var payload = { member_number: isNaN(Number(memberNumber)) ? memberNumber : Number(memberNumber) };
         for (var key in extra) payload[key] = extra[key];
@@ -3814,23 +3849,69 @@
         if (data.status !== 'ok') {
           setCheckInStatus('error', '<strong>Error:</strong> ' + escHtml(data.message));
           log('ERROR: ' + data.message);
-        } else {
-          log(okMessage + ' (member ' + memberNumber + ')');
-          var fresh = await postCheckIn('getAdminCheckInRoster', {});
-          if (fresh.status === 'ok') {
-            renderCheckIn(fresh);
-            var search = document.getElementById('checkInSearch');
-            if (search && query) { search.value = query; filterCheckIn(); }
-            setCheckInStatus('ok', escHtml(okMessage));
-            return;
-          }
-          setCheckInStatus('error', '<strong>Saved, but reload failed:</strong> ' + escHtml(fresh.message));
+          return;
         }
+        log(okMessage + ' (member ' + memberNumber + ')');
+        // One round trip per click: patch just this row from the write
+        // response instead of re-fetching and rebuilding the whole roster.
+        // The list DOM — and with it the scroll position and the active
+        // search filter — is left untouched; "Refresh Check-In" remains the
+        // reconciliation path when another admin may have changed the sheet.
+        if (!patchCheckInRow(action, memberNumber, data, extra)) {
+          log('WARN: row for member ' + memberNumber + ' was not patched; use Refresh Check-In to reconcile.');
+        }
+        setCheckInStatus('ok', escHtml(okMessage));
       } catch (err) {
         setCheckInStatus('error', '<strong>Request failed:</strong> ' + escHtml(err.message));
         log('FAILED check-in action: ' + err.message);
+      } finally {
+        for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
       }
-      for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
+    }
+
+    // Flips one roster row in place from a write response, without rebuilding
+    // the list: the row markup comes from checkInRowInner, the cached roster
+    // payload is updated to match, and the summary count moves by one. Returns
+    // false when the cached payload or row is missing (Refresh then shows
+    // ground truth).
+    function patchCheckInRow(action, memberNumber, response, extra) {
+      var checkedIn = action === 'adminCheckIn';
+      var key = String(memberNumber);
+      var player = null;
+      if (checkInLastData && checkInLastData.players) {
+        for (var i = 0; i < checkInLastData.players.length; i++) {
+          if (String(checkInLastData.players[i].member_number) === key) {
+            player = checkInLastData.players[i];
+            break;
+          }
+        }
+      }
+      if (!player) return false;
+
+      if (checkedIn) {
+        player.checked_in = true;
+        player.on_week_sheet = true;
+        player.signed_in_at = response.signed_in_at || '';
+        if (checkInLastData.uses_tags && extra && extra.in_tag !== undefined) player.in_tag = extra.in_tag;
+        checkInLastData.checked_in_count = (checkInLastData.checked_in_count || 0) + 1;
+      } else {
+        player.checked_in = false;
+        player.signed_in_at = '';
+        player.in_tag = '';
+        checkInLastData.checked_in_count = Math.max(0, (checkInLastData.checked_in_count || 0) - 1);
+      }
+
+      var row = document.querySelector('#checkInList [data-member="' + key + '"]');
+      if (row) {
+        row.className = 'checkin-row' + (checkedIn ? ' in' : '');
+        row.innerHTML = checkInRowInner(player, !!checkInLastData.uses_tags);
+      }
+      var summary = document.getElementById('checkInSummary');
+      if (summary) {
+        summary.innerHTML = checkInLastData.checked_in_count + ' checked in <span style="font-weight:normal; color:#666;">of ' +
+          checkInLastData.player_count + '</span>';
+      }
+      return true;
     }
 
     function adminCheckIn(memberNumber) {
