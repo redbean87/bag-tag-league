@@ -160,8 +160,9 @@ test('undo flips the row back and decrements the count', async () => {
   assert.deepEqual(h.calls.map((c) => c.action), ['adminUndoCheckIn']);
   const row = h.rows[0];
   assert.strictEqual(row.className, 'checkin-row');
-  assert.match(row.innerHTML, /onclick="adminCheckIn\('1'\)">Check in</);
+  assert.match(row.innerHTML, /type="checkbox" class="checkin-pick" data-pick="1"/);
   assert.doesNotMatch(row.innerHTML, /Undo</);
+  assert.doesNotMatch(row.innerHTML, />Check in</, 'the undone row offers only the tick, no check-in button');
   assert.match(row.innerHTML, /Weeks: 9/);
   assert.strictEqual(h.ui.getLastData().checked_in_count, 0);
   assert.strictEqual(h.ui.getLastData().players[0].checked_in, false);

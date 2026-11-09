@@ -505,3 +505,49 @@ test('a tags league batch reads each ticked row\'s tag input and blocks on a bad
     { member_number: 3, in_tag: 14 }
   ], 'each member carries its own entered tag');
 });
+
+test('a batch of one: ticking a single row and confirming checks that one person in', async () => {
+  const batchResult = {
+    status: 'ok',
+    message: 'Batch check-in complete: 1 checked in, 0 already checked in.',
+    checked_in_count: 2,
+    skipped_count: 0,
+    results: [
+      { member_number: 2, result: 'checked_in', signed_in_at: '2026-10-05T23:00:00.000Z' }
+    ]
+  };
+  const h = makeHarness(rosterPayload(), { batchResult });
+  h.setRefreshedRoster(rosterPayload({
+    checked_in_count: 2,
+    players: [
+      { member_number: 1, name: 'Ann Archer', on_week_sheet: true, checked_in: true, signed_in_at: '2026-10-05T22:00:00.000Z', in_tag: '', current_tag: '', appearances: 9 },
+      { member_number: 2, name: 'Bo Bell', on_week_sheet: true, checked_in: true, signed_in_at: '2026-10-05T23:00:00.000Z', in_tag: '', current_tag: '', appearances: 4 },
+      { member_number: 3, name: 'Cy Cole', on_week_sheet: false, checked_in: false, signed_in_at: '', in_tag: '', current_tag: '', appearances: 0 }
+    ]
+  }));
+
+  h.ui.toggleCheckInPick('2', true);
+  await h.ui.adminCheckInSelected();
+
+  assert.deepStrictEqual(h.calls.map((c) => c.action), ['adminCheckInBatch', 'getAdminCheckInRoster']);
+  assert.deepStrictEqual(h.calls[0].payload.members, [{ member_number: 2 }],
+    'a ticked row of one still travels the batch path with a single member');
+  assert.strictEqual(h.ui.getSelection().size, 0);
+  assert.match(h.elements.checkInPanel.innerHTML, /2 checked in/);
+  assert.ok(h.buttons.every((b) => !b.disabled));
+});
+
+test('the card renders no per-row check-in button anywhere: the footer batch action is the only one', () => {
+  const h = makeHarness(rosterPayload());
+  const panel = h.elements.checkInPanel.innerHTML;
+  // Rows: checked-in shows Undo, pending shows the tick - never a check-in button.
+  assert.doesNotMatch(panel, /onclick="adminCheckIn\('/, 'no row wires a single check-in');
+  assert.doesNotMatch(panel, />Check in</, 'no per-row "Check in" label exists');
+  // The only check-in control is the footer button, after the list.
+  const listEnd = panel.indexOf('</ul>');
+  assert.notEqual(listEnd, -1, 'the roster list renders');
+  const footer = panel.slice(listEnd);
+  assert.match(footer, /id="btnCheckInSelected"/);
+  assert.match(footer, /onclick="adminCheckInSelected\(\)"/);
+  assert.match(footer, /Check in selected/);
+});

@@ -40,17 +40,35 @@ test('check-in requires a valid entered tag and the card resets on date change',
   assert.match(functionBody('clearStaleSectionData'), /clearCheckIn\(\)/);
 });
 
-test('each row has one button whose label and action follow the check-in state', () => {
+test('a checked-in row shows Undo; a pending row shows only the tick - no per-row check-in button', () => {
   const render = functionBody('renderCheckIn');
   const checkedIn = render.slice(render.indexOf('if (p.checked_in)'), render.indexOf('} else {'));
   const notIn = render.slice(render.indexOf('} else {'), render.indexOf("html += '</li>'"));
   const buttons = (s) => s.match(/<button /g) || [];
   assert.equal(buttons(checkedIn).length, 1);
-  assert.equal(buttons(notIn).length, 1);
+  assert.equal(buttons(notIn).length, 0, 'a pending row carries no button at all');
   assert.match(checkedIn, /class="undo" onclick="adminUndoCheckIn\([^)]*\)">Undo</);
   assert.doesNotMatch(checkedIn, />Check in</);
-  assert.match(notIn, /onclick="adminCheckIn\([^)]*\)">Check in</);
-  assert.doesNotMatch(notIn, />Undo</);
+  assert.match(notIn, /type="checkbox" class="checkin-pick"/);
+  assert.doesNotMatch(notIn, /<button /);
+  // The batch footer is the only check-in control the card renders.
+  assert.doesNotMatch(render, /onclick="adminCheckIn\(/);
+});
+
+test('the batch action is the only check-in control, in a footer below the list', () => {
+  const render = functionBody('renderCheckIn');
+  const listEnd = render.indexOf("html += '</ul>'");
+  assert.notEqual(listEnd, -1);
+  const footer = render.slice(listEnd);
+  assert.match(footer, /id="btnCheckInSelected" onclick="adminCheckInSelected\(\)"/);
+  assert.match(footer, />Check in selected \('/, 'the footer carries the batch button label');
+  assert.match(footer, /\+ pickCount \+ '\)<\/button>'/, 'the live count bakes in from the selection set');
+  assert.match(footer, /checkin-footer/, 'the action sits in a footer class, not the old top toolbar');
+  assert.ok(render.indexOf('checkin-toolbar') > listEnd, 'the toolbar markup is rebuilt after the list');
+  // The row markup must place the tick after the name block (right-hand edge).
+  const notIn = render.slice(render.indexOf('} else {'), render.indexOf("html += '</li>'"));
+  assert.ok(notIn.indexOf('checkin-who') < notIn.indexOf('checkin-pick'),
+    'name and weeks come first, the tick last');
 });
 
 test('rows stay on one line with a 44px tap target and the state under the name', () => {

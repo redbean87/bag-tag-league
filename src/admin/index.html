@@ -85,6 +85,9 @@
     .checkin-toolbar button { min-height: 44px; padding: 0.5rem 0.9rem; font-size: 1rem; }
     .checkin-toolbar button:disabled { opacity: 0.5; }
     .checkin-toolbar-note { flex: 1 1 14rem; font-size: 0.8rem; color: #666; line-height: 1.35; }
+    /* Footer below the scrolling list: the list has its own max-height, so
+       the single check-in action stays on screen while the roster scrolls. */
+    .checkin-footer { margin-top: 0.75rem; margin-bottom: 0; }
     .checkin-pick { flex: 0 0 auto; width: 44px; height: 44px; margin: 0; accent-color: #1a73e8; }
     button:disabled { background: #ccc; cursor: not-allowed; }
     .status {
@@ -3769,15 +3772,6 @@
       var html = '<div class="checkin-summary" id="checkInSummary" aria-live="polite">' +
         data.checked_in_count + ' checked in <span style="font-weight:normal; color:#666;">of ' +
         data.player_count + '</span></div>';
-      // One action for the whole selection, with a live count baked in from
-      // the selection set (not from the DOM), plus the standing note that a
-      // brand-new player cannot be created from a batch.
-      var pickCount = typeof checkInSelection !== 'undefined' ? checkInSelection.size : 0;
-      html += '<div class="checkin-toolbar">' +
-        '<button type="button" id="btnCheckInSelected" onclick="adminCheckInSelected()"' +
-        (pickCount === 0 ? ' disabled' : '') + '>Check in selected (' + pickCount + ')</button>' +
-        '<span class="checkin-toolbar-note">Batch covers existing club members only - a brand-new player must use their normal sign-in (QR self sign-in or a UDisc/doubles import) first, then can be checked in here as usual.</span>' +
-        '</div>';
       html += '<input type="search" class="checkin-search" id="checkInSearch" placeholder="Find a player" ' +
         'aria-label="Find a player" oninput="filterCheckIn()" autocomplete="off">';
       html += '<ul class="checkin-list" id="checkInList">';
@@ -3794,11 +3788,11 @@
             '<span class="checkin-state">' + state + '</span></div>';
           html += '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
         } else {
-          // Tickbox for batch check-in; the checked state is re-applied from
-          // the selection set on every render so a re-render keeps it.
+          // Name and weeks first, the tick on the right-hand edge: the tick is
+          // the only check-in control a pending row carries (the batch footer
+          // below does the writing). Its checked state is re-applied from the
+          // selection set on every render so a re-render keeps it.
           var picked = typeof checkInSelection !== 'undefined' && checkInSelection.has(id);
-          html += '<input type="checkbox" class="checkin-pick" data-pick="' + id + '"' + (picked ? ' checked' : '') +
-            ' onchange="toggleCheckInPick(\'' + id + '\', this.checked)" aria-label="Select ' + escHtml(p.name) + ' for batch check-in">';
           if (usesTags) {
             var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
             html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + checkInWeeksLabel(p) + '</span>' +
@@ -3809,12 +3803,24 @@
           } else {
             html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + checkInWeeksLabel(p) + '</span></div>';
           }
-          html += '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
+          html += '<input type="checkbox" class="checkin-pick" data-pick="' + id + '"' + (picked ? ' checked' : '') +
+            ' onchange="toggleCheckInPick(\'' + id + '\', this.checked)" aria-label="Select ' + escHtml(p.name) + ' for batch check-in">';
         }
         html += '</li>';
       }
       html += '</ul>';
       if (players.length === 0) html += '<p class="help-text">No players on the roster yet.</p>';
+      // The one check-in action, in a footer below the list: the list scrolls
+      // inside its own max-height, so this stays reachable on a long roster.
+      // One action for the whole selection, with a live count baked in from
+      // the selection set (not from the DOM), plus the standing note that a
+      // brand-new player cannot be created from a batch.
+      var pickCount = typeof checkInSelection !== 'undefined' ? checkInSelection.size : 0;
+      html += '<div class="checkin-toolbar checkin-footer">' +
+        '<button type="button" id="btnCheckInSelected" onclick="adminCheckInSelected()"' +
+        (pickCount === 0 ? ' disabled' : '') + '>Check in selected (' + pickCount + ')</button>' +
+        '<span class="checkin-toolbar-note">Batch covers existing club members only - a brand-new player must use their normal sign-in (QR self sign-in or a UDisc/doubles import) first, then can be checked in here as usual.</span>' +
+        '</div>';
 
       panel.innerHTML = html;
       panel.style.display = '';
@@ -3842,21 +3848,20 @@
           '<span class="checkin-state">' + state + '</span></div>' +
           '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
       }
-      // Same batch tickbox renderCheckIn builds, checked state included.
+      // Same row layout renderCheckIn builds: name and weeks, the tick
+      // right-most, checked state included.
       var picked = typeof checkInSelection !== 'undefined' && checkInSelection.has(id);
       var pickBox = '<input type="checkbox" class="checkin-pick" data-pick="' + id + '"' + (picked ? ' checked' : '') +
         ' onchange="toggleCheckInPick(\'' + id + '\', this.checked)" aria-label="Select ' + escHtml(p.name) + ' for batch check-in">';
       if (usesTags) {
         var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
-        return pickBox + '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span>' +
+        return '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span>' +
           '<label class="checkin-state" for="checkInTag-' + id + '">Tag today (last: ' +
           (def === '' ? 'none' : escHtml(def)) + ')</label></div>' +
           '<input type="number" inputmode="numeric" min="1" step="1" class="checkin-tag" id="checkInTag-' + id +
-          '" value="' + escHtml(def) + '" aria-label="Tag carried by ' + escHtml(p.name) + '">' +
-          '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
+          '" value="' + escHtml(def) + '" aria-label="Tag carried by ' + escHtml(p.name) + '">' + pickBox;
       }
-      return pickBox + '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span></div>' +
-        '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
+      return '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span></div>' + pickBox;
     }
 
     function filterCheckIn() {
