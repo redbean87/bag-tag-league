@@ -81,6 +81,11 @@
     .checkin-row button { flex: 0 0 auto; min-width: 4.75rem; min-height: 44px; margin-top: 0; padding: 0.5rem 0.6rem; }
     .checkin-row button.undo { background: #fff; color: #b3261e; border: 1px solid #b3261e; }
     .checkin-row button.undo:hover { background: #fce8e6; }
+    .checkin-toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+    .checkin-toolbar button { min-height: 44px; padding: 0.5rem 0.9rem; font-size: 1rem; }
+    .checkin-toolbar button:disabled { opacity: 0.5; }
+    .checkin-toolbar-note { flex: 1 1 14rem; font-size: 0.8rem; color: #666; line-height: 1.35; }
+    .checkin-pick { flex: 0 0 auto; width: 44px; height: 44px; margin: 0; accent-color: #1a73e8; }
     button:disabled { background: #ccc; cursor: not-allowed; }
     .status {
       margin-top: 1rem;
@@ -3692,6 +3697,10 @@
     // adminCheckIn / adminUndoCheckIn actions; the server owns the data.
 
     var checkInLastData = null;
+    // Batch check-in selection, keyed by member number and held OUTSIDE the
+    // list DOM: every render (Refresh, post-batch reload) rebuilds the rows,
+    // so ticks live here and are re-applied by renderCheckIn.
+    var checkInSelection = new Set();
 
     function setCheckInStatus(type, html) {
       var el = document.getElementById('checkInResult');
@@ -3702,6 +3711,7 @@
 
     function clearCheckIn() {
       checkInLastData = null;
+      checkInSelection.clear();
       var panel = document.getElementById('checkInPanel');
       if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
       setCheckInStatus('hidden', '');
@@ -3759,6 +3769,15 @@
       var html = '<div class="checkin-summary" id="checkInSummary" aria-live="polite">' +
         data.checked_in_count + ' checked in <span style="font-weight:normal; color:#666;">of ' +
         data.player_count + '</span></div>';
+      // One action for the whole selection, with a live count baked in from
+      // the selection set (not from the DOM), plus the standing note that a
+      // brand-new player cannot be created from a batch.
+      var pickCount = typeof checkInSelection !== 'undefined' ? checkInSelection.size : 0;
+      html += '<div class="checkin-toolbar">' +
+        '<button type="button" id="btnCheckInSelected" onclick="adminCheckInSelected()"' +
+        (pickCount === 0 ? ' disabled' : '') + '>Check in selected (' + pickCount + ')</button>' +
+        '<span class="checkin-toolbar-note">Batch covers existing club members only - a brand-new player must use their normal sign-in (QR self sign-in or a UDisc/doubles import) first, then can be checked in here as usual.</span>' +
+        '</div>';
       html += '<input type="search" class="checkin-search" id="checkInSearch" placeholder="Find a player" ' +
         'aria-label="Find a player" oninput="filterCheckIn()" autocomplete="off">';
       html += '<ul class="checkin-list" id="checkInList">';
@@ -3775,6 +3794,11 @@
             '<span class="checkin-state">' + state + '</span></div>';
           html += '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
         } else {
+          // Tickbox for batch check-in; the checked state is re-applied from
+          // the selection set on every render so a re-render keeps it.
+          var picked = typeof checkInSelection !== 'undefined' && checkInSelection.has(id);
+          html += '<input type="checkbox" class="checkin-pick" data-pick="' + id + '"' + (picked ? ' checked' : '') +
+            ' onchange="toggleCheckInPick(\'' + id + '\', this.checked)" aria-label="Select ' + escHtml(p.name) + ' for batch check-in">';
           if (usesTags) {
             var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
             html += '<div class="checkin-who"><span class="checkin-name">' + escHtml(p.name) + checkInWeeksLabel(p) + '</span>' +
@@ -3818,16 +3842,20 @@
           '<span class="checkin-state">' + state + '</span></div>' +
           '<button type="button" class="undo" onclick="adminUndoCheckIn(\'' + id + '\')">Undo</button>';
       }
+      // Same batch tickbox renderCheckIn builds, checked state included.
+      var picked = typeof checkInSelection !== 'undefined' && checkInSelection.has(id);
+      var pickBox = '<input type="checkbox" class="checkin-pick" data-pick="' + id + '"' + (picked ? ' checked' : '') +
+        ' onchange="toggleCheckInPick(\'' + id + '\', this.checked)" aria-label="Select ' + escHtml(p.name) + ' for batch check-in">';
       if (usesTags) {
         var def = p.current_tag === null || p.current_tag === undefined ? '' : String(p.current_tag);
-        return '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span>' +
+        return pickBox + '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span>' +
           '<label class="checkin-state" for="checkInTag-' + id + '">Tag today (last: ' +
           (def === '' ? 'none' : escHtml(def)) + ')</label></div>' +
           '<input type="number" inputmode="numeric" min="1" step="1" class="checkin-tag" id="checkInTag-' + id +
           '" value="' + escHtml(def) + '" aria-label="Tag carried by ' + escHtml(p.name) + '">' +
           '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
       }
-      return '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span></div>' +
+      return pickBox + '<div class="checkin-who"><span class="checkin-name">' + nameHtml + '</span></div>' +
         '<button type="button" onclick="adminCheckIn(\'' + id + '\')">Check in</button>';
     }
 
@@ -3894,6 +3922,11 @@
         player.signed_in_at = response.signed_in_at || '';
         if (checkInLastData.uses_tags && extra && extra.in_tag !== undefined) player.in_tag = extra.in_tag;
         checkInLastData.checked_in_count = (checkInLastData.checked_in_count || 0) + 1;
+        // A singly checked-in member leaves the batch selection: their row no
+        // longer offers a checkbox, so the live count must drop with it.
+        if (typeof checkInSelection !== 'undefined' && checkInSelection.delete(String(memberNumber))) {
+          updateCheckInBatchBar();
+        }
       } else {
         player.checked_in = false;
         player.signed_in_at = '';
@@ -3931,6 +3964,99 @@
 
     function adminUndoCheckIn(memberNumber) {
       return runCheckInAction('adminUndoCheckIn', memberNumber, {}, 'Check-in undone.');
+    }
+
+    // Live count on the batch action; renderCheckIn bakes the same count in
+    // when it rebuilds the toolbar.
+    function updateCheckInBatchBar() {
+      var btn = document.getElementById('btnCheckInSelected');
+      if (!btn) return;
+      btn.textContent = 'Check in selected (' + checkInSelection.size + ')';
+      btn.disabled = checkInSelection.size === 0;
+    }
+
+    function toggleCheckInPick(memberNumber, on) {
+      var key = String(memberNumber);
+      if (on) checkInSelection.add(key); else checkInSelection.delete(key);
+      updateCheckInBatchBar();
+    }
+
+    // The admin-facing report of a batch response: who landed, who was
+    // already in. Names come from the roster the selection was made from.
+    function describeBatchCheckInReport(data) {
+      var results = data.results || [];
+      var landed = [];
+      var skipped = [];
+      for (var i = 0; i < results.length; i++) {
+        var r = results[i];
+        var name = 'member ' + r.member_number;
+        if (checkInLastData && checkInLastData.players) {
+          for (var p = 0; p < checkInLastData.players.length; p++) {
+            if (String(checkInLastData.players[p].member_number) === String(r.member_number)) {
+              name = checkInLastData.players[p].name;
+              break;
+            }
+          }
+        }
+        (r.result === 'checked_in' ? landed : skipped).push(name);
+      }
+      var parts = [];
+      if (landed.length) parts.push('Checked in: ' + escHtml(landed.join(', ')) + '.');
+      if (skipped.length) parts.push('Already checked in: ' + escHtml(skipped.join(', ')) + '.');
+      return parts.length ? parts.join(' ') : 'No players were checked in.';
+    }
+
+    // ONE server execution for the whole selection: validate every tag here,
+    // one adminCheckInBatch round trip for all N members, then refresh from
+    // ground truth the way Refresh Check-In does. A refusal is all-or-nothing
+    // on the server, so nothing landed and the selection is kept for a retry.
+    async function adminCheckInSelected() {
+      if (!checkInLastData || checkInSelection.size === 0) return;
+      var usesTags = !!checkInLastData.uses_tags;
+      var ids = [];
+      checkInSelection.forEach(function (key) { ids.push(key); });
+      var members = [];
+      for (var i = 0; i < ids.length; i++) {
+        var id = ids[i];
+        var member = { member_number: isNaN(Number(id)) ? id : Number(id) };
+        if (usesTags) {
+          var input = document.getElementById('checkInTag-' + id);
+          var value = input ? input.value.trim() : '';
+          if (!/^[1-9]\d*$/.test(value)) {
+            setCheckInStatus('error', '<strong>Enter the tag number each selected player is carrying (1 or higher).</strong>');
+            if (input) input.focus();
+            log('BATCH: blocked, invalid tag for member ' + id + '.');
+            return;
+          }
+          member.in_tag = parseInt(value, 10);
+        }
+        members.push(member);
+      }
+
+      var buttons = document.querySelectorAll('#checkInList button');
+      for (var b = 0; b < buttons.length; b++) buttons[b].disabled = true;
+      var batchBtn = document.getElementById('btnCheckInSelected');
+      if (batchBtn) batchBtn.disabled = true;
+      try {
+        var data = await postCheckIn('adminCheckInBatch', { members: members });
+        if (data.status !== 'ok') {
+          setCheckInStatus('error', '<strong>Error:</strong> ' + escHtml(data.message));
+          log('ERROR: batch check-in refused: ' + data.message);
+          return;
+        }
+        var report = describeBatchCheckInReport(data);
+        log('BATCH: ' + data.checked_in_count + ' checked in, ' + data.skipped_count +
+          ' already checked in (' + members.length + ' selected).');
+        checkInSelection.clear();
+        await loadCheckIn();
+        setCheckInStatus('ok', report);
+      } catch (err) {
+        setCheckInStatus('error', '<strong>Request failed:</strong> ' + escHtml(err.message));
+        log('FAILED batch check-in: ' + err.message);
+      } finally {
+        for (var j = 0; j < buttons.length; j++) buttons[j].disabled = false;
+        updateCheckInBatchBar();
+      }
     }
 
     // ─── Week View (read-only) ────────────────────────────────────────────
